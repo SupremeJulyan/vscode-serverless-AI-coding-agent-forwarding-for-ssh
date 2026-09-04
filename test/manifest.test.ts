@@ -9,10 +9,7 @@ interface ExtensionManifest {
   extensionKind?: string[];
   contributes?: {
     commands?: Array<{ command: string; title: string }>;
-    menus?: {
-      'view/item/context'?: Array<{ command: string; when?: string }>;
-      'explorer/context'?: Array<{ command: string; when?: string }>;
-    };
+    menus?: Record<string, Array<{ command: string; when?: string }>>;
     configuration?: {
       properties?: Record<string, { default?: unknown; markdownDescription?: string }>
     };
@@ -71,6 +68,18 @@ test('contributes a remote-directory switch command instead of relying on the lo
   ) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
   assert.ok(commands.some((item) => item.command === 'safs.switchRemoteDirectory'));
+});
+
+test('declares every command referenced by a menu contribution', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  const declared = new Set(
+    (manifest.contributes?.commands ?? []).map((item) => item.command)
+  );
+  const referenced = Object.values(manifest.contributes?.menus ?? {})
+    .flatMap((items) => items.map((item) => item.command));
+  assert.deepEqual(referenced.filter((command) => !declared.has(command)), []);
 });
 
 test('uses distinct conflict-resistant shortcuts on each desktop platform', async () => {

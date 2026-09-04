@@ -176,6 +176,10 @@
         "command": "safs.deleteHistoryItem",
         "title": "删除历史记录",
         "icon": "$(trash)"
+      },
+      {
+        "command": "safs.mounts.focus",
+        "title": "SAFS: 聚焦远程目录"
       }
     ],
     "viewsContainers": {
