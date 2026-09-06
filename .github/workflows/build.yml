@@ -67,7 +67,8 @@ jobs:
           for artifact in bin/safs-*; do
             platform="${artifact#bin/safs-}"
             mkdir -p "bin/$platform"
-            cp "$artifact"/* "bin/$platform/"
+            mv "$artifact"/* "bin/$platform/"
+            rmdir "$artifact"
           done
       - run: npm ci
       - run: npm test
