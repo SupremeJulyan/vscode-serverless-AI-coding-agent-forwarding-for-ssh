@@ -31,3 +31,6 @@
   literal queries, case folding, context lines, basename include globs, and
   explicit directory exclusions. `excludeDirs: []` disables default exclusions.
   Context lines are only valid in content mode. Counts include zero-match files.
+- `remote_read_many` batches up to 16 selections under a 16 KiB default shared
+  content budget (metadata excluded). Each item explicitly reports `ok`, `error`,
+  or `not_read`; earlier reads cannot silently starve later files.

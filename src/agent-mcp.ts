@@ -1,3 +1,4 @@
+import { readTextBatch } from './remote-read-batch';
 import { RemoteSearchOptions } from './remote-search';
 import { RemoteReadOptions } from './remote-read';
 import { RemoteOutputStore } from './remote-output';
@@ -146,6 +147,10 @@ export class AgentMcpServer {
             return invoke(() => this.callbacks.currentFile(input));
           case 'remote_list':
             return invoke(() => this.callbacks.list(input));
+          case 'remote_read_many':
+            return invoke(() => readTextBatch(input.requests as RemoteReadOptions[],
+              (input.maxBytes as number | undefined) ?? 16384,
+              request => this.callbacks.read(request)));
           case 'remote_read':
             return invoke(() => this.callbacks.read(input as {
               mountName?: string; path: string; offset?: number; length?: number;

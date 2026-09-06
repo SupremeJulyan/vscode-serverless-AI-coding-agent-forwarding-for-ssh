@@ -57,6 +57,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       'remote_move',
       'remote_output',
       'remote_read',
+      'remote_read_many',
       'remote_search',
       'remote_upload',
       'remote_write',
