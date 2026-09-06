@@ -222,7 +222,18 @@ export class Ssh2SftpSession implements SftpSession {
     if (mode !== undefined) {
       await this.chmod(sourcePath, mode, signal);
     }
-    await this.rename(sourcePath, targetPath, true, signal);
+    try {
+      await callback<void>(
+        (done) => this.sftp.ext_openssh_rename(sourcePath, targetPath, done),
+        signal, sftpControlTimeoutMs
+      );
+    } catch (error) {
+      if ((error as { code?: number }).code !== 8
+        && !/Server does not support this extended request/i.test(String(error))) throw error;
+      // Standard rename may refuse an existing target. Preserve it on failure;
+      // never unlink the old file before the replacement has succeeded.
+      await this.rename(sourcePath, targetPath, false, signal);
+    }
   }
 
   writeFileStream(

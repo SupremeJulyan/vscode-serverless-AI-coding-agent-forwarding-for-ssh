@@ -57,6 +57,21 @@ test('scanRemote fingerprints a file root and a directory tree', async () => {
   ]);
 });
 
+test('scanRemote can be cancelled between directory entries', async () => {
+  const tree = fakeSession({
+    '/srv/p': { type: 'directory', size: 0, mtime: 1 },
+    '/srv/p/a.txt': { type: 'file', size: 5, mtime: 2 },
+    '/srv/p/sub': { type: 'directory', size: 0, mtime: 3 },
+    '/srv/p/sub/b.txt': { type: 'file', size: 7, mtime: 4 }
+  });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    scanRemote(tree, '/srv/p', controller.signal),
+    { name: 'AbortError' }
+  );
+});
+
 test('scanRemote rejects a malicious server directory entry with traversal separators', async () => {
   const session = {
     stat: async () => ({ type: 'directory', size: 0, mtime: 1, ctime: 1 }),

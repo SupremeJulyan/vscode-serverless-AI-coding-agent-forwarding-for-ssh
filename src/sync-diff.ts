@@ -13,17 +13,22 @@ import { assertSafeRemoteEntryName } from './sftp/uri';
 
 /** 递归扫描远程子树，返回排序后的指纹行数组。 */
 export async function scanRemote(
-  session: SftpSession, remotePath: string, signal?: AbortSignal
+  session: SftpSession, remotePath: string, signal?: AbortSignal,
+  onEntry?: (remote: string, relative: string, directory: boolean, size: number) => Promise<void>
 ): Promise<string[]> {
+  signal?.throwIfAborted();
   const rootStat = await session.stat(remotePath, signal);
   if (rootStat.type !== 'directory') {
+    await onEntry?.(remotePath, '', false, rootStat.size);
     return [`f::${rootStat.size}:${rootStat.mtime}`];
   }
+  await onEntry?.(remotePath, '', true, 0);
   const lines: string[] = [];
   const walk = async (dir: string): Promise<void> => {
     const entries = await session.readDirectory(dir, signal);
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
+      if (signal?.aborted) throw new Error('远程目录扫描已取消');
       assertSafeRemoteEntryName(entry.name);
       // The sync protocol does not preserve links. Treating one as a regular
       // file would make readFile follow it outside the selected remote root.
@@ -32,13 +37,16 @@ export async function scanRemote(
       const rel = path.posix.relative(remotePath, full);
       if (entry.type === 'directory') {
         lines.push(`d:${rel}:${entry.mtime}`);
+        await onEntry?.(full, rel, true, 0);
         await walk(full);
       } else {
         lines.push(`f:${rel}:${entry.size}:${entry.mtime}`);
+        await onEntry?.(full, rel, false, entry.size);
       }
     }
   };
   await walk(remotePath);
+  signal?.throwIfAborted();
   return lines;
 }
 

@@ -55,6 +55,10 @@ export async function pipeStreams(
     });
     source.once('error', (error: Error) => fail(error));
     target.once('error', (error: Error) => fail(error));
+    if (options.signal?.aborted) {
+      aborted();
+      return;
+    }
     source.pipe(target);
     target.once('finish', () => {
       if (settled) return;

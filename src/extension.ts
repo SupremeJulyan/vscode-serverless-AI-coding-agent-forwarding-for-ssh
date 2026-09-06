@@ -1,7 +1,6 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { access, mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import * as vscode from 'vscode';
 import {
@@ -41,13 +40,13 @@ import {
 } from './agent-cwd';
 import { connectSftp } from './sftp/client';
 import { SftpSession } from './sftp/session';
-import { scanRemote } from './sync-diff';
-import { pipeStreams, writeStreamToFile } from './stream-file';
-import { planUploads } from './upload-plan';
+import { writeStreamToFile } from './stream-file';
+import { downloadRemoteDirectoryTree } from './remote-download';
+import { uploadRemoteTree } from './remote-upload';
 import { defaultSshClientIdent, ensureSshCapabilities } from './ssh-algorithms';
 import { SftpConnectionPool } from './sftp/connection-pool';
 import { migratePiSessionKeys } from './pi-session-migrate';
-import { RemoteSyncManager, RemoteSyncTask, ensureRemoteDir } from './remote-sync';
+import { RemoteSyncManager, RemoteSyncTask } from './remote-sync';
 import { SyncCoordinator } from './sync-coordination';
 import {
   remotePathForUri, RemoteFolder, RemoteFolderRegistry, SftpFileSystemProvider,
@@ -1224,6 +1223,10 @@ async function startRemoteSyncWithProgress(
       await manager.add(task, {
         signal: controller.signal,
         onProgress: (state) => {
+          if (state.discovering) {
+            progress.report({ message: `已完成 ${state.completedFiles} 个 / 已发现 ${state.totalFiles} 个 · ${formatDownloadBytes(state.transferredBytes)} · ${state.currentFile ?? ''}` });
+            return;
+          }
           if (state.phase === 'scanning') {
             progress.report({ message: '正在统计文件数量和大小…' });
             return;
@@ -1269,8 +1272,38 @@ async function visualDownload(
   const folder = registry.get(location.mountName);
   if (!folder) throw new Error(`远程挂载未连接：${location.mountName}`);
   const remotePath = remotePathForUri(folder, location.remotePath);
-  const session = await pool.get(folder.hostName);
-  const stat = await session.stat(remotePath);
+  const baseName = path.posix.basename(remotePath);
+  // 获取连接和远程类型都可能触发 SSH 握手。先显示可取消的准备通知，避免用户
+  // 在连接较慢时点击后看不到任何反馈，误以为目录下载命令没有生效。
+  const prepared = await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: `SAFS：准备下载 ${baseName}`,
+    cancellable: true
+  }, async (progress, token) => {
+    const controller = new AbortController();
+    const cancellation = token.onCancellationRequested(() => controller.abort());
+    let timedOut = false;
+    const timeout = transferTimeoutMs && transferTimeoutMs > 0
+      ? setTimeout(() => { timedOut = true; controller.abort(); }, transferTimeoutMs)
+      : undefined;
+    progress.report({ message: '正在连接并读取远程文件信息…' });
+    try {
+      const session = await pool.get(folder.hostName, controller.signal);
+      const stat = await session.stat(remotePath, controller.signal);
+      return controller.signal.aborted ? undefined : { session, stat };
+    } catch (error) {
+      if (controller.signal.aborted) {
+        if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
+        return undefined;
+      }
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      cancellation.dispose();
+    }
+  });
+  if (!prepared) return false;
+  const { session, stat } = prepared;
   if (stat.type === 'directory') {
     return downloadRemoteDirectory(
       session, remotePath, forcedLocalPath, transferTimeoutMs, secureLocalRoot
@@ -1361,22 +1394,6 @@ async function downloadRemoteDirectory(
     targetRoot = path.join(picked[0].fsPath, baseName);
   }
   const selectedTargetRoot = targetRoot;
-  // 先统计文件清单与总大小（复用指纹扫描，readDirectory 已带 size，无额外 stat）。
-  const lines = await scanRemote(session, remotePath);
-  const files: Array<{ rel: string; size: number }> = [];
-  const directories: string[] = [];
-  let totalBytes = 0;
-  for (const line of lines) {
-    const rel = line.slice(2, line.indexOf(':', 2));
-    if (line.startsWith('d:')) {
-      directories.push(rel);
-      continue;
-    }
-    if (!line.startsWith('f:')) continue;
-    const size = Number((line.slice(rel.length + 2).match(/^\d+/) ?? ['0'])[0]);
-    files.push({ rel, size });
-    totalBytes += size;
-  }
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: `正在下载目录 ${baseName}`,
@@ -1388,71 +1405,46 @@ async function downloadRemoteDirectory(
     const timeout = transferTimeoutMs && transferTimeoutMs > 0
       ? setTimeout(() => { timedOut = true; controller.abort(); }, transferTimeoutMs)
       : undefined;
-    let cumulative = 0;
-    let currentFile = '';
-    progress.report({
-      message: `${baseName}：0 B / ${formatDownloadBytes(totalBytes)}（0%）`
-    });
+    let lastReportAt = 0;
+    progress.report({ message: '正在发现文件并开始下载…' });
     try {
-      let safeTargetRoot = selectedTargetRoot;
-      if (secureLocalRoot) {
-        safeTargetRoot = await validateLocalDownloadTarget(
-          secureLocalRoot, selectedTargetRoot
-        );
-      }
-      await mkdir(safeTargetRoot, { recursive: true });
-      for (const directory of directories) {
-        if (controller.signal.aborted) break;
-        let localDirectory = path.join(safeTargetRoot, ...directory.split('/'));
-        if (secureLocalRoot) {
-          localDirectory = await validateLocalDownloadTarget(
-            secureLocalRoot, localDirectory
-          );
+      // SFTP 支持多个并行文件流；SCP 回退会整文件缓冲，且旧网关对并发 channel
+      // 敏感，因此自动串行。有限队列会施加背压，不会为整棵树一次性创建 Promise。
+      const result = await downloadRemoteDirectoryTree({
+        session,
+        remoteRoot: remotePath,
+        localRoot: selectedTargetRoot,
+        concurrency: session.transport === 'sftp' ? 4 : 1,
+        signal: controller.signal,
+        secureLocalRoot,
+        onProgress: (state) => {
+          const now = Date.now();
+          if (lastReportAt > 0 && now - lastReportAt < 100) return;
+          lastReportAt = now;
+          const current = state.currentFile
+            ? ` · ${path.posix.join(baseName, state.currentFile)}`
+            : '';
+          progress.report({
+            message: `${state.phase === 'scanning' ? '正在发现并下载' : '正在下载'}：${
+              state.completedFiles
+            }/${state.discoveredFiles} 个文件 · ${
+              formatDownloadBytes(state.transferredBytes)
+            }${current}`
+          });
         }
-        await mkdir(localDirectory, { recursive: true });
-      }
-      for (const file of files) {
-        if (controller.signal.aborted) break;
-        // 显示"根目录名 + 相对路径"（如 AF3/af3.bin.zst），与上传一致。
-        currentFile = path.posix.join(baseName, file.rel);
-        let localFile = path.join(safeTargetRoot, ...file.rel.split('/'));
-        if (secureLocalRoot) {
-          localFile = await validateLocalDownloadTarget(secureLocalRoot, localFile);
-        }
-        const source = await session.readFileStream(
-          path.posix.join(remotePath, file.rel), controller.signal
-        );
-        await writeStreamToFile(source, localFile, {
-          onDelta: (delta) => {
-            cumulative += delta;
-            const percent = totalBytes > 0 ? cumulative / totalBytes * 100 : 0;
-            progress.report({
-              message: totalBytes > 0
-                ? `${currentFile}：${formatDownloadBytes(cumulative)} / ${formatDownloadBytes(totalBytes)}（${Math.floor(percent)}%）`
-                : `${currentFile}：${formatDownloadBytes(cumulative)}`,
-              increment: totalBytes > 0 ? delta / totalBytes * 100 : undefined
-            });
-          },
-          signal: controller.signal
-        });
-      }
-      if (controller.signal.aborted) {
-        if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
-        // 当前文件的半成品已被 writeStreamToFile 删除；已完成的文件保留。
-        void vscode.window.showInformationMessage(
-          `已取消下载目录 ${baseName}（已完成的文件已保留）。`
-        );
-        return false;
-      }
+      });
       progress.report({
-        message: `完成：${formatDownloadBytes(totalBytes)}`,
-        increment: totalBytes > 0 ? 100 - cumulative / totalBytes * 100 : undefined
+        message: `完成：${result.files} 个文件（${
+          formatDownloadBytes(result.transferredBytes)
+        }）`
       });
       return true;
     } catch (error) {
       if (controller.signal.aborted) {
         if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
-        void vscode.window.showInformationMessage(`已取消下载目录 ${baseName}。`);
+        void vscode.window.showInformationMessage(
+          `已取消下载目录 ${baseName}（已完成的文件已保留）。`
+        );
         return false;
       }
       throw error;
@@ -1486,7 +1478,6 @@ async function visualUpload(
     ?? await promptRemoteDirectory(session, remoteRoot, remoteRoot, mount.name);
   if (!picked) return false;
   const targetDir = picked.startsWith('/') ? picked : path.posix.join(remoteRoot, picked);
-  const plan = await planUploads(sources, targetDir);
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: `正在上传到 ${mount.name}:${targetDir}`,
@@ -1498,71 +1489,32 @@ async function visualUpload(
     const timeout = transferTimeoutMs && transferTimeoutMs > 0
       ? setTimeout(() => { timedOut = true; controller.abort(); }, transferTimeoutMs)
       : undefined;
-    let cumulative = 0;
-    let currentName = '';
-    let currentRemote = '';
-    progress.report({
-      message: `0 B / ${formatDownloadBytes(plan.totalBytes)}（0%）`
-    });
+    let lastReport = 0;
+    progress.report({ message: '正在发现文件并上传…' });
     try {
-      // 一次性创建全部远程目录（含目标根与空目录），再逐文件上传。
-      for (const dir of plan.dirs) {
-        if (controller.signal.aborted) break;
-        if (secureWorkspaceRoot) {
-          await ensureRemoteTransferDirectory(session, secureWorkspaceRoot, dir);
-        } else {
-          await ensureRemoteDir(session, dir);
+      const result = await uploadRemoteTree({
+        session, sources, targetDir, signal: controller.signal,
+        verifyFile: secureWorkspaceRoot
+          ? (remote) => verifyRemoteTransferFileDestination(session, secureWorkspaceRoot, remote)
+          : undefined,
+        log: (message) => bridgeOutput?.appendLine(message),
+        onProgress: (state) => {
+          const now = Date.now();
+          if (now - lastReport < 100) return;
+          lastReport = now;
+          progress.report({
+            message: `已完成 ${state.completed} 个 / 已发现 ${state.discovered} 个 · ${formatDownloadBytes(state.bytes)} · ${path.posix.relative(targetDir, state.current)}`
+          });
         }
-      }
-      for (const file of plan.files) {
-        if (controller.signal.aborted) break;
-        // 显示相对目标目录的路径（含源目录名，如 AF3/af3.bin.zst），
-        // 避免同名文件在不同目录下分不清。
-        currentName = path.posix.relative(targetDir, file.remote) || path.basename(file.local);
-        currentRemote = file.remote;
-        if (secureWorkspaceRoot) {
-          await verifyRemoteTransferFileDestination(
-            session, secureWorkspaceRoot, file.remote
-          );
-        }
-        const source = createReadStream(file.local);
-        const target = await session.writeFileStream(
-          file.remote, { create: true, overwrite: true }, controller.signal
-        );
-        await pipeStreams(source, target, {
-          onDelta: (delta) => {
-            cumulative += delta;
-            const percent = plan.totalBytes > 0
-              ? cumulative / plan.totalBytes * 100
-              : 0;
-            progress.report({
-              message: plan.totalBytes > 0
-                ? `${currentName}：${formatDownloadBytes(cumulative)} / ${formatDownloadBytes(plan.totalBytes)}（${Math.floor(percent)}%）`
-                : `${currentName}：${formatDownloadBytes(cumulative)}`,
-              increment: plan.totalBytes > 0 ? delta / plan.totalBytes * 100 : undefined
-            });
-          },
-          signal: controller.signal
-        });
-      }
-      if (controller.signal.aborted) {
-        if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
-        void vscode.window.showInformationMessage(
-          '已取消上传（已完成的文件已保留）。'
-        );
-        return false;
-      }
+      });
       progress.report({
-        message: `完成：${plan.files.length} 个文件（${formatDownloadBytes(plan.totalBytes)}）`,
-        increment: plan.totalBytes > 0 ? 100 - cumulative / plan.totalBytes * 100 : undefined
+        message: `完成：${result.completed} 个文件（${formatDownloadBytes(result.bytes)}）`
       });
       return true;
     } catch (error) {
       if (controller.signal.aborted) {
-        // 当前文件的远端半成品已中断，删除避免残留。
-        if (currentRemote) void session.deleteFile(currentRemote).catch(() => undefined);
         if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
-        void vscode.window.showInformationMessage('已取消上传。');
+        void vscode.window.showInformationMessage('已取消上传（已完成文件保留，未完成文件的原内容不变）。');
         return false;
       }
       throw error;

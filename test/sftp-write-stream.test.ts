@@ -12,6 +12,25 @@ function makeSession(sftp: Partial<SFTPWrapper>): Ssh2SftpSession {
   return new Ssh2SftpSession('dev', fakeClient(), sftp as unknown as SFTPWrapper);
 }
 
+test('replaceFile uses atomic rename without deleting the existing target', async () => {
+  const calls: string[] = [];
+  const session = makeSession({
+    ext_openssh_rename: (_from, _to, done) => { calls.push('atomic'); done(); },
+    unlink: () => { throw new Error('must not unlink target'); }
+  });
+  await session.replaceFile('/temp', '/existing');
+  assert.deepEqual(calls, ['atomic']);
+});
+
+test('unsupported atomic rename falls back without unlinking an existing target', async () => {
+  const session = makeSession({
+    ext_openssh_rename: (_from, _to, done) => done(Object.assign(new Error('unsupported'), { code: 8 })),
+    rename: (_from, _to, done) => done(new Error('target exists')),
+    unlink: () => { throw new Error('must not unlink target'); }
+  });
+  await assert.rejects(session.replaceFile('/temp', '/existing'), /target exists/);
+});
+
 test('writeFileStream writes chunks with advancing offsets and closes the handle', async () => {
   const writes: Array<{ position: number; data: Buffer }> = [];
   let closed = 0;
