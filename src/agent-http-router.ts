@@ -49,6 +49,7 @@ export interface AgentHttpRouterOptions {
   log?: (message: string) => void;
   /** 转发到窗口 MCP 的 fetch 超时（毫秒），缺省 120s。 */
   forwardTimeoutMs?: number;
+  toolProfile?: () => 'full' | 'core';
   audit?: (entry: {
     toolName: string; input: Record<string, unknown>;
     agentName?: string; agentPlatform?: AgentPlatformLabel;
@@ -338,6 +339,7 @@ export class AgentHttpRouter {
     configureAgentMcpResources(server);
     registerAgentMcpTools(server, {
       routed: true,
+      profile: this.options.toolProfile?.(),
       invoke: (name, input) => this.callTool(name, input, agentName, agentPlatform)
     });
     return server;

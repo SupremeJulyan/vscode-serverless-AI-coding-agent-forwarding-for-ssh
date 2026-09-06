@@ -497,6 +497,13 @@
           "default": 120000,
           "description": "Unified timeout for Agent MCP forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
         },
+        "safs.agentMcpToolProfile": {
+          "type": "string",
+          "enum": ["full", "core"],
+          "default": "full",
+          "scope": "machine",
+          "description": "MCP tool profile. core exposes binding, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. Use the same setting in all windows and restart the Agent after changing it."
+        },
         "safs.agentMcpMaxOutputBytes": {
           "type": "number",
           "minimum": 4096,

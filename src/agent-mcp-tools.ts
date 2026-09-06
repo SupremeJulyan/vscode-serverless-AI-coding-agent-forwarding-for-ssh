@@ -4,32 +4,27 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
-export const directAgentMcpInstructions =
-  'This MCP server is only for SAFS remote workspaces. Do not call SAFS tools for ordinary local workspaces. '
-  + 'Only for an explicit SAFS task or known safs:// context, call safs_get_remote_workspace once to bind this window workspace. Virtual remote files are NOT present in the agent host filesystem. '
-  + 'Use the returned workspace and its remote_list, remote_read, remote_edit, remote_write, remote_delete, remote_chmod, remote_move, remote_search, remote_upload, remote_download, current_remote_file, and run_remote_command tools for workspace operations. Never substitute the local filesystem or local shell. '
-  + 'Use remote_read for bounded UTF-8 text reads; use remote_download for binary files, large files, and directories. '
-  + 'Prefer remote_edit for small changes to existing UTF-8 files; use remote_write to create or fully replace a file. '
-  + 'Use remote_delete, remote_chmod, and remote_move instead of shell rm, chmod, or mv when changing workspace files. '
-  + 'For remote_upload and remote_download, local paths must stay inside the Agent current cwd staging directory. '
-  + 'To learn which file is open in the VS Code window, call current_remote_file for its path and metadata. '
-  + 'The selected workspace remains bound for later tool calls.';
-
-export const routedAgentMcpInstructions = [
-  'This MCP server is only for SAFS remote workspaces; do not call SAFS tools for ordinary local workspaces.',
-  'For an explicit SAFS task or known safs:// context, call safs_get_remote_workspace once with the Agent actual current working directory in agentCwd. An exact SAFS placeholder match binds automatically; if it does not match, one uniquely focused SAFS window also binds automatically.',
-  'If the cwd does not match exactly or is ambiguous, the tool returns candidates. Ask the user to choose in the Agent conversation, then call safs_switch_remote_workspace with that workspaceId and userConfirmed=true. Never select in the same turn as asking, and never treat one candidate as consent. No VS Code Quick Pick is used.',
-  'When the user asks to list available SAFS workspaces, change host/configuration, or switch away from the current binding, call safs_switch_remote_workspace without a workspaceId. Never use safs_get_remote_workspace for switching.',
-  'A successful safs_switch_remote_workspace call cancels the previous task. Stop the current workflow and wait for a new user request before calling workspace tools.',
-  'Use the returned workspace and its remote_list, remote_read, remote_edit, remote_write, remote_delete, remote_chmod, remote_move, remote_search, remote_upload, remote_download, current_remote_file, and run_remote_command tools for that workspace.',
-  'Use remote_read for bounded UTF-8 text reads; use remote_download for binary files, large files, and directories.',
-  'Prefer remote_edit for small changes to existing UTF-8 files; use remote_write to create or fully replace a file.',
-  'Use remote_delete, remote_chmod, and remote_move instead of shell rm, chmod, or mv when changing workspace files.',
-  'For remote_upload and remote_download, local paths must stay inside the Agent current cwd staging directory.',
-  'To learn which file is open in the VS Code window, call current_remote_file for its path and metadata.',
-  'Never use local shell or local filesystem tools for a safs workspace because its files do not exist locally.',
-  'Pass the bindingId returned by safs_get_remote_workspace to every later workspace tool call. It stays pinned to the matched window instance. If it expires, stop and report it; never guess, rebind, or silently switch workspaces.'
+const workspaceInstructions = [
+  'SAFS tools operate on remote files, not the local host filesystem. Use only for explicit SAFS tasks or known safs:// context.',
+  'Relative paths use the bound workspace root. Use search to locate relevant files and bounded reads for evidence; batch independent selections with remote_read_many.',
+  'Prefer remote_edit for small edits and remote_write for full replacements. When available, use structured delete/move/chmod tools for those changes.',
+  'Inspect truncation and per-item status. Continue reads with returned cursors/offsets; fetch command output with remote_output instead of rerunning commands. Binary/large transfers use transfer tools when enabled.',
+  'Local shell may invoke the SAFS CLI transport only; never treat remote paths as local files.'
 ].join(' ');
+
+export const directAgentMcpInstructions = workspaceInstructions +
+  ' Call safs_get_remote_workspace once to identify this window workspace.';
+
+export const routedAgentMcpInstructions = workspaceInstructions + ' ' + [
+  'Bind once with safs_get_remote_workspace(agentCwd=actual cwd). Exact placeholder cwd or one uniquely focused window binds automatically.',
+  'If candidates are returned, ask the user to choose; only after their reply call safs_switch_remote_workspace(workspaceId, userConfirmed=true). Never infer consent from a single candidate.',
+  'For listing or switching workspaces use safs_switch_remote_workspace. A successful switch cancels the old task: stop and wait for a new request.',
+  'Pass bindingId to subsequent tools. It is pinned to the window instance; on expiry stop and report, never silently rebind or switch.'
+].join(' ');
+
+export type AgentToolProfile = 'full' | 'core';
+const extendedTools = new Set(['current_remote_file', 'remote_delete', 'remote_chmod',
+  'remote_move', 'remote_upload', 'remote_download']);
 
 export type AgentMcpToolName =
   | 'safs_get_remote_workspace'
@@ -263,10 +258,12 @@ export function registerAgentMcpTools(
   server: McpServer,
   options: {
     routed: boolean;
+    profile?: AgentToolProfile;
     invoke(name: AgentMcpToolName, input: Record<string, unknown>): Promise<any>;
   }
 ): void {
   for (const definition of toolDefinitions(options.routed)) {
+    if (options.profile === 'core' && extendedTools.has(definition.name)) continue;
     server.registerTool(
       definition.name,
       {

@@ -34,3 +34,9 @@
 - `remote_read_many` batches up to 16 selections under a 16 KiB default shared
   content budget (metadata excluded). Each item explicitly reports `ok`, `error`,
   or `not_read`; earlier reads cannot silently starve later files.
+- `safs.agentMcpToolProfile: "core"` omits current-editor metadata, transfers,
+  delete/move/chmod tools while keeping typed edit/write, discovery, inspection,
+  commands and continuation. The default `full` profile preserves compatibility.
+  This is tool discovery configuration, not a permissions boundary (commands still
+  have SSH account permissions). Set consistently across windows, then restart
+  the Agent so its cached tool list is refreshed.

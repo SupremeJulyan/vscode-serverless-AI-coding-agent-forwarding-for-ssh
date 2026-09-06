@@ -2996,7 +2996,8 @@ async function ensureAgentHttpRouter(
           {
             log: (message) => logMcpMessage('Agent HTTP Router', message),
             audit: auditMcpTool,
-            forwardTimeoutMs: settings().get<number>('agentMcpTimeoutMs', 120_000)
+            forwardTimeoutMs: settings().get<number>('agentMcpTimeoutMs', 120_000),
+            toolProfile: () => settings().get<'full' | 'core'>('agentMcpToolProfile', 'full')
           }
         );
         httpRouter = router;
@@ -3056,6 +3057,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
       settings().get<number>('agentMcpPort', 0),
       token,
       {
+        toolProfile: () => settings().get<'full' | 'core'>('agentMcpToolProfile', 'full'),
         listFolders: async () => (await forwardedFolders(context)).filter(
           (folder) => folder.name === boundMountName
         ),

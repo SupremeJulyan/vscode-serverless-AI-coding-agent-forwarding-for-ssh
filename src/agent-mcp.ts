@@ -19,6 +19,7 @@ export interface RemoteFolderInfo {
 }
 
 export interface AgentMcpCallbacks {
+  toolProfile?(): 'full' | 'core';
   listFolders(): Promise<RemoteFolderInfo[]>;
   currentWorkspace(): Promise<RemoteFolderInfo | null>;
   /** 当前打开的远程文件元数据（无活动远程文件时为 null）。 */
@@ -128,6 +129,7 @@ export class AgentMcpServer {
     };
     registerAgentMcpTools(server, {
       routed: false,
+      profile: this.callbacks.toolProfile?.(),
       invoke: (name, input) => {
         switch (name) {
           case 'safs_get_remote_workspace':
