@@ -192,9 +192,14 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
     {
       name: 'remote_search',
       title: 'Search remote files',
-      description: 'Searches file contents on the remote SSH host. Relative paths start at the current VS Code workspace root. Returns original matching lines within the output byte budget. status distinguishes matches, no_matches and error; truncated means results are incomplete.',
+      description: 'Searches file contents on the remote SSH host. Relative paths start at the current VS Code workspace root. Modes: content (default), files (matching paths), count (per-file counts, including zeros). query uses basic grep regex unless fixedStrings=true. include filters basenames; excludeDirs overrides default dependency/build exclusions (use [] to search all directories). Returns original matching lines within the output byte budget. status distinguishes matches, no_matches and error; truncated means results are incomplete.',
       inputSchema: {
-        ...binding, query: z.string().min(1), path: z.string().optional()
+        ...binding, query: z.string().min(1), path: z.string().optional(),
+        mode: z.enum(['content', 'files', 'count']).optional(),
+        fixedStrings: z.boolean().optional(), ignoreCase: z.boolean().optional(),
+        contextLines: z.number().int().min(0).max(20).optional(),
+        include: z.array(z.string().min(1).max(256)).max(20).optional(),
+        excludeDirs: z.array(z.string().min(1).max(256)).max(40).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },

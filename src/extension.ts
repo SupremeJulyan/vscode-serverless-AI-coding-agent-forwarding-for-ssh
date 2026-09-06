@@ -1,3 +1,4 @@
+import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
 import { pageDirectory, searchResult } from './remote-results';
 import * as os from 'node:os';
@@ -2628,30 +2629,22 @@ async function runRemote(input: {
   return executeRemoteCommand(vscodeContext, { ...input, source: input.source ?? 'mcp' });
 }
 
-async function remoteSearch(input: {
-  mountName: string; query: string; path?: string; agentName?: string; agentPlatform?: string;
+async function remoteSearch(input: RemoteSearchOptions & {
+  mountName: string; agentName?: string; agentPlatform?: string;
 }): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const requestedPath = resolveRemotePath(folder, input.path);
   const searchPath = await (await pool.get(folder.hostName)).realpath(requestedPath);
-  // 依赖/构建/缓存目录（按目录名在任意层级匹配）一律跳过，避免搜索命中整库噪音；
-  // 保留 grep 退出状态与原始行；输出由 agentMcpMaxOutputBytes 限制。
-  const excludeDirs = [
-    '.git', 'node_modules', 'dist', 'build', 'out', 'target',
-    '.venv', 'venv', '__pycache__', '.next', '.cache', 'coverage',
-    'vendor', '.tox', 'site-packages', 'bower_components', 'Pods', '.gradle'
-  ].map((dir) => `--exclude-dir=${dir}`).join(' ');
+  const search = searchCommand(searchPath, input);
   const result = await executeRemoteCommand(vscodeContext, {
     mountName: input.mountName,
     remoteCwd: currentWorkspacePath(folder),
     source: 'remote_search',
     agentName: input.agentName,
     agentPlatform: input.agentPlatform,
-    command: `grep -rIn ${excludeDirs} -- ${shellQuote(input.query)} ${
-      shellQuote(searchPath)
-    }`
+    command: search.command
   });
-  return searchResult(result);
+  return { ...searchResult(result), mode: search.mode, excludeDirs: search.excludeDirs };
 }
 
 // ---- Tree View ----

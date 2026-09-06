@@ -1,3 +1,4 @@
+import { RemoteSearchOptions } from './remote-search';
 import { RemoteReadOptions } from './remote-read';
 import { RemoteOutputStore } from './remote-output';
 import * as http from 'node:http';
@@ -42,9 +43,8 @@ export interface AgentMcpCallbacks {
     mountName?: string; remotePath: string; localPath: string;
     agentPlatform?: string;
   }): Promise<unknown>;
-  search(input: {
-    mountName?: string; query: string; path?: string; agentName?: string;
-    agentPlatform?: string;
+  search(input: RemoteSearchOptions & {
+    mountName?: string; agentName?: string; agentPlatform?: string;
   }): Promise<unknown>;
   run(input: {
     command: string; mountName?: string; remoteCwd?: string; agentName?: string;

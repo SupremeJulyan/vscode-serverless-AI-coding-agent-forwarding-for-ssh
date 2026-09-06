@@ -27,3 +27,7 @@
   `startLine`/`lineCount`; the byte budget applies to every selection. Tail lookup
   reads a bounded suffix and reports `selectionTruncated` when requested lines
   do not fit. Line lookup scans at most 16 MiB and fails explicitly beyond that.
+- `remote_search` supports content, matching-file, and per-file-count modes;
+  literal queries, case folding, context lines, basename include globs, and
+  explicit directory exclusions. `excludeDirs: []` disables default exclusions.
+  Context lines are only valid in content mode. Counts include zero-match files.
