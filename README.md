@@ -287,11 +287,10 @@ Agent 仅在 SAFS 远程任务中绑定当前 SFTP 虚拟工作区；
 或受限执行账号。`remote_list`、`remote_read` 和 `remote_search` 保持可读取工作区外的
 绝对路径，便于排查系统环境，但不会因此扩大结构化写工具的边界。
 
-为避免大输出刷爆模型上下文，工具结果做了多层限流：`remote_list` 默认最多返回
-500 条条目（可用 `limit` 上调，超限返回 `truncated` 与 `total`）；`remote_search`
-最多返回 200 行且每行截断到 300 字符；`run_remote_command` 的 stdout+stderr
-默认上限 64 KB（`safs.agentMcpMaxOutputBytes` 可调，超限返回 `truncated: true`）。
-工具结果以紧凑 JSON 返回，减少缩进空白带来的 token 开销。
+工具结果默认采用有预算的预览：目录每页 100 项并提供校验游标；文本读取默认
+8 KiB，支持行范围、头尾选择及批量预算；搜索保留原始匹配行与退出状态。
+命令和搜索默认展示 8 KiB，并支持 `remote_output` 续取保留结果。
+完整性、缓存容量及有效期说明见 [性能说明](PERFORMANCE.md)。
 
 ### 统一 Agent MCP（Codex / Claude Code）
 
@@ -389,8 +388,8 @@ claude mcp add --transport http --scope user safs 'http://127.0.0.1:9848/mcp?tok
 - `safs.sftp.watchInterval`
 - `safs.agentMcpPort`
 - `safs.agentHttpRouterPort`
-- `safs.agentMcpMaxOutputBytes`：`run_remote_command` 的 stdout+stderr 上限
-  （默认 65536，超限返回 `truncated: true`）。
+- `safs.agentMcpMaxOutputBytes`：命令/搜索输出预览预算
+  （默认 8192，超限返回 `truncated: true` 和可用的续取信息）。
 - `safs.agentForwardingAgents`：选择启用 MCP 转发的 Agent，默认
   `codex`、`claude`、`pi` 和 `dsh`。配置值直接使用 Agent 的 CLI 命令名（如 `codex`、
   `claude`、`pi`、`dsh`），支持任意 CLI。扩展优先从 `PATH` 查找支持 `mcp` 指令的 CLI，

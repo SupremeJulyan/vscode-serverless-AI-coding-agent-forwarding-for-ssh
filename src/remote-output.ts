@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 /** Window-local, bounded result retention. Handles never resolve in another workspace. */
 export class RemoteOutputStore {
-  private entries = new Map<string, { scope: string; expires: number; stdout: Buffer; stderr: Buffer }>();
+  private entries = new Map<string, { scope: string; expires: number; stdout: Buffer; stderr: Buffer; retentionTruncated: boolean }>();
   constructor(private readonly maxBytes = 32 * 1024 * 1024, private readonly ttlMs = 600_000) {}
 
   private prune() {
@@ -28,13 +28,17 @@ export class RemoteOutputStore {
       this.entries.delete(id);
     }
     const outputId = randomBytes(16).toString('hex');
-    this.entries.set(outputId, { scope, stdout, stderr, expires: Date.now() + this.ttlMs });
+    this.entries.set(outputId, { scope, stdout, stderr, retentionTruncated: result.truncated === true, expires: Date.now() + this.ttlMs });
     // Reserve space for stderr so verbose stdout cannot hide the failure diagnostic.
     const errBudget = Math.min(stderr.length, Math.floor(budget / 2));
     const out = this.read(outputId, scope, 'stdout', 0, budget - errBudget);
     const err = this.read(outputId, scope, 'stderr', 0, Math.max(4, errBudget));
     return {
       ...result, stdout: out.content, stderr: err.content, truncated: true,
+      ...(typeof result.returnedLineCount === 'number' ? {
+        capturedLineCount: result.returnedLineCount,
+        returnedLineCount: out.content.split('\n').length - 1
+      } : {}),
       outputId, retainedBytes: bytes, retentionTruncated: result.truncated === true,
       stdoutNextOffset: out.nextOffset, stderrNextOffset: err.nextOffset,
       expiresInSeconds: Math.floor(this.ttlMs / 1000)
@@ -54,6 +58,6 @@ export class RemoteOutputStore {
     let end = Math.min(data.length, offset + length);
     while (end < data.length && end > offset && (data[end] & 0xc0) === 0x80) end--;
     return { content: data.subarray(offset, end).toString(), nextOffset: end,
-      totalBytes: data.length, truncated: end < data.length };
+      totalBytes: data.length, truncated: end < data.length, retentionTruncated: item.retentionTruncated };
   }
 }

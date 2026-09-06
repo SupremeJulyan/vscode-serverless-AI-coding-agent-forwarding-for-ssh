@@ -5,7 +5,7 @@ import {
 import { z } from 'zod';
 
 const workspaceInstructions = [
-  'SAFS tools operate on remote files, not the local host filesystem. Use only for explicit SAFS tasks or known safs:// context.',
+  'SAFS tools operate on remote files, not the local host filesystem. Do not call SAFS tools for ordinary local workspaces. Use only for explicit SAFS tasks or known safs:// context.',
   'Relative paths use the bound workspace root. Use search to locate relevant files and bounded reads for evidence; batch independent selections with remote_read_many.',
   'Prefer remote_edit for small edits and remote_write for full replacements. When available, use structured delete/move/chmod tools for those changes.',
   'Inspect truncation and per-item status. Continue reads with returned cursors/offsets; fetch command output with remote_output instead of rerunning commands. Binary/large transfers use transfer tools when enabled.',
@@ -17,7 +17,7 @@ export const directAgentMcpInstructions = workspaceInstructions +
 
 export const routedAgentMcpInstructions = workspaceInstructions + ' ' + [
   'Bind once with safs_get_remote_workspace(agentCwd=actual cwd). Exact placeholder cwd or one uniquely focused window binds automatically.',
-  'If candidates are returned, ask the user to choose; only after their reply call safs_switch_remote_workspace(workspaceId, userConfirmed=true). Never infer consent from a single candidate.',
+  'If candidates are returned, ask the user to choose; Never select in the same turn as asking; only after their reply call safs_switch_remote_workspace(workspaceId, userConfirmed=true). Never infer consent from a single candidate.',
   'For listing or switching workspaces use safs_switch_remote_workspace. A successful switch cancels the old task: stop and wait for a new request.',
   'Pass bindingId to subsequent tools. It is pinned to the window instance; on expiry stop and report, never silently rebind or switch.'
 ].join(' ');
@@ -57,11 +57,11 @@ interface AgentMcpToolDefinition {
 }
 
 const textReadSchema = {
-        path: z.string().min(1),
-        offset: z.number().int().min(0).optional(),
-        length: z.number().int().min(4).max(65536).optional(),
-        head: z.number().int().min(1).optional(), tail: z.number().int().min(1).optional(),
-        startLine: z.number().int().min(1).optional(), lineCount: z.number().int().min(1).optional()
+  path: z.string().min(1),
+  offset: z.number().int().min(0).optional(),
+  length: z.number().int().min(4).max(65536).optional(),
+  head: z.number().int().min(1).optional(), tail: z.number().int().min(1).optional(),
+  startLine: z.number().int().min(1).optional(), lineCount: z.number().int().min(1).optional()
 };
 
 function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {

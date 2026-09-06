@@ -346,13 +346,11 @@ MCP command audit logs under `~/.safs/mcp_logs/` include the redacted command te
 its original byte count, and SHA-256. Common tokens, passwords, authentication
 headers, and URL credentials are replaced with `<hidden>`.
 
-Tool results are throttled so large output cannot blow up model context:
-`remote_list` returns at most 500 entries by default (raise with `limit`; when
-capped it returns `truncated` and `total`), `remote_search` returns at most 200
-matches with lines trimmed to 300 chars, and `run_remote_command` returns at
-most 64 KB of stdout+stderr by default (configurable via
-`safs.agentMcpMaxOutputBytes`, flagged with `truncated: true` when capped).
-Results are returned as compact JSON to avoid wasting tokens on indentation.
+Tool results use bounded previews: directories default to 100 entries with validated
+cursors; text reads default to 8 KiB with line/head/tail and batch selection.
+Search preserves original lines and exit status. Commands/search default to 8 KiB
+previews with `remote_output` continuation. See [Performance Notes](PERFORMANCE.md)
+for completeness metadata, retention capacity and expiry.
 
 ### Unified Agent MCP (Codex / Claude Code)
 
@@ -476,8 +474,8 @@ port and defaults to `9848`; the extension rejects an unrelated process occupyin
 - `safs.sftp.watchInterval`
 - `safs.agentMcpPort`
 - `safs.agentHttpRouterPort`
-- `safs.agentMcpMaxOutputBytes`: stdout+stderr cap for `run_remote_command`
-  (default `65536`; returns `truncated: true` when exceeded).
+- `safs.agentMcpMaxOutputBytes`: command/search preview budget
+  (default `8192`; truncated previews include available continuation metadata).
 - `safs.agentForwardingAgents`: selects Agents enabled for MCP forwarding;
   defaults to `codex`, `claude`, `pi`, and `dsh`. Values are the Agent CLI
   command names directly (e.g. `codex`, `claude`, `pi`, `dsh`); any CLI is

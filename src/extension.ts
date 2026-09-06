@@ -2477,7 +2477,7 @@ async function executeRemoteCommand(
   context: vscode.ExtensionContext,
   input: {
     command: string; mountName: string; remoteCwd?: string; source?: string; agentName?: string;
-    agentPlatform?: string;
+    agentPlatform?: string; captureForMcp?: boolean;
   },
   token?: vscode.CancellationToken
 ): Promise<Record<string, unknown>> {
@@ -2495,7 +2495,7 @@ async function executeRemoteCommand(
     Math.min(1024 * 1024, settings().get<number>('agentMcpMaxOutputBytes', 8192))
   );
   const source = input.source ?? 'mcp';
-  const retainOutput = source === 'mcp' || source === 'remote_search';
+  const retainOutput = input.captureForMcp === true;
   const maxOutputBytes = retainOutput ? 16 * 1024 * 1024 : responseBudget;
   const logFailure = (error: unknown): void => {
     bridgeOutput?.appendLine(
@@ -2630,7 +2630,7 @@ async function runRemote(input: {
 }
 
 async function remoteSearch(input: RemoteSearchOptions & {
-  mountName: string; agentName?: string; agentPlatform?: string;
+  mountName: string; agentName?: string; agentPlatform?: string; captureForMcp?: boolean;
 }): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const requestedPath = resolveRemotePath(folder, input.path);
@@ -2642,6 +2642,7 @@ async function remoteSearch(input: RemoteSearchOptions & {
     source: 'remote_search',
     agentName: input.agentName,
     agentPlatform: input.agentPlatform,
+    captureForMcp: input.captureForMcp,
     command: search.command
   });
   return { ...searchResult(result), mode: search.mode, excludeDirs: search.excludeDirs };
@@ -3157,10 +3158,10 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
           };
         },
         search: async (input) => remoteSearch({
-          ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
+          ...input, captureForMcp: true, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         run: async (input) => executeRemoteCommand(context, {
-          ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
+          ...input, captureForMcp: true, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         request: (agentName, agentPlatform) => {
           updateSafsStatusBar(vscode.window.state.focused, agentName, agentPlatform);

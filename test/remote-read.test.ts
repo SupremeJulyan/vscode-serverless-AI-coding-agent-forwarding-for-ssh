@@ -19,3 +19,11 @@ test('byte continuation does not split UTF-8 or accept binary data', async () =>
   assert.equal((await read('中文abc', { offset: first.nextOffset })).content, '文abc');
   await assert.rejects(read('a\0b', {}));
 });
+
+test('UTF-8 BOM is preserved and invalid bytes are never silently dropped', async () => {
+  assert.equal((await read('\ufeffhello', {})).content, '\ufeffhello');
+  await assert.rejects(readTextRange(20, async () => Buffer.from([65, 255, 255, 255]), { path: 'x', length: 4 }));
+  const suffix = await read('abc\ndef\n', { tail: 1, length: 4 });
+  assert.equal(suffix.content, 'def\n');
+  assert.equal(suffix.selectionTruncated, false);
+});

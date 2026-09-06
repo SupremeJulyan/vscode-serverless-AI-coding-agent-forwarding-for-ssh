@@ -71,16 +71,10 @@ export async function readTextRange(
       data = data.subarray(0, end);
     }
   }
-  let end = data.length;
-  // Only trim an incomplete character when there are actually more file bytes.
-  if (offset + end < fileSize) {
-    for (let backoff = 0; backoff <= Math.min(3, data.length); backoff++) {
-      try { new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(0, end)); break; }
-      catch { end = data.length - backoff - 1; }
-    }
-  }
-  if (end < 0 || (data.length && !end)) throw new Error('Invalid UTF-8 content.');
-  const content = new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(0, end));
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  const content = decoder.decode(data, { stream: offset + data.length < fileSize });
+  const end = Buffer.byteLength(content);
+  if (data.length && !end) throw new Error('Read budget cannot contain a complete UTF-8 character.');
   return { content, offset, bytes: end, nextOffset: offset + end, fileSize,
     truncated: offset + end < fileSize || selectionTruncated,
     ...(input.tail !== undefined ? { omittedBefore: offset > 0, selectionTruncated } : {}),

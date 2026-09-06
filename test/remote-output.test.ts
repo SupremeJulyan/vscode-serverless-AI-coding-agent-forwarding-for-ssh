@@ -30,3 +30,11 @@ test('output cache evicts oldest results and reports incomplete original capture
   store.capture({ stdout: 'b'.repeat(60) }, 'a', 8);
   assert.throws(() => store.read(a.outputId, 'a', 'stdout'));
 });
+
+test('preview counts do not claim all captured search lines were shown', () => {
+  const store = new RemoteOutputStore();
+  const preview = store.capture({ stdout: 'line\n'.repeat(100), returnedLineCount: 100, truncated: true }, 'a', 32) as any;
+  assert.equal(preview.capturedLineCount, 100);
+  assert.equal(preview.returnedLineCount, 6);
+  assert.equal(store.read(preview.outputId, 'a', 'stdout').retentionTruncated, true);
+});
