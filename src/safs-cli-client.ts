@@ -8,9 +8,13 @@ export function parseCliRequest(argv: string[], cwd: string): CliRequest {
   const flags: Record<string, string> = {};
   let command: string | undefined;
   const allowed: Record<string, string[]> = {
+    list: ['binding', 'path', 'limit', 'cursor'], read: ['binding', 'path', 'offset', 'length', 'head', 'tail', 'start-line', 'line-count'],
+    search: ['binding', 'path', 'query', 'mode'], edit: ['binding', 'path'], write: ['binding', 'path'],
+    upload: ['binding'], download: ['binding'], delete: ['binding', 'path'], move: ['binding'], chmod: ['binding', 'path', 'mode'],
+    'read-many': ['binding'], workspaces: [], switch: ['workspace', 'confirmed'],
     bind: ['cwd'], exec: ['binding', 'cwd'], output: ['binding', 'id', 'stream', 'offset', 'length']
   };
-  if (!allowed[verb]) throw new Error('Expected bind, exec, or output. Use --help for usage.');
+  if (!allowed[verb]) throw new Error('Unknown command. Use --help for usage.');
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--') {
       if (verb !== 'exec' || args.length - i !== 2) throw new Error('Pass one quoted remote command after --.');
@@ -23,7 +27,26 @@ export function parseCliRequest(argv: string[], cwd: string): CliRequest {
     flags[key] = args[++i];
   }
   if (verb === 'bind') return { name: 'safs_get_remote_workspace', arguments: { agentCwd: flags.cwd ?? cwd } };
+  if (verb === 'workspaces') return { name: 'safs_switch_remote_workspace', arguments: {} };
+  if (verb === 'switch') {
+    if (!flags.workspace || flags.confirmed !== 'true') throw new Error('Switch requires --workspace ID --confirmed true after user confirmation.');
+    return { name: 'safs_switch_remote_workspace', arguments: { workspaceId: flags.workspace, userConfirmed: true } };
+  }
+  const toolNames: Record<string, string> = { list: 'remote_list', read: 'remote_read', search: 'remote_search',
+    edit: 'remote_edit', write: 'remote_write', upload: 'remote_upload', download: 'remote_download',
+    delete: 'remote_delete', move: 'remote_move', chmod: 'remote_chmod', 'read-many': 'remote_read_many' };
   if (!flags.binding) throw new Error('--binding is required; the CLI never automatically rebinds.');
+  if (toolNames[verb]) {
+    const input: Record<string, unknown> = { bindingId: flags.binding };
+    const numeric = new Set(['limit', 'offset', 'length', 'head', 'tail', 'start-line', 'line-count']);
+    for (const [key, value] of Object.entries(flags)) {
+      if (key === 'binding') continue;
+      if (numeric.has(key) && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) throw new Error(`Invalid --${key}.`);
+      const name = key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+      input[name] = numeric.has(key) ? Number(value) : value;
+    }
+    return { name: toolNames[verb], arguments: input };
+  }
   if (verb === 'exec') {
     if (!command?.trim()) throw new Error('Pass one quoted remote command after --.');
     return { name: 'run_remote_command', arguments: { bindingId: flags.binding, command,
@@ -38,6 +61,35 @@ export function parseCliRequest(argv: string[], cwd: string): CliRequest {
   }
   return { name: 'remote_output', arguments: { bindingId: flags.binding, outputId: flags.id,
     stream: flags.stream, ...numbers } };
+}
+
+/** JSON files carry arrays/edits without shell escaping; binding is always explicit. */
+export async function prepareCliRequest(argv: string[], cwd: string, load: (path: string) => Promise<string>) {
+  const args = [...argv];
+  const take = (flag: string) => {
+    const separator = args.indexOf('--');
+    const index = args.findIndex((arg, i) => arg === flag && (separator < 0 || i < separator));
+    if (index < 0) return undefined;
+    if (!args[index + 1]) throw new Error(`${flag} requires a file path.`);
+    return args.splice(index, 2)[1];
+  };
+  const inputFile = take('--input');
+  const contentFile = take('--file');
+  const request = parseCliRequest(args, cwd);
+  if (inputFile) {
+    if (!request.name.startsWith('remote_')) throw new Error('--input is only supported for structured file commands.');
+    const input = JSON.parse(await load(inputFile));
+    if (!input || typeof input !== 'object' || Array.isArray(input) || 'bindingId' in input || 'mountName' in input) {
+      throw new Error('Input must be an object without bindingId or mountName.');
+    }
+    for (const key of Object.keys(input)) if (key in request.arguments) throw new Error(`Duplicate input field: ${key}`);
+    request.arguments = { ...input, ...request.arguments };
+  }
+  if (contentFile) {
+    if (request.name !== 'remote_write' || 'content' in request.arguments) throw new Error('--file is only valid for write and cannot duplicate content.');
+    request.arguments.content = await load(contentFile);
+  }
+  return request;
 }
 
 export async function callSafs(urlValue: string, request: CliRequest) {

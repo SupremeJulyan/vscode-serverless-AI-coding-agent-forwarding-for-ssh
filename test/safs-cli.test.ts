@@ -44,3 +44,17 @@ test('CLI uses existing router binding, preserves exit code and refuses expired 
     await assert.rejects(callSafs('http://example.com/mcp?token=x', parseCliRequest(['bind'], '/local-cli')));
   } finally { await router.stop(); await backend.stop(); }
 });
+
+test('structured CLI commands preserve edit payloads and prevent implicit target overrides', async () => {
+  const { prepareCliRequest } = await import('../src/safs-cli-client');
+  const edit = await prepareCliRequest(['edit', '--binding', 'id', '--path', 'a', '--input', 'edits.json'], '/',
+    async () => JSON.stringify({ edits: [{ oldText: '$`old\n', newText: 'new\n' }] }));
+  assert.equal(edit.name, 'remote_edit');
+  assert.deepEqual(edit.arguments.edits, [{ oldText: '$`old\n', newText: 'new\n' }]);
+  assert.equal(parseCliRequest(['read', '--binding', 'id', '--path', 'a', '--start-line', '20'], '/').arguments.startLine, 20);
+  await assert.rejects(prepareCliRequest(['read', '--binding', 'id', '--input', 'x'], '/', async () => '{"bindingId":"other"}'));
+  assert.throws(() => parseCliRequest(['switch', '--workspace', 'id'], '/'));
+  assert.equal(parseCliRequest(['switch', '--workspace', 'id', '--confirmed', 'true'], '/').arguments.userConfirmed, true);
+  const write = await prepareCliRequest(['write', '--binding', 'id', '--path', 'a', '--file', 'x'], '/', async () => '原样\n');
+  assert.equal(write.arguments.content, '原样\n');
+});

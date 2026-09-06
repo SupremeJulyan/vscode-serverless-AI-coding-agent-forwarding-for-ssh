@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { callSafs, parseCliRequest } from './safs-cli-client';
+import { readFile } from 'node:fs/promises';
+import { callSafs, prepareCliRequest } from './safs-cli-client';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -8,17 +9,30 @@ async function main() {
 Usage:
   safs bind [--cwd LOCAL_AGENT_CWD]
   safs exec --binding ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
+  safs list|read --binding ID --path PATH [--input OPTIONS.json]
+  safs search --binding ID --query TEXT [--path PATH] [--mode content|files|count]
+  safs edit --binding ID --path PATH --input EDITS.json
+  safs write --binding ID --path PATH --file LOCAL_UTF8_FILE
+  safs upload|download|move|chmod|delete|read-many --binding ID --input OPTIONS.json
+  safs workspaces
+  safs switch --workspace ID --confirmed true
   safs output --binding ID --id OUTPUT_ID --stream stdout|stderr [--offset N] [--length N]
 
 Bind once and reuse the returned bindingId. Candidate lists require user selection
-through the existing MCP workspace-switch flow; the CLI never picks a candidate.
+before switch --confirmed true; the CLI never picks a candidate. Stop the previous task after switching.
+JSON input uses the corresponding remote tool fields (without bindingId). For example:
+edit: {"edits":[{"oldText":"old","newText":"new"}],"expectedHash":"optional SHA-256"}
+upload: {"localPaths":["/absolute/local/file"],"remoteDirectory":"."}
+download: {"remotePath":"file","localPath":"/absolute/local/destination"}
+read-many: {"requests":[{"path":"a","head":20}],"maxBytes":16384}
+Use --input for search filters, batch paths and other advanced options.
 Exec writes remote stdout/stderr directly and preserves the remote exit code.
 Truncated output includes continuation metadata on stderr; output returns JSON.
 No SSH credentials or remote service installation are needed by this wrapper.
 `);
     return;
   }
-  const request = parseCliRequest(args, process.cwd());
+  const request = await prepareCliRequest(args, process.cwd(), file => readFile(file, 'utf8'));
   const url = process.env.SAFS_MCP_URL;
   if (!url) throw new Error('Set SAFS_MCP_URL to the existing SAFS router URL.');
   const result = await callSafs(url, request);
