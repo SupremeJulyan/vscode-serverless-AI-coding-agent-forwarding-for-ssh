@@ -50,6 +50,8 @@ jobs:
   extension:
     needs: native-cli
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -80,3 +82,15 @@ jobs:
           name: safs-universal-vsix
           path: '*.vsix'
           if-no-files-found: error
+      - name: Commit refreshed native executables
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -f bin/linux-x64/safs bin/linux-arm64/safs
+          git add -f bin/darwin-x64/safs bin/darwin-arm64/safs
+          git add -f bin/win32-x64/safs.exe bin/win32-arm64/safs.exe
+          git diff --cached --quiet && exit 0
+          git commit -m "build(cli): refresh native executables [skip ci]"
+          git push origin HEAD:main
