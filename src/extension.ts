@@ -533,7 +533,7 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
   return picked?.mount;
 }
 
-function cliMode(): boolean { return settings().get<string>('agentInterface', 'cli') === 'cli'; }
+function cliMode(): boolean { return settings().get<string>('agentInterface', 'mcp') === 'cli'; }
 
 function cliRouterUrl(url: string): string {
   const platform: AgentPlatformLabel = settings().get<string>('agentPlatform', 'auto') === 'wsl'

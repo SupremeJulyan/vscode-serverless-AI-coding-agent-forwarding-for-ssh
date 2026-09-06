@@ -170,18 +170,17 @@ Remote terminals connect over SSH; no VS Code Server is required on the host.
 
 ### Enable Agent Forwarding
 
-The default `safs.agentInterface: "cli"` publishes a private CLI connection file
-and removes detected Agent-facing SAFS MCP registrations. Reload VS Code windows
-and restart Agents to discard cached tool definitions. Removal failures are reported;
-manually registered, undetected clients may need manual MCP removal. Use `mcp` mode
-for MCP-only clients, consistently across windows.
+The default `safs.agentInterface: "mcp"` uses the stable MCP integration. Reload
+VS Code windows and restart Agents after changing the interface so their tool list
+is refreshed.
 
-SAFS maintains CLI instruction blocks in AGENTS.md/CLAUDE.md beside its own local
+The CLI is an experimental opt-in and requires the VSIX to contain a native binary
+matching the Agent platform. SAFS maintains CLI instruction blocks in AGENTS.md/CLAUDE.md beside its own local
 placeholder directories, never in the remote project. Instructions contain paths,
 not tokens. For clients that do not load those files, or local sync mirrors, use
 “Install Agent Forwarding” to copy token-free CLI instructions. The bundled native
 executable requires neither Node.js nor a PATH change.
-The following MCP registration steps apply to the optional `mcp` compatibility mode.
+The following registration steps apply to the default MCP mode.
 
 The Agent can be a VS Code extension (Copilot Chat, Codex, ...) or a desktop
 app (Codex CLI, Claude Code, ...), but it must run on the same operating
@@ -550,8 +549,9 @@ a content budget. Search supports content/files/count modes and explicit filters
 Long output is retained with bounded capacity for continuation without rerunning
 commands; see [Performance Notes](PERFORMANCE.md).
 
-The universal VSIX contains native x64/ARM64 executables for Windows, macOS and
-Linux. SAFS selects one for the Agent platform, installs it under extension storage,
+The release workflow can build native x64/ARM64 executables for Windows, macOS and
+Linux. CLI mode is available only when the installed VSIX contains the matching binary.
+SAFS selects it for the Agent platform, installs it under extension storage,
 and writes its absolute path plus the private connection-file path into Agent
 instructions. No Node.js, global PATH, or environment-variable change is required.
 Windows-to-WSL uses the Linux binary and WSL-form paths.

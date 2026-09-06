@@ -41,6 +41,10 @@ test('extension declares the SFTP filesystem activation event', async () => {
     manifest.contributes?.configuration?.properties?.['safs.terminalAutoReconnect']?.default,
     true
   );
+  assert.equal(
+    manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.default,
+    'mcp'
+  );
 });
 
 test('contributes a remote-directory switch command instead of relying on the local picker', async () => {

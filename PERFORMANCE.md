@@ -65,14 +65,15 @@ keeps the existing no-remote-service deployment model and adds no language serve
 or indexing dependency. A real remote integration/token benchmark requires a live
 SAFS connection and Agent usage telemetry; the offline benchmark does not supply it.
 
-## CLI-first Agent integration
+## Experimental CLI Agent integration
 
-`agentInterface` now defaults to `cli`. On forwarding setup SAFS writes a private
+`agentInterface` defaults to `mcp`. Setting it to `cli` is experimental and requires
+a bundled native executable matching the Agent platform. In CLI mode SAFS writes a private
 connection JSON file and removes detected Agent-facing MCP registrations. The
 internal HTTP/MCP backend remains shared: replacing that internal protocol would
 not remove additional model-visible schemas, since the CLI never requests them.
-`mcp` remains an explicit compatibility mode; `agentMcpToolProfile` controls that
-mode, while the CLI backend exposes all structured operations.
+`agentMcpToolProfile` controls the default MCP mode, while the CLI backend exposes
+all structured operations.
 
 Local SAFS-owned placeholder parents receive managed AGENTS.md/CLAUDE.md blocks
 with an absolute native executable and connection-file path. The executable is

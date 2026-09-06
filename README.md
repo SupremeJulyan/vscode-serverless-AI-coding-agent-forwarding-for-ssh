@@ -136,19 +136,17 @@ code --install-extension safs-serverless-agent-forwarding-1.7.3.vsix
 
 ### 启用 Agent 转发
 
-默认使用 **CLI 优先模式**（`safs.agentInterface: "cli"`）。启用转发时，扩展发布本地
-CLI 连接配置，并清理已检测到的旧 SAFS MCP 注册。重载 VS Code 窗口、重启 Agent，
-让旧工具列表退出上下文。清理失败会明确提示；手工配置且未被检测到的 Agent 仍需手工移除
-其 `safs` MCP。CLI 内部复用 MCP 后端，但不会向 Agent 加载工具定义。
+默认使用稳定的 **MCP 模式**（`safs.agentInterface: "mcp"`）。启用转发时，扩展为检测到的
+Agent 注册 SAFS MCP。重载 VS Code 窗口并重启 Agent 后，新工具列表才会生效。
 
 SAFS 在自己管理的本地占位目录的父目录维护 `AGENTS.md` / `CLAUDE.md` 指引块，
 包含 CLI 路径和配置文件路径，不包含令牌，不修改远程项目。Agent 若不读取这些指引，
 或使用本地同步镜像，可运行“SAFS：为我的Agent安装转发功能”复制无令牌 CLI 指引。
-CLI 是随 VSIX 提供的原生程序，不要求 Node.js，也不依赖 PATH。仅支持 MCP 的客户端请设置
-`safs.agentInterface: "mcp"`。
+CLI 是实验性可选入口；仅当 VSIX 包含 Agent 所在平台的原生程序时，才可设置
+`safs.agentInterface: "cli"`。它不要求 Node.js，也不依赖 PATH。
 多窗口应使用相同模式，切换模式后重载窗口并重启 Agent。
 
-**以下 MCP 自动注册步骤适用于 `mcp` 兼容模式。**
+**以下步骤适用于默认的 MCP 模式。**
 
 Agent 可以是 VS Code 扩展（Copilot Chat、Codex 等），也可以是桌面 App
 （Codex CLI、Claude Code 等），但必须和运行 SAFS 的 VS Code 处于同一个
@@ -445,9 +443,10 @@ claude mcp add --transport http --scope user safs 'http://127.0.0.1:9848/mcp?tok
 - 长命令默认只展示 8 KiB 预览；用 `remote_output` 续取保留结果，无需重跑命令。
   结果最多保留 10 分钟，并有容量限制；详见 [性能说明](PERFORMANCE.md)。
 
-### SAFS CLI（默认 Agent 入口）
+### SAFS CLI（实验性可选入口）
 
-VSIX 包含 Windows、macOS、Linux 的 x64/ARM64 原生程序。扩展按 Agent 平台选择后复制到
+发布流水线可为 Windows、macOS、Linux 构建 x64/ARM64 原生程序；CLI 只有在当前 VSIX
+包含匹配平台程序时才可使用。扩展按 Agent 平台选择后复制到
 自己的持久存储目录，设置可执行权限，并把该程序及私有 `cli-connection.json` 的绝对路径
 写入 Agent 指引。它不要求 Node.js，也不修改全局 PATH或环境变量。配置中的令牌不要打印
 或粘贴到会话。Windows 上的 WSL Agent 使用 Linux 版本，并收到 WSL 格式的绝对路径。
