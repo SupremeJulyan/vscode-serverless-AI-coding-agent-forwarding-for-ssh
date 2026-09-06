@@ -179,7 +179,8 @@ for MCP-only clients, consistently across windows.
 SAFS maintains CLI instruction blocks in AGENTS.md/CLAUDE.md beside its own local
 placeholder directories, never in the remote project. Instructions contain paths,
 not tokens. For clients that do not load those files, or local sync mirrors, use
-“Install Agent Forwarding” to copy token-free CLI instructions. Node.js 18+ is required.
+“Install Agent Forwarding” to copy token-free CLI instructions. The bundled native
+executable requires neither Node.js nor a PATH change.
 The following MCP registration steps apply to the optional `mcp` compatibility mode.
 
 The Agent can be a VS Code extension (Copilot Chat, Codex, ...) or a desktop
@@ -549,16 +550,16 @@ a content budget. Search supports content/files/count modes and explicit filters
 Long output is retained with bounded capacity for continuation without rerunning
 commands; see [Performance Notes](PERFORMANCE.md).
 
-Build with `npm run compile`, then run `node dist/safs-cli.js --help`. Optional
-`npm link` installs the `safs` command; installing the VSIX does not register a
-system CLI. Node.js 18+ and a running SAFS forwarding window are required.
-Set `SAFS_MCP_URL` from the existing “Copy Streamable HTTP URL” router command;
-the URL contains a token and should not be pasted into Agent conversations.
+The universal VSIX contains native x64/ARM64 executables for Windows, macOS and
+Linux. SAFS selects one for the Agent platform, installs it under extension storage,
+and writes its absolute path plus the private connection-file path into Agent
+instructions. No Node.js, global PATH, or environment-variable change is required.
+Windows-to-WSL uses the Linux binary and WSL-form paths.
 
 ```sh
-node dist/safs-cli.js bind --cwd /actual/agent/cwd
-node dist/safs-cli.js exec --binding ID -- 'pwd'
-node dist/safs-cli.js output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
+"/absolute/path/to/safs" --config "/absolute/path/to/cli-connection.json" bind --cwd /actual/agent/cwd
+SAFS exec --binding ID -- 'pwd'
+SAFS output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
 ```
 
 Replace ID using the bind response. Initial binding follows existing MCP rules;
@@ -570,9 +571,8 @@ connection/policy layer and does not fetch tool schemas or manage SSH credential
 
 ### Structured CLI commands
 
-The generated command includes `--config /path/to/cli-connection.json`; the CLI
-reads credentials internally. `SAFS_MCP_URL` remains a manual override when no
-config file is specified. Do not print either credential source into Agent context.
+The generated absolute command includes `--config /path/to/cli-connection.json`;
+the CLI reads credentials internally. Do not print the connection file into Agent context.
 
 CLI commands now include list, read, search, edit, write, upload, download,
 delete, move, chmod, read-many, workspaces and switch, alongside bind/exec/output.

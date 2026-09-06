@@ -144,7 +144,8 @@ CLI 连接配置，并清理已检测到的旧 SAFS MCP 注册。重载 VS Code 
 SAFS 在自己管理的本地占位目录的父目录维护 `AGENTS.md` / `CLAUDE.md` 指引块，
 包含 CLI 路径和配置文件路径，不包含令牌，不修改远程项目。Agent 若不读取这些指引，
 或使用本地同步镜像，可运行“SAFS：为我的Agent安装转发功能”复制无令牌 CLI 指引。
-本地需提供 Node.js 18+；仅支持 MCP 的客户端请设置 `safs.agentInterface: "mcp"`。
+CLI 是随 VSIX 提供的原生程序，不要求 Node.js，也不依赖 PATH。仅支持 MCP 的客户端请设置
+`safs.agentInterface: "mcp"`。
 多窗口应使用相同模式，切换模式后重载窗口并重启 Agent。
 
 **以下 MCP 自动注册步骤适用于 `mcp` 兼容模式。**
@@ -446,23 +447,23 @@ claude mcp add --transport http --scope user safs 'http://127.0.0.1:9848/mcp?tok
 
 ### SAFS CLI（默认 Agent 入口）
 
-构建后运行 `node dist/safs-cli.js --help`；可选 `npm link` 注册 `safs`。
-VSIX 安装不会修改全局 PATH；生成指引使用扩展目录中的绝对 CLI 路径。
-扩展自动生成私有的 `cli-connection.json`，CLI 用 `--config` 读取；仍兼容手工设置
-`SAFS_MCP_URL`。配置中的令牌不要打印或粘贴到会话。
+VSIX 包含 Windows、macOS、Linux 的 x64/ARM64 原生程序。扩展按 Agent 平台选择后复制到
+自己的持久存储目录，设置可执行权限，并把该程序及私有 `cli-connection.json` 的绝对路径
+写入 Agent 指引。它不要求 Node.js，也不修改全局 PATH或环境变量。配置中的令牌不要打印
+或粘贴到会话。Windows 上的 WSL Agent 使用 Linux 版本，并收到 WSL 格式的绝对路径。
 
 ```sh
-node /扩展目录/dist/safs-cli.js --config /存储目录/cli-connection.json bind --cwd /Agent/实际工作目录
-# 后续命令沿用同一 --config，此处省略该参数以突出操作形式。
-safs list --binding ID --path .
-safs read --binding ID --path src/main.ts --start-line 10 --line-count 30
-safs search --binding ID --query TODO --mode files
-safs edit --binding ID --path src/main.ts --input edits.json
-safs write --binding ID --path note.txt --file local-note.txt
-safs upload --binding ID --input upload.json
-safs download --binding ID --input download.json
-safs exec --binding ID -- 'pwd'
-safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
+"/SAFS存储目录/bin/linux-x64/safs" --config "/SAFS存储目录/cli-connection.json" bind --cwd /Agent/实际工作目录
+# 下文用绝对路径命令代称为 SAFS；自动指引会给 Agent 完整命令。
+SAFS list --binding ID --path .
+SAFS read --binding ID --path src/main.ts --start-line 10 --line-count 30
+SAFS search --binding ID --query TODO --mode files
+SAFS edit --binding ID --path src/main.ts --input edits.json
+SAFS write --binding ID --path note.txt --file local-note.txt
+SAFS upload --binding ID --input upload.json
+SAFS download --binding ID --input download.json
+SAFS exec --binding ID -- 'pwd'
+SAFS output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
 ```
 
 `--input` 接受对应结构化工具的 JSON 字段，不允许覆盖 `bindingId` 或 `mountName`。

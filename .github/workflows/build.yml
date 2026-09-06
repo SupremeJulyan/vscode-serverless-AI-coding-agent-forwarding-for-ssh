@@ -1,0 +1,80 @@
+name: Build and test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  native-cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+          - runner: macos-15-intel
+            platform: darwin-x64
+          - runner: macos-15
+            platform: darwin-arm64
+          - runner: windows-2025
+            platform: win32-x64
+          - runner: windows-11-vs2026-arm
+            platform: win32-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test native CLI
+        run: cargo test --locked --manifest-path native-cli/Cargo.toml
+      - name: Build native CLI
+        run: node build/build-native-cli.js
+        env:
+          SAFS_CLI_PLATFORM: ${{ matrix.platform }}
+      - name: Smoke test native CLI
+        shell: bash
+        run: bin/${{ matrix.platform }}/safs${{ startsWith(matrix.platform, 'win32-') && '.exe' || '' }} --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safs-${{ matrix.platform }}
+          path: bin/${{ matrix.platform }}/*
+          if-no-files-found: error
+
+  extension:
+    needs: native-cli
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: safs-*
+          path: bin
+          merge-multiple: false
+      - name: Normalize downloaded artifact directories
+        shell: bash
+        run: |
+          for artifact in bin/safs-*; do
+            platform="${artifact#bin/safs-}"
+            mkdir -p "bin/$platform"
+            cp "$artifact"/* "bin/$platform/"
+          done
+      - run: npm ci
+      - run: npm test
+      - run: node build/verify-native-cli.js
+      - run: npm run vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safs-universal-vsix
+          path: '*.vsix'
+          if-no-files-found: error

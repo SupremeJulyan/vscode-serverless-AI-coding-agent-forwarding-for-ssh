@@ -502,7 +502,7 @@
           "enum": ["cli", "mcp"],
           "default": "cli",
           "scope": "machine",
-          "description": "Agent entry point. cli (default) uses the local SAFS CLI and removes Agent-facing SAFS MCP registration; mcp retains the existing MCP integration. Use the same value across windows, reload VS Code windows and restart Agents after changing it. CLI requires Node.js 18+."
+          "description": "Agent entry point. cli (default) installs and invokes a bundled native SAFS executable by absolute path, and removes Agent-facing SAFS MCP registration; mcp retains the existing MCP integration. Use the same value across windows, reload VS Code windows and restart Agents after changing it."
         },
         "safs.agentMcpToolProfile": {
           "type": "string",
@@ -651,6 +651,7 @@
   "scripts": {
     "build:native-cli": "node build/build-native-cli.js",
     "test:native-cli": "cargo test --locked --manifest-path native-cli/Cargo.toml",
+    "verify:native-cli": "node build/verify-native-cli.js",
     "benchmark:mcp": "tsx build/mcp-efficiency.ts",
     "check-types": "tsx build/sync-high-risk-defaults.ts --check && tsc --noEmit",
     "sync-manifest-defaults": "tsx build/sync-high-risk-defaults.ts",
