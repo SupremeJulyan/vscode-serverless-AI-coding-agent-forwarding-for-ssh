@@ -1,5 +1,7 @@
-import { cliConfigPath, cliInstructions, updateCliInstructions, writeCliConnection } from './cli-integration';
-import { installNativeCli, nativeCliPlatform } from './native-cli';
+import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
+import {
+  ensureUnixCliPath, installNativeCli, nativeCliConnectionPath, nativeCliPlatform
+} from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
 import { pageDirectory, searchResult } from './remote-results';
@@ -542,21 +544,11 @@ function cliRouterUrl(url: string): string {
   return agentTaggedMcpUrl(url, 'safs-cli', platform);
 }
 
-async function refreshCliInstructions(localRoot: string): Promise<void> {
-  const platform = settings().get<string>('agentPlatform', 'auto') === 'wsl' ? 'wsl' : undefined;
-  const nativePlatform = nativeCliPlatform(process.platform, process.arch, platform === 'wsl');
-  const executable = cliMode() ? await installNativeCli(
-    vscodeContext.extensionPath, vscodeContext.globalStorageUri.fsPath, nativePlatform
-  ) : '';
-  const instructions = cliMode() ? cliInstructions(
-    localPathForAgent(executable, platform),
-    localPathForAgent(cliConfigPath(vscodeContext.globalStorageUri.fsPath), platform),
-    platformAdapter.kind === 'windows' && platform !== 'wsl'
-  ) : undefined;
+async function removeLegacyCliInstructions(localRoot: string): Promise<void> {
   // workspaceRoot uses URI path syntax; normalize to the native filesystem view.
   const nativeRoot = platformAdapter.kind === 'windows' && /^\/[A-Za-z]:/.test(localRoot)
     ? vscode.Uri.from({ scheme: 'file', path: localRoot }).fsPath : localRoot;
-  await updateCliInstructions(path.dirname(nativeRoot), instructions);
+  await updateCliInstructions(path.dirname(nativeRoot));
 }
 
 async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
@@ -565,7 +557,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
     bridgeOutput?.trace(`[SFTP] 复用挂载 ${mount.name}，remoteRoot=${existing.remoteRoot}`);
     await pool.get(existing.hostName);
     refreshSafsEntryLabel();
-    await refreshCliInstructions(existing.workspaceRoot);
+    await removeLegacyCliInstructions(existing.workspaceRoot);
     return existing;
   }
   agentTrace('SFTP', `开始连接挂载 ${mount.name}，host=${mount.host}`);
@@ -579,7 +571,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   const placeholder = await ensureAgentCwdPlaceholder(
     remoteRoot, vscodeContext.globalStorageUri.fsPath, mount.name
   );
-  await refreshCliInstructions(placeholder.localPath);
+  await removeLegacyCliInstructions(placeholder.localPath);
   const workspaceRoot = vscode.Uri.file(placeholder.localPath).path;
   const folder = { mountName: mount.name, hostName: mount.host, remoteRoot, workspaceRoot };
   registry.set(folder);
@@ -3359,6 +3351,53 @@ function createMcpRunner(platform: AgentPlatformContext): AgentMcpCliRunner {
   };
 }
 
+async function installGlobalCli(
+  context: vscode.ExtensionContext, routerUrl: string
+): Promise<string> {
+  const agentPlatform = await resolveAgentPlatform(
+    settings().get<string>('agentPlatform', 'auto')
+  );
+  const nativePlatform = nativeCliPlatform(process.platform, process.arch, agentPlatform.wsl);
+  const executable = await installNativeCli(
+    context.extensionPath, agentPlatform.home, nativePlatform
+  );
+  await writeCliConnectionFile(nativeCliConnectionPath(executable), routerUrl);
+  const binDirectory = path.dirname(executable);
+  if (nativePlatform.startsWith('win32-')) {
+    const script = [
+      '$dir=$args[0]',
+      "$value=[Environment]::GetEnvironmentVariable('Path','User')",
+      "$parts=if($value){$value -split ';'}else{@()}",
+      "if($parts -notcontains $dir){[Environment]::SetEnvironmentVariable('Path',(($parts+$dir)-join ';'),'User')}"
+    ].join(';');
+    const result = await executeCaptured({
+      command: 'powershell.exe',
+      args: ['-NoProfile', '-NonInteractive', '-Command', script, binDirectory]
+    });
+    if (result.exitCode !== 0) throw new Error('无法更新用户级 PATH：' + result.stderr.trim());
+  } else {
+    await ensureUnixCliPath(agentPlatform.home);
+    if (agentPlatform.wsl) {
+      const result = await executeCaptured(wslBashInvocation(
+        'chmod 755 "$1" && chmod 600 "$2"',
+        [
+          localPathForAgent(executable, 'wsl'),
+          localPathForAgent(nativeCliConnectionPath(executable), 'wsl')
+        ]
+      ));
+      if (result.exitCode !== 0) throw new Error('无法设置 WSL SAFS CLI 权限：' + result.stderr.trim());
+    }
+  }
+  if (!agentPlatform.wsl) {
+    const current = process.env.PATH?.split(path.delimiter) ?? [];
+    if (!current.includes(binDirectory)) {
+      process.env.PATH = `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`;
+    }
+    context.environmentVariableCollection.prepend('PATH', `${binDirectory}${path.delimiter}`);
+  }
+  return executable;
+}
+
 async function configureDetectedAgents(
   context: vscode.ExtensionContext, shouldRegister: boolean
 ): Promise<AgentMcpSetupResult> {
@@ -3366,11 +3405,11 @@ async function configureDetectedAgents(
   const routerUrl = router?.url;
   if (shouldRegister && cliMode()) {
     if (!routerUrl) throw new Error('SAFS CLI router is unavailable.');
-    await writeCliConnection(context.globalStorageUri.fsPath, cliRouterUrl(routerUrl));
+    await installGlobalCli(context, cliRouterUrl(routerUrl));
     const removed = await configureDetectedAgents(context, false);
     const pending = context.globalState.get<string[]>(agentSetupCompletedKey, []);
     const succeeded = removed.succeeded && pending.length === 0;
-    bridgeOutput?.appendLine('[Agent CLI] 已发布本地连接配置；旧 MCP 注册清理后请重启 Agent。');
+    bridgeOutput?.appendLine('[Agent CLI] 已安装用户级 safs 命令并发布连接配置；旧 MCP 注册清理后请重启 Agent。');
     if (!succeeded) {
       void vscode.window.showWarningMessage('SAFS CLI 已就绪，但部分旧 MCP 注册未能清理。请查看 SAFS 日志并在对应 Agent 中移除 safs MCP 后重启，否则工具定义仍可能加载。');
     }
@@ -4063,18 +4102,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   command('installAgentForwarding', async () => {
     if (cliMode()) {
       const router = await ensureAgentHttpRouter(context);
-      await writeCliConnection(context.globalStorageUri.fsPath, cliRouterUrl(router.url));
-      const platform = settings().get<string>('agentPlatform', 'auto') === 'wsl' ? 'wsl' : undefined;
-      const executable = await installNativeCli(
-        context.extensionPath, context.globalStorageUri.fsPath,
-        nativeCliPlatform(process.platform, process.arch, platform === 'wsl')
+      await installGlobalCli(context, cliRouterUrl(router.url));
+      void vscode.window.showInformationMessage(
+        'SAFS CLI 已安装。重启 Agent 后，在对话中明确要求“使用 safs 操作远程文件”即可。'
       );
-      await vscode.env.clipboard.writeText(cliInstructions(
-        localPathForAgent(executable, platform),
-        localPathForAgent(cliConfigPath(context.globalStorageUri.fsPath), platform),
-        platformAdapter.kind === 'windows' && platform !== 'wsl'
-      ));
-      void vscode.window.showInformationMessage('已复制 SAFS CLI 使用指引（不含令牌）。重启 Agent 后粘贴指引即可使用；无需注册 MCP。');
       return;
     }
     const answer =

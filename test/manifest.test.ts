@@ -107,6 +107,14 @@ test('packages Agent integration without a spawned stdio router or Codex plugin'
   )));
 });
 
+test('CLI mode installs a global command without copying Agent instructions', async () => {
+  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  assert.ok(extensionSource.includes('使用 safs 操作远程文件'));
+  assert.equal(extensionSource.includes('已复制 SAFS CLI 使用指引'), false);
+  assert.equal(extensionSource.includes('cliInstructions('), false);
+  assert.ok(extensionSource.includes('installGlobalCli(context'));
+});
+
 test('packages session-only remote shell integration scripts', async () => {
   for (const file of [
     'bash.sh', 'fish.fish', 'zsh-env.zsh', 'zsh-profile.zsh', 'zsh-rc.zsh'

@@ -3,33 +3,17 @@ import test from 'node:test';
 import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cliConfigPath, cliInstructions, updateCliInstructions, writeCliConnection } from '../src/cli-integration';
+import { cliConfigPath, updateCliInstructions, writeCliConnection } from '../src/cli-integration';
 
-test('CLI configuration is private and generated instructions preserve unrelated content', async () => {
+test('CLI configuration is private and legacy instructions are removed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-cli-integration-'));
   try {
     await writeCliConnection(root, 'http://127.0.0.1:9848/mcp?token=secret');
     assert.equal(JSON.parse(await readFile(cliConfigPath(root), 'utf8')).version, 1);
     if (process.platform !== 'win32') assert.equal((await stat(cliConfigPath(root))).mode & 0o777, 0o600);
-    await writeFile(join(root, 'AGENTS.md'), 'User rules\n');
-    const instructions = cliInstructions('/path with space/cli.js', cliConfigPath(root));
-    assert.ok(!instructions.includes('secret'));
-    await updateCliInstructions(root, instructions);
-    const first = await readFile(join(root, 'AGENTS.md'), 'utf8');
-    await updateCliInstructions(root, instructions);
-    assert.equal(await readFile(join(root, 'AGENTS.md'), 'utf8'), first);
+    await writeFile(join(root, 'AGENTS.md'), 'User rules\n<!-- SAFS CLI BEGIN -->\nold\n<!-- SAFS CLI END -->\n');
     await updateCliInstructions(root);
     assert.equal(await readFile(join(root, 'AGENTS.md'), 'utf8'), 'User rules\n');
     await assert.rejects(readFile(join(root, 'CLAUDE.md')));
   } finally { await rm(root, { recursive: true, force: true }); }
-});
-
-test('generated commands are immediately usable in POSIX, PowerShell and cmd shells', () => {
-  const posix = cliInstructions("/home/user's tools/safs", '/home/user/config');
-  assert.match(posix, /'\/home\/user'"'"'s tools\/safs'/);
-  assert.doesNotMatch(posix, /\bnode\s+['"]/i);
-  const windows = cliInstructions('C:\\Program Files\\SAFS\\safs.exe', 'C:\\SAFS Data\\connection.json', true);
-  assert.match(windows, /PowerShell|& 'C:\\Program Files/);
-  assert.match(windows, /For cmd\.exe use: "C:\\Program Files\\SAFS\\safs\.exe"/);
-  assert.doesNotMatch(windows, /\bnode\s+['"]/i);
 });
