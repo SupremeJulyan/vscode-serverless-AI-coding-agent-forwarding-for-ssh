@@ -27,9 +27,9 @@ jobs:
             platform: win32-arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Test native CLI
@@ -41,7 +41,7 @@ jobs:
       - name: Smoke test native CLI
         shell: bash
         run: bin/${{ matrix.platform }}/safs${{ startsWith(matrix.platform, 'win32-') && '.exe' || '' }} --help
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: safs-${{ matrix.platform }}
           path: bin/${{ matrix.platform }}/*
@@ -51,12 +51,12 @@ jobs:
     needs: native-cli
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           pattern: safs-*
           path: bin
@@ -74,7 +74,7 @@ jobs:
       - run: npm test
       - run: node build/verify-native-cli.js
       - run: npm run vsix
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: safs-universal-vsix
           path: '*.vsix'
