@@ -20,3 +20,14 @@ test('search distinguishes failure from no matches and counts only complete capt
   assert.equal(searchResult({ exitCode: 0, stdout: 'a\nb', truncated: true }).returnedLineCount, 1);
   assert.equal(searchResult({ exitCode: 0, stdout: 'a\nb', truncated: false }).returnedLineCount, 2);
 });
+
+test('directory batches share the entry limit and retain resumable item cursors', async () => {
+  const { listDirectories } = await import('../src/remote-results');
+  const result = await listDirectories(['missing', '/a', '/b'], 2, async ({ path, limit }) => {
+    if (path === 'missing') throw new Error('missing');
+    return pageDirectory(['a', 'b', 'c'].map(name => ({ name, type: 'file' })), path, { limit });
+  });
+  assert.deepEqual(result.results.map(r => r.status), ['error', 'ok', 'not_listed']);
+  assert.equal(result.returnedEntries, 2);
+  assert.ok((result.results[1] as any).nextCursor);
+});

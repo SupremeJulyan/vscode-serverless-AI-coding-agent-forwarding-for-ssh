@@ -40,3 +40,7 @@
   This is tool discovery configuration, not a permissions boundary (commands still
   have SSH account permissions). Set consistently across windows, then restart
   the Agent so its cached tool list is refreshed.
+- `remote_list` also accepts `paths` for up to 16 directories sharing one entry
+  limit (default 100). Each result has its own status and continuation cursor;
+  resume a truncated directory using a single-path call. `paths` cannot be
+  combined with `path` or a single-directory `cursor`.

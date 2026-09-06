@@ -38,3 +38,30 @@ export function searchResult(result: Record<string, unknown>) {
       (stdout && !stdout.endsWith('\n') && !result.truncated ? 1 : 0)
   };
 }
+
+export async function listDirectories(
+  paths: string[], limit: number,
+  list: (input: { path: string; limit: number }) => Promise<unknown>
+) {
+  let remaining = limit;
+  const results = [];
+  for (const path of paths) {
+    if (!remaining) {
+      results.push({ path, status: 'not_listed', reason: 'batch_budget_exhausted' });
+      continue;
+    }
+    try {
+      const value = await list({ path, limit: remaining });
+      if (!value || typeof value !== 'object' || !Array.isArray((value as any).entries)) {
+        throw new Error('Invalid directory response.');
+      }
+      const result = value as Record<string, unknown> & { entries: unknown[] };
+      if (result.entries.length > remaining) throw new Error('Directory exceeded batch entry budget.');
+      remaining -= result.entries.length;
+      results.push({ ...result, path, status: 'ok' });
+    } catch (error) {
+      results.push({ path, status: 'error', message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { results, returnedEntries: limit - remaining };
+}

@@ -92,10 +92,11 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
     {
       name: 'remote_list',
       title: 'List a remote directory',
-      description: 'Lists files directly over SFTP. Relative paths start at the current VS Code workspace root. Returns up to 100 sorted entries by default. Continue with nextCursor; a changed directory invalidates the cursor.',
+      description: 'Lists files directly over SFTP. Relative paths start at the current VS Code workspace root. Returns up to 100 sorted entries by default. Continue with nextCursor; a changed directory invalidates the cursor. Alternatively pass paths (up to 16) for a batch sharing limit; each item reports status and its own nextCursor. Resume individual paths separately.',
       inputSchema: {
         ...binding,
         path: z.string().optional(),
+        paths: z.array(z.string().min(1)).min(1).max(16).optional(),
         limit: z.number().int().min(1).max(10000).optional(),
         cursor: z.string().max(2048).optional()
       },

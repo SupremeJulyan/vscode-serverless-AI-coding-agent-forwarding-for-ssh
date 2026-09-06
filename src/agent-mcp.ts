@@ -1,3 +1,4 @@
+import { listDirectories } from './remote-results';
 import { readTextBatch } from './remote-read-batch';
 import { RemoteSearchOptions } from './remote-search';
 import { RemoteReadOptions } from './remote-read';
@@ -148,7 +149,14 @@ export class AgentMcpServer {
           case 'current_remote_file':
             return invoke(() => this.callbacks.currentFile(input));
           case 'remote_list':
-            return invoke(() => this.callbacks.list(input));
+            return invoke(() => {
+              if (!input.paths) return this.callbacks.list(input);
+              if (input.path !== undefined || input.cursor !== undefined) {
+                throw new Error('Choose paths for a batch or path/cursor for a single directory.');
+              }
+              return listDirectories(input.paths as string[], (input.limit as number | undefined) ?? 100,
+                request => this.callbacks.list(request));
+            });
           case 'remote_read_many':
             return invoke(() => readTextBatch(input.requests as RemoteReadOptions[],
               (input.maxBytes as number | undefined) ?? 16384,
