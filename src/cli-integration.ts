@@ -19,9 +19,13 @@ const end = '<!-- SAFS CLI END -->';
 export function cliInstructions(cliPath: string, configPath: string, windows = false) {
   const quote = (value: string) => windows ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, `'"'"'`)}'`;
   const command = `${windows ? '& ' : ''}${quote(cliPath)} --config ${quote(configPath)}`;
+  const cmdCommand = windows
+    ? `"${cliPath}" --config "${configPath}"`
+    : undefined;
   return [
     'This is a SAFS remote workspace. Local files here are only staging files, not remote source files.',
     `Use the local shell solely as a transport: ${command} --help`,
+    ...(cmdCommand ? [`For cmd.exe use: ${cmdCommand} --help`] : []),
     `Bind once with ${command} bind --cwd <actual-local-cwd> and reuse bindingId explicitly.`,
     'Use CLI list/read/search to inspect remote evidence; edit/write for changes; upload/download for transfers. Use bounded reads and output continuation.',
     'If bind returns candidates, ask the user first. Only after their answer run switch --workspace ID --confirmed true, then stop the previous task and await a new request.',

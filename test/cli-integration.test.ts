@@ -23,3 +23,13 @@ test('CLI configuration is private and generated instructions preserve unrelated
     await assert.rejects(readFile(join(root, 'CLAUDE.md')));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('generated commands are immediately usable in POSIX, PowerShell and cmd shells', () => {
+  const posix = cliInstructions("/home/user's tools/safs", '/home/user/config');
+  assert.match(posix, /'\/home\/user'"'"'s tools\/safs'/);
+  assert.doesNotMatch(posix, /\bnode\s+['"]/i);
+  const windows = cliInstructions('C:\\Program Files\\SAFS\\safs.exe', 'C:\\SAFS Data\\connection.json', true);
+  assert.match(windows, /PowerShell|& 'C:\\Program Files/);
+  assert.match(windows, /For cmd\.exe use: "C:\\Program Files\\SAFS\\safs\.exe"/);
+  assert.doesNotMatch(windows, /\bnode\s+['"]/i);
+});
