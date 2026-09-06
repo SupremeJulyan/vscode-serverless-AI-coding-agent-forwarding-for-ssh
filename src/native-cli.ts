@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { chmod, copyFile, mkdir } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 
 export type NativeCliPlatform =
   | 'linux-x64' | 'linux-arm64' | 'darwin-x64' | 'darwin-arm64'
@@ -20,15 +20,45 @@ export function bundledNativeCli(extensionRoot: string, platform: NativeCliPlatf
   return path.join(extensionRoot, 'bin', platform, platform.startsWith('win32-') ? 'safs.exe' : 'safs');
 }
 
+export function globalNativeCli(home: string, platform: NativeCliPlatform): string {
+  return platform.startsWith('win32-')
+    ? path.join(home, 'AppData', 'Local', 'SAFS', 'bin', 'safs.exe')
+    : path.join(home, '.local', 'bin', 'safs');
+}
+
+export function nativeCliConnectionPath(executable: string): string {
+  return path.join(path.dirname(executable), '.safs-connection.json');
+}
+
 /** Copy out of the immutable extension bundle and return a stable absolute path. */
 export async function installNativeCli(
-  extensionRoot: string, storageRoot: string, platform: NativeCliPlatform
+  extensionRoot: string, home: string, platform: NativeCliPlatform
 ): Promise<string> {
   const source = bundledNativeCli(extensionRoot, platform);
-  const destinationDirectory = path.join(storageRoot, 'bin', platform);
-  const destination = path.join(destinationDirectory, platform.startsWith('win32-') ? 'safs.exe' : 'safs');
+  const destination = globalNativeCli(home, platform);
+  const destinationDirectory = path.dirname(destination);
   await mkdir(destinationDirectory, { recursive: true });
   await copyFile(source, destination);
   if (!platform.startsWith('win32-')) await chmod(destination, 0o755);
   return destination;
+}
+
+const pathBegin = '# SAFS CLI PATH BEGIN';
+const pathEnd = '# SAFS CLI PATH END';
+
+export async function ensureUnixCliPath(home: string): Promise<void> {
+  const profile = path.join(home, '.profile');
+  let previous = '';
+  try { previous = await readFile(profile, 'utf8'); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const start = previous.indexOf(pathBegin), finish = previous.indexOf(pathEnd);
+  if ((start < 0) !== (finish < 0) || (start >= 0 && finish < start)) {
+    throw new Error(`Malformed SAFS PATH block: ${profile}`);
+  }
+  const unrelated = start < 0 ? previous
+    : previous.slice(0, start) + previous.slice(finish + pathEnd.length).replace(/^\n/, '');
+  const block = `${pathBegin}\nexport PATH="$HOME/.local/bin:$PATH"\n${pathEnd}\n`;
+  const next = `${unrelated}${unrelated && !unrelated.endsWith('\n') ? '\n' : ''}${block}`;
+  if (next !== previous) await writeFile(profile, next, { mode: 0o600 });
 }

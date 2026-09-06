@@ -155,7 +155,11 @@ fn run() -> Result<i32, String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") { print!("{HELP}"); return Ok(0); }
     let config = take_option(&mut args, "--config")?
-        .or_else(|| env::var("SAFS_CONFIG").ok()).ok_or("Use --config CONNECTION.json or SAFS_CONFIG")?;
+        .or_else(|| env::var("SAFS_CONFIG").ok())
+        .or_else(|| env::current_exe().ok().and_then(|value| value.parent().map(
+            |parent| parent.join(".safs-connection.json").to_string_lossy().into_owned()
+        )))
+        .ok_or("Cannot locate the SAFS connection file")?;
     let (name, arguments) = request(args, env::current_dir().map_err(|_| "Cannot determine current directory")?.to_string_lossy().into())?;
     let result = invoke(&config, name.clone(), arguments)?;
     if name == "run_remote_command" {

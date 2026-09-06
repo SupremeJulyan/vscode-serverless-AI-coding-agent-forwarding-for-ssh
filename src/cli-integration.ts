@@ -6,7 +6,11 @@ export function cliConfigPath(storageRoot: string) { return path.join(storageRoo
 
 export async function writeCliConnection(storageRoot: string, url: string) {
   await mkdir(storageRoot, { recursive: true });
-  const target = cliConfigPath(storageRoot);
+  await writeCliConnectionFile(cliConfigPath(storageRoot), url);
+}
+
+export async function writeCliConnectionFile(target: string, url: string) {
+  await mkdir(path.dirname(target), { recursive: true });
   const temporary = `${target}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     await writeFile(temporary, JSON.stringify({ version: 1, url }) + '\n', { mode: 0o600, flag: 'wx' });
