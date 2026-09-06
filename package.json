@@ -501,8 +501,8 @@
           "type": "number",
           "minimum": 4096,
           "maximum": 1048576,
-          "default": 65536,
-          "description": "Max stdout+stderr bytes returned to the Agent for a single remote command or search call. Output beyond this cap is truncated and flagged (truncated: true), keeping model context token usage bounded."
+          "default": 8192,
+          "description": "Command/search preview byte budget (MCP previews cap at 65536). MCP retains up to 16 MiB per execution for remote_output continuation, within a 32 MiB window cache for up to 10 minutes. retentionTruncated marks incomplete capture."
         },
         "safs.agentForwardingAgents": {
           "type": "array",

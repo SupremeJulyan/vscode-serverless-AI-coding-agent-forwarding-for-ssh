@@ -34,7 +34,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     upload: async (input) => ({ ...input, completed: true }),
     download: async (input) => ({ ...input, completed: true }),
     search: async (input) => ({ ...input, stdout: 'src/index.ts:1:hello' }),
-    run: async (input) => ({ ...input, exitCode: 0, stdout: 'ok' }),
+    run: async (input) => ({ ...input, exitCode: 0, stdout: input.command === 'large' ? 'x'.repeat(20000) : 'ok' }),
     audit: (entry) => audited.push(entry)
   });
   await server.start();
@@ -55,6 +55,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       'remote_edit',
       'remote_list',
       'remote_move',
+      'remote_output',
       'remote_read',
       'remote_search',
       'remote_upload',
@@ -145,6 +146,14 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       'remote_chmod', 'remote_move', 'remote_list'
     ]);
     assert.ok(audited.every((entry) => entry.agentName === 'codex'));
+    const large = await client.callTool({ name: 'run_remote_command', arguments: { command: 'large' } });
+    const preview = JSON.parse((large.content as any)[0].text);
+    assert.equal(preview.stdout.length, 8192);
+    const remainder = await client.callTool({ name: 'remote_output', arguments: {
+      outputId: preview.outputId, stream: 'stdout', offset: preview.stdoutNextOffset, length: 20000
+    } });
+    assert.equal(JSON.parse((remainder.content as any)[0].text).content.length, 11808);
+
   } finally {
     await client.close();
     await server.stop();

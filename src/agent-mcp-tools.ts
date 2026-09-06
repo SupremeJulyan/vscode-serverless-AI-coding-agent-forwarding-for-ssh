@@ -37,6 +37,7 @@ export type AgentMcpToolName =
   | 'current_remote_file'
   | 'remote_list'
   | 'remote_read'
+  | 'remote_output'
   | 'remote_edit'
   | 'remote_write'
   | 'remote_delete'
@@ -193,6 +194,14 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
       inputSchema: {
         ...binding, query: z.string().min(1), path: z.string().optional()
       },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    {
+      name: 'remote_output', title: 'Read retained command output',
+      description: 'Reads original retained stdout or stderr without rerunning a command. Use outputId and stream nextOffset from the preview. Handles expire after 10 minutes or earlier under memory pressure; retentionTruncated on the preview means the capture itself was incomplete.',
+      inputSchema: { ...binding, outputId: z.string().regex(/^[a-f0-9]{32}$/),
+        stream: z.enum(['stdout', 'stderr']), offset: z.number().int().min(0).optional(),
+        length: z.number().int().min(4).max(65536).optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     {

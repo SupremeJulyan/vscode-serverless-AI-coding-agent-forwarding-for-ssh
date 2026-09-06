@@ -2532,11 +2532,13 @@ async function executeRemoteCommand(
   }
   // 命令输出上限：Agent 上下文 token 保护。超限截断并标记 truncated: true，
   // 避免单次 head/cat/grep 把几十万 token 灌进会话。
-  const maxOutputBytes = Math.max(
+  const responseBudget = Math.max(
     4096,
-    Math.min(1024 * 1024, settings().get<number>('agentMcpMaxOutputBytes', 64 * 1024))
+    Math.min(1024 * 1024, settings().get<number>('agentMcpMaxOutputBytes', 8192))
   );
   const source = input.source ?? 'mcp';
+  const retainOutput = source === 'mcp' || source === 'remote_search';
+  const maxOutputBytes = retainOutput ? 16 * 1024 * 1024 : responseBudget;
   const logFailure = (error: unknown): void => {
     bridgeOutput?.appendLine(
       `[MCP 命令日志] 写入失败：${error instanceof Error ? error.message : String(error)}`
@@ -2650,6 +2652,7 @@ async function executeRemoteCommand(
       }
       return {
         remoteCwd,
+        ...(retainOutput ? { responseBudget } : {}),
         ...result
       };
     } finally {

@@ -1,3 +1,4 @@
+import { RemoteOutputStore } from './remote-output';
 import * as http from 'node:http';
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -59,6 +60,7 @@ export interface AgentMcpCallbacks {
 }
 
 export class AgentMcpServer {
+  private readonly outputs = new RemoteOutputStore();
   private httpServer: http.Server | undefined;
   private _portUnavailable = false;
   private listeningPort: number | undefined;
@@ -113,6 +115,17 @@ export class AgentMcpServer {
       workspaceRoot: info.workspaceRoot,
       host: info.host
     });
+    const outputScope = async () => {
+      const workspace = await this.callbacks.currentWorkspace();
+      if (!workspace) throw new Error('No active workspace for retained output.');
+      return JSON.stringify([workspace.host, workspace.workspaceUri, agentName, agentPlatform]);
+    };
+    const capture = async (callback: () => Promise<unknown>) => {
+      const scope = await outputScope();
+      const value = await callback();
+      if (scope !== await outputScope()) throw new Error('Workspace changed during execution.');
+      return this.outputs.capture(value, scope);
+    };
     registerAgentMcpTools(server, {
       routed: false,
       invoke: (name, input) => {
@@ -168,14 +181,20 @@ export class AgentMcpServer {
             return invoke(() => this.callbacks.download({
               ...input, agentPlatform
             } as Parameters<AgentMcpCallbacks['download']>[0]));
+          case 'remote_output':
+            return invoke(async () => this.outputs.read(
+              input.outputId as string, await outputScope(),
+              input.stream as 'stdout' | 'stderr', input.offset as number | undefined,
+              input.length as number | undefined
+            ));
           case 'remote_search':
-            return invoke(() => this.callbacks.search({
+            return invoke(() => capture(() => this.callbacks.search({
               ...input, agentName, agentPlatform
-            } as Parameters<AgentMcpCallbacks['search']>[0]));
+            } as Parameters<AgentMcpCallbacks['search']>[0])));
           case 'run_remote_command':
-            return invoke(() => this.callbacks.run({
+            return invoke(() => capture(() => this.callbacks.run({
               ...input, agentName, agentPlatform
-            } as Parameters<AgentMcpCallbacks['run']>[0]));
+            } as Parameters<AgentMcpCallbacks['run']>[0])));
         }
       }
     });
@@ -274,6 +293,7 @@ export class AgentMcpServer {
   }
 
   async stop(): Promise<void> {
+    this.outputs.clear();
     const server = this.httpServer;
     this.httpServer = undefined;
     this.listeningPort = undefined;
