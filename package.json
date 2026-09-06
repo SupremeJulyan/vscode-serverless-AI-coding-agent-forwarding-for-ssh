@@ -641,6 +641,7 @@
       }
     ]
   },
+  "bin": { "safs": "dist/safs-cli.js" },
   "scripts": {
     "check-types": "tsx build/sync-high-risk-defaults.ts --check && tsc --noEmit",
     "sync-manifest-defaults": "tsx build/sync-high-risk-defaults.ts",

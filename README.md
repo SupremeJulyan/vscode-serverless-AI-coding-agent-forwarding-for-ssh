@@ -419,3 +419,37 @@ claude mcp add --transport http --scope user safs 'http://127.0.0.1:9848/mcp?tok
   SHA-256；常见 Token、密码、认证头和 URL 凭据会替换为 `<hidden>`。
 - `safs.highRiskCommandAction`：`deny`（默认）直接拒绝高危命令并记录日志；`allow` 直接
   放行。两种模式均不弹出逐次确认；旧版 `confirm` 值按 `deny` 处理。
+
+### 降低 Agent 上下文开销
+
+- `safs.agentMcpToolProfile` 可设为 `core`：保留绑定、目录分页、读取/批量读取、
+  搜索、编辑/写入和命令/输出续取；`full`（默认）另外提供传输和文件管理工具。
+  多窗口使用相同设置，修改后重启 Agent 刷新工具列表。
+- `remote_read` 默认 8 KiB，可选 `head`、`tail` 或 `startLine`/`lineCount`。
+  `remote_read_many` 共享内容预算，逐项报告成功、失败或未读取。
+- `remote_search` 支持 `mode: content|files|count`、固定字符串、上下文行和文件过滤。
+  `excludeDirs: []` 可取消默认依赖/构建目录排除。
+- 长命令默认只展示 8 KiB 预览；用 `remote_output` 续取保留结果，无需重跑命令。
+  结果最多保留 10 分钟，并有容量限制；详见 [性能说明](PERFORMANCE.md)。
+
+### SAFS CLI（复用现有连接）
+
+构建后运行 `node dist/safs-cli.js --help`；可选在项目中执行 `npm link` 注册 `safs`。
+VSIX 安装本身不会注册全局 CLI；也可以用 Node 运行扩展目录中的 `dist/safs-cli.js`。
+需要本地 Node.js 18+，以及正在运行、已开启转发的 SAFS 窗口。
+
+将“SAFS：复制 Streamable HTTP URL”得到的固定路由器地址放入环境变量
+`SAFS_MCP_URL`（地址含令牌，不要放进会话提示词）。CLI 不加载工具列表，复用原有
+路由、工作区绑定及命令策略，不单独管理 SSH 凭据。
+
+```sh
+node dist/safs-cli.js bind --cwd /实际/Agent/工作目录
+# 使用上一步返回的 bindingId；以下 ID 为占位值。
+node dist/safs-cli.js exec --binding ID -- 'pwd'
+node dist/safs-cli.js output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
+```
+
+`bind` 沿用 MCP 的首次绑定规则。返回候选时，仍需用户通过既有 MCP 切换流程确认；
+CLI 不猜测候选。后续 `exec` 必须显式提供绑定，失效时失败，不自动改投当前焦点窗口。
+命令的 stdout/stderr 原样分流并保留退出码；截断时在 stderr 附续取元数据。
+`output` 返回带 `nextOffset` 的 JSON，请使用返回的字节偏移，不手工推算 UTF-8 偏移。

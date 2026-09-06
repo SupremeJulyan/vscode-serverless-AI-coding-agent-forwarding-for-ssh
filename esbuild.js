@@ -24,7 +24,8 @@ const sftpBannerPatch = {
 
 esbuild.build({
   entryPoints: {
-    extension: 'src/extension.ts'
+    extension: 'src/extension.ts',
+    'safs-cli': 'src/safs-cli.ts'
   },
   bundle: true,
   format: 'cjs',

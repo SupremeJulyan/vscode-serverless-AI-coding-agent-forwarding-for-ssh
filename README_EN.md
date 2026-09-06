@@ -528,3 +528,32 @@ port and defaults to `9848`; the extension rejects an unrelated process occupyin
 - `safs.highRiskCommandAction`: `deny` (default) rejects and logs matching
   commands; `allow` runs them. Neither mode shows per-command prompts; legacy
   `confirm` values are treated as `deny`.
+
+### Compact MCP and CLI access
+
+Set `safs.agentMcpToolProfile` to `core` to expose inspection, typed edit/write,
+commands and continuation; `full` remains the compatibility default. Use the same
+setting across windows and restart the Agent after changing tool profiles.
+Reads default to 8 KiB and support head/tail or line selection. Batch reads share
+a content budget. Search supports content/files/count modes and explicit filters.
+Long output is retained with bounded capacity for continuation without rerunning
+commands; see [Performance Notes](PERFORMANCE.md).
+
+Build with `npm run compile`, then run `node dist/safs-cli.js --help`. Optional
+`npm link` installs the `safs` command; installing the VSIX does not register a
+system CLI. Node.js 18+ and a running SAFS forwarding window are required.
+Set `SAFS_MCP_URL` from the existing “Copy Streamable HTTP URL” router command;
+the URL contains a token and should not be pasted into Agent conversations.
+
+```sh
+node dist/safs-cli.js bind --cwd /actual/agent/cwd
+node dist/safs-cli.js exec --binding ID -- 'pwd'
+node dist/safs-cli.js output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
+```
+
+Replace ID using the bind response. Initial binding follows existing MCP rules;
+ambiguous candidates still require user confirmation through the MCP switch flow.
+Execution requires an explicit binding and never rebinds on failure. Remote stdout,
+stderr and exit codes are preserved; continuation metadata goes to stderr.
+Use returned byte offsets for UTF-8 continuation. The CLI reuses the existing
+connection/policy layer and does not fetch tool schemas or manage SSH credentials.
