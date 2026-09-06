@@ -175,11 +175,9 @@ VS Code windows and restart Agents after changing the interface so their tool li
 is refreshed.
 
 The CLI is an experimental opt-in and requires the VSIX to contain a native binary
-matching the Agent platform. SAFS maintains CLI instruction blocks in AGENTS.md/CLAUDE.md beside its own local
-placeholder directories, never in the remote project. Instructions contain paths,
-not tokens. For clients that do not load those files, or local sync mirrors, use
-“Install Agent Forwarding” to copy token-free CLI instructions. The bundled native
-executable requires neither Node.js nor a PATH change.
+matching the Agent platform. SAFS installs it as the user-level global `safs` command
+and writes nothing to AGENTS.md, CLAUDE.md, or the remote project. Restart the Agent,
+then explicitly ask it to “use safs to operate remote files.” Node.js is not required.
 The following registration steps apply to the default MCP mode.
 
 The Agent can be a VS Code extension (Copilot Chat, Codex, ...) or a desktop
@@ -549,17 +547,16 @@ a content budget. Search supports content/files/count modes and explicit filters
 Long output is retained with bounded capacity for continuation without rerunning
 commands; see [Performance Notes](PERFORMANCE.md).
 
-The release workflow can build native x64/ARM64 executables for Windows, macOS and
-Linux. CLI mode is available only when the installed VSIX contains the matching binary.
-SAFS selects it for the Agent platform, installs it under extension storage,
-and writes its absolute path plus the private connection-file path into Agent
-instructions. No Node.js, global PATH, or environment-variable change is required.
-Windows-to-WSL uses the Linux binary and WSL-form paths.
+The release workflow builds native x64/ARM64 executables for Windows, macOS and Linux.
+CLI mode is available only when the installed VSIX contains the matching binary.
+Linux, macOS, and WSL install `~/.local/bin/safs`; Windows installs
+`%USERPROFILE%\\AppData\\Local\\SAFS\\bin\\safs.exe`. SAFS updates the user PATH and
+stores the private `.safs-connection.json` beside the executable for automatic discovery.
 
 ```sh
-"/absolute/path/to/safs" --config "/absolute/path/to/cli-connection.json" bind --cwd /actual/agent/cwd
-SAFS exec --binding ID -- 'pwd'
-SAFS output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
+safs bind --cwd /actual/agent/cwd
+safs exec --binding ID -- 'pwd'
+safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
 ```
 
 Replace ID using the bind response. Initial binding follows existing MCP rules;
@@ -571,8 +568,7 @@ connection/policy layer and does not fetch tool schemas or manage SSH credential
 
 ### Structured CLI commands
 
-The generated absolute command includes `--config /path/to/cli-connection.json`;
-the CLI reads credentials internally. Do not print the connection file into Agent context.
+The CLI discovers its adjacent connection file automatically. Do not print that file into Agent context.
 
 CLI commands now include list, read, search, edit, write, upload, download,
 delete, move, chmod, read-many, workspaces and switch, alongside bind/exec/output.

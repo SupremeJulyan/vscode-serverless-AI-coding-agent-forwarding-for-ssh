@@ -75,13 +75,10 @@ not remove additional model-visible schemas, since the CLI never requests them.
 `agentMcpToolProfile` controls the default MCP mode, while the CLI backend exposes
 all structured operations.
 
-Local SAFS-owned placeholder parents receive managed AGENTS.md/CLAUDE.md blocks
-with an absolute native executable and connection-file path. The executable is
-selected from Windows/macOS/Linux x64/ARM64 assets and copied to extension storage;
-Windows-to-WSL selects Linux and translates both paths. No PATH or Node.js is needed.
-Remote projects and local
-sync mirrors are not modified. Clients that do not inherit those files can receive
-the same token-free instructions via the existing installation command. All modes
+The executable is selected from Windows/macOS/Linux x64/ARM64 assets and installed
+as the user-level global `safs` command. Its adjacent private connection file is
+discovered automatically. SAFS writes no AGENTS.md/CLAUDE.md instructions and copies
+no Agent prompt in CLI mode. All modes
 require consistent settings across windows, a window reload and Agent restart on
 migration. Undetected/manual MCP registrations cannot be assumed removed.
 
