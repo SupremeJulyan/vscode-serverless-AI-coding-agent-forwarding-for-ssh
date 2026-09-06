@@ -135,10 +135,20 @@ fn invoke(config_path: &str, name: String, arguments: Value) -> Result<Value, St
         .send_json(json!({ "name": name, "arguments": arguments })).map_err(|_| "Cannot connect to the local SAFS router")?;
     let envelope: Value = response.body_mut().read_json().map_err(|_| "Invalid response from SAFS router")?;
     let result = envelope.get("result").cloned().ok_or("SAFS router returned no result")?;
-    if envelope.get("ok") != Some(&Value::Bool(true)) {
+    if envelope.get("ok") != Some(&Value::Bool(true))
+        && result.get("code").and_then(Value::as_str) != Some("WORKSPACE_SELECTION_REQUIRED") {
         return Err(serde_json::to_string(&result).unwrap_or_else(|_| "SAFS operation failed".into()));
     }
     Ok(result)
+}
+
+fn result_exit_code(result: &Value) -> i32 {
+    let item_failed = result.get("results").and_then(Value::as_array).is_some_and(|items|
+        items.iter().any(|item| item.get("status").and_then(Value::as_str) == Some("error"))
+    );
+    result.get("exitCode").and_then(Value::as_i64)
+        .filter(|code| (0..=255).contains(code))
+        .unwrap_or_else(|| if result.get("status").and_then(Value::as_str) == Some("error") || item_failed { 1 } else { 0 }) as i32
 }
 
 fn run() -> Result<i32, String> {
@@ -153,7 +163,7 @@ fn run() -> Result<i32, String> {
         if let Some(text) = result.get("stderr").and_then(Value::as_str) { eprint!("{text}"); }
         if result.get("truncated") == Some(&Value::Bool(true)) { eprintln!("\n{}", json!({"safsOutput": result})); }
     } else { println!("{}", serde_json::to_string(&result).map_err(|_| "Cannot encode SAFS result")?); }
-    Ok(result.get("exitCode").and_then(Value::as_i64).filter(|code| (0..=255).contains(code)).unwrap_or(0) as i32)
+    Ok(result_exit_code(&result))
 }
 
 fn main() {
@@ -178,5 +188,12 @@ mod tests {
         let result = request(vec!["read", "--binding", "id", "--input", file.to_str().unwrap()].into_iter().map(String::from).collect(), "/cwd".into());
         fs::remove_file(file).ok(); assert!(result.is_err());
         assert!(request(vec!["switch", "--workspace", "id"].into_iter().map(String::from).collect(), "/cwd".into()).is_err());
+    }
+    #[test]
+    fn propagates_command_search_and_batch_failure_status() {
+        assert_eq!(result_exit_code(&json!({"exitCode": 7})), 7);
+        assert_eq!(result_exit_code(&json!({"status": "error"})), 1);
+        assert_eq!(result_exit_code(&json!({"results": [{"status": "ok"}, {"status": "error"}]})), 1);
+        assert_eq!(result_exit_code(&json!({"code": "WORKSPACE_SELECTION_REQUIRED"})), 0);
     }
 }
