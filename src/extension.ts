@@ -1,3 +1,4 @@
+import { pageDirectory, searchResult } from './remote-results';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -2278,20 +2279,12 @@ function resolveRemotePath(folder: RemoteFolder, value = '.'): string {
 }
 
 async function remoteList(input: {
-  mountName: string; path?: string; limit?: number;
+  mountName: string; path?: string; limit?: number; cursor?: string;
 }): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const remotePath = resolveRemotePath(folder, input.path);
   const entries = await (await pool.get(folder.hostName)).readDirectory(remotePath);
-  // 默认 500 条上限：node_modules/dist 等巨型目录的完整列表对 Agent 是纯噪音，
-  // 超限时返回 truncated + total 让 Agent 知道还有更多。
-  const limit = Math.min(input.limit ?? 500, 10000);
-  const truncated = entries.length > limit;
-  return {
-    path: remotePath,
-    entries: entries.slice(0, limit).map(({ name, type }) => ({ name, type })),
-    ...(truncated ? { truncated, total: entries.length } : {})
-  };
+  return { path: remotePath, ...pageDirectory(entries, remotePath, input) };
 }
 
 async function remoteRead(input: {
@@ -2682,7 +2675,7 @@ async function remoteSearch(input: {
   const requestedPath = resolveRemotePath(folder, input.path);
   const searchPath = await (await pool.get(folder.hostName)).realpath(requestedPath);
   // 依赖/构建/缓存目录（按目录名在任意层级匹配）一律跳过，避免搜索命中整库噪音；
-  // 结果上限：最多 200 行、每行 300 字符，另有 agentMcpMaxOutputBytes 兜底。
+  // 保留 grep 退出状态与原始行；输出由 agentMcpMaxOutputBytes 限制。
   const excludeDirs = [
     '.git', 'node_modules', 'dist', 'build', 'out', 'target',
     '.venv', 'venv', '__pycache__', '.next', '.cache', 'coverage',
@@ -2696,15 +2689,9 @@ async function remoteSearch(input: {
     agentPlatform: input.agentPlatform,
     command: `grep -rIn ${excludeDirs} -- ${shellQuote(input.query)} ${
       shellQuote(searchPath)
-    } | cut -c 1-300 | head -n 200`
+    }`
   });
-  const stdout = typeof result.stdout === 'string' ? result.stdout : '';
-  return {
-    ...result,
-    // grep 无匹配时经 cut/head 管道的最终状态已是 0；显式返回
-    // matchCount 让 Agent 无需根据空 stdout 或进程退出码猜测语义。
-    matchCount: stdout ? stdout.replace(/\n$/, '').split('\n').length : 0
-  };
+  return searchResult(result);
 }
 
 // ---- Tree View ----

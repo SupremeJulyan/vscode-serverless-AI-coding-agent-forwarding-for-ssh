@@ -19,7 +19,7 @@ export interface AgentMcpCallbacks {
   currentWorkspace(): Promise<RemoteFolderInfo | null>;
   /** 当前打开的远程文件元数据（无活动远程文件时为 null）。 */
   currentFile(input: { mountName?: string }): Promise<unknown>;
-  list(input: { mountName?: string; path?: string; limit?: number }): Promise<unknown>;
+  list(input: { mountName?: string; path?: string; limit?: number; cursor?: string }): Promise<unknown>;
   read(input: {
     mountName?: string; path: string; offset?: number; length?: number;
   }): Promise<unknown>;

@@ -87,11 +87,12 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
     {
       name: 'remote_list',
       title: 'List a remote directory',
-      description: 'Lists files directly over SFTP. Relative paths start at the current VS Code workspace root. Entries are capped at 500 (raise limit if needed); large directories return truncated with total.',
+      description: 'Lists files directly over SFTP. Relative paths start at the current VS Code workspace root. Returns up to 100 sorted entries by default. Continue with nextCursor; a changed directory invalidates the cursor.',
       inputSchema: {
         ...binding,
         path: z.string().optional(),
-        limit: z.number().int().min(1).max(10000).optional()
+        limit: z.number().int().min(1).max(10000).optional(),
+        cursor: z.string().max(2048).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -188,7 +189,7 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
     {
       name: 'remote_search',
       title: 'Search remote files',
-      description: 'Searches file contents on the remote SSH host. Relative paths start at the current VS Code workspace root. Results are capped (200 matches, lines trimmed to 300 chars).',
+      description: 'Searches file contents on the remote SSH host. Relative paths start at the current VS Code workspace root. Returns original matching lines within the output byte budget. status distinguishes matches, no_matches and error; truncated means results are incomplete.',
       inputSchema: {
         ...binding, query: z.string().min(1), path: z.string().optional()
       },
