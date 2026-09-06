@@ -1,11 +1,23 @@
 import assert from 'node:assert/strict';
+import * as http from 'node:http';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { AgentMcpServer } from '../src/agent-mcp';
 
+async function freePort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  await new Promise<void>((resolve, reject) => server.close(
+    (error) => error ? reject(error) : resolve()
+  ));
+  return address.port;
+}
+
 test('serves direct SFTP file and SSH command tools through MCP', async () => {
-  const port = 20000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   const audited: Array<{ toolName: string; agentName?: string }> = [];
   const server = new AgentMcpServer(port, 'test-token', {
     listFolders: async () => [{
