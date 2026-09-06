@@ -6,16 +6,16 @@ const HELP: &str = r#"SAFS native CLI
 Usage:
   safs [--config CONNECTION.json] bind [--cwd LOCAL_CWD]
   safs [--config CONNECTION.json] list|read|search --binding ID [options]
-  safs [--config CONNECTION.json] edit|upload|download|move|chmod|delete|read-many --binding ID --input OPTIONS.json
+  safs [--config CONNECTION.json] edit|upload|download|move|chmod|delete|read-many --binding ID --input 'JSON'
   safs [--config CONNECTION.json] write --binding ID --path PATH --file UTF8_FILE
   safs [--config CONNECTION.json] exec --binding ID [--cwd REMOTE_CWD] -- REMOTE_COMMAND
   safs [--config CONNECTION.json] output --binding ID --id ID --stream stdout|stderr [--offset N] [--length N]
   safs [--config CONNECTION.json] workspaces
   safs [--config CONNECTION.json] switch --workspace ID --confirmed true
 
-Advanced list/read/search options may be supplied with --input JSON. The input
-must not contain bindingId or mountName. Bindings are explicit and never recover
-or switch automatically.
+Advanced list/read/search options may be supplied with --input as inline JSON,
+e.g. --input '{"path":"src","limit":20}'. The input must not contain bindingId
+or mountName. Bindings are explicit and never recover or switch automatically.
 "#;
 
 fn take_option(args: &mut Vec<String>, name: &str) -> Result<Option<String>, String> {
@@ -34,12 +34,11 @@ fn parse_u64(value: &str, name: &str) -> Result<Value, String> {
 fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String> {
     if args.is_empty() { return Err("Missing command; use --help".into()); }
     let verb = args.remove(0);
-    let input_path = take_option(&mut args, "--input")?;
+    let input_json = take_option(&mut args, "--input")?;
     let content_path = take_option(&mut args, "--file")?;
     let mut values = Map::new();
-    if let Some(path) = input_path {
-        let input: Value = serde_json::from_str(&fs::read_to_string(path).map_err(|_| "Cannot read --input file")?)
-            .map_err(|_| "Invalid --input JSON")?;
+    if let Some(json) = input_json {
+        let input: Value = serde_json::from_str(&json).map_err(|_| "Invalid --input JSON")?;
         let object = input.as_object().ok_or("--input must contain a JSON object")?;
         if object.contains_key("bindingId") || object.contains_key("mountName") {
             return Err("--input must not override bindingId or mountName".into());
@@ -187,11 +186,17 @@ mod tests {
     }
     #[test]
     fn never_accepts_binding_override_or_unconfirmed_switch() {
-        let file = env::temp_dir().join(format!("safs-test-{}.json", process::id()));
-        fs::write(&file, r#"{"bindingId":"other"}"#).unwrap();
-        let result = request(vec!["read", "--binding", "id", "--input", file.to_str().unwrap()].into_iter().map(String::from).collect(), "/cwd".into());
-        fs::remove_file(file).ok(); assert!(result.is_err());
+        let inline = r#"{"bindingId":"other"}"#;
+        let result = request(vec!["read", "--binding", "id", "--input", inline].into_iter().map(String::from).collect(), "/cwd".into());
+        assert!(result.is_err());
         assert!(request(vec!["switch", "--workspace", "id"].into_iter().map(String::from).collect(), "/cwd".into()).is_err());
+    }
+    #[test]
+    fn accepts_inline_json_input() {
+        let inline = request(vec!["list", "--binding", "id", "--input", r#"{"path":"gm_tests","limit":10}"#].into_iter().map(String::from).collect(), "/cwd".into()).unwrap();
+        assert_eq!(inline.1["path"], "gm_tests"); assert_eq!(inline.1["limit"], 10);
+        let bad = request(vec!["list", "--binding", "id", "--input", "not-json"].into_iter().map(String::from).collect(), "/cwd".into());
+        assert!(bad.is_err());
     }
     #[test]
     fn propagates_command_search_and_batch_failure_status() {

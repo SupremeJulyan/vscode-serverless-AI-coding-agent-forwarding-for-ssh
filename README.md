@@ -186,6 +186,12 @@ Agent 可以是 VS Code 扩展（Copilot Chat、Codex 等），也可以是桌�
 - 在 Agent 的 MCP 管理界面手动添加 `SAFS: 复制 Streamable HTTP URL`
   生成的地址（见下文「统一 Agent MCP」）。
 
+手动（提示词或手动粘贴 URL）安装的 MCP **不在**自动清理范围内：切换到 CLI
+界面、关闭所有转发时只清理自动配置的 `safs` MCP。如需卸载某个手动安装的
+Agent，运行 `SAFS: 为我的Agent卸载转发功能`：输入 Agent 名并选择平台后，
+剪贴板得到一段**卸载提示词**——把它粘贴到 Agent 输入框，由 Agent 自行删除
+名为 `safs` 的用户级 MCP 配置。
+
 #### 多个远程窗口
 
 - 同时打开多个远程窗口时，所有窗口共用同一个固定 HTTP MCP 入口；窗口之间
@@ -455,15 +461,16 @@ safs bind --cwd /Agent/实际工作目录
 safs list --binding ID --path .
 safs read --binding ID --path src/main.ts --start-line 10 --line-count 30
 safs search --binding ID --query TODO --mode files
-safs edit --binding ID --path src/main.ts --input edits.json
+safs edit --binding ID --path src/main.ts --input '{"edits":[{"oldText":"旧","newText":"新"}]}'
 safs write --binding ID --path note.txt --file local-note.txt
-safs upload --binding ID --input upload.json
-safs download --binding ID --input download.json
+safs upload --binding ID --input '{"localPaths":["/本地绝对路径"],"remoteDirectory":"."}'
+safs download --binding ID --input '{"remotePath":"file","localPath":"/本地绝对目标"}'
 safs exec --binding ID -- 'pwd'
 safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
 ```
 
-`--input` 接受对应结构化工具的 JSON 字段，不允许覆盖 `bindingId` 或 `mountName`。
+`--input` 内联传入对应结构化工具的 JSON 字段（`--input '{"edits":[...]}'`），
+不允许覆盖 `bindingId` 或 `mountName`。
 例如编辑文件为 `{"edits":[{"oldText":"旧内容","newText":"新内容"}]}`；上传为
 `{"localPaths":["/本地绝对路径"],"remoteDirectory":"."}`；下载为
 `{"remotePath":"file","localPath":"/本地绝对目标"}`。可使用 `expectedHash` 检查编辑冲突。

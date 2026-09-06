@@ -230,6 +230,22 @@ test('uses only the unified cross-platform config path', async () => {
   assert.deepEqual(matches, ['**/.safs/config.json']);
 });
 
+test('declares both the install and uninstall forwarding commands', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  const commands = manifest.contributes?.commands ?? [];
+  const install = commands.find((item) => item.command === 'safs.installAgentForwarding');
+  const uninstall = commands.find((item) => item.command === 'safs.uninstallAgentForwarding');
+  assert.equal(install?.title, 'SAFS: 为我的Agent安装转发功能');
+  assert.equal(uninstall?.title, 'SAFS: 为我的Agent卸载转发功能');
+  assert.ok(manifest.activationEvents?.includes('onCommand:safs.installAgentForwarding'));
+  assert.ok(manifest.activationEvents?.includes('onCommand:safs.uninstallAgentForwarding'));
+  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
+  assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
+});
+
 test('declares host key change action setting', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')

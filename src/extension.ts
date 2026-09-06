@@ -4125,6 +4125,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       `已复制 ${answer.agentName} 的安装提示词。请把提示词粘贴到 Agent 输入框里，由 Agent 自动完成 SAFS 转发配置。`
     );
   });
+  command('uninstallAgentForwarding', async () => {
+    const answer = await askAgentNameAndPlatform('SAFS：为我的Agent卸载转发功能');
+    if (!answer) return;
+    // 与安装对称：复制一段提示词让 Agent 自己删除名为 safs 的用户级 MCP，
+    // 适用于手动（提示词/手动粘贴 URL）安装、且不在自动配置范围内的 Agent。
+    const promptText = [
+      '请卸载你之前安装的名为 safs 的 MCP 服务器（Streamable HTTP，用户级），只删除该条目，不要改动其他配置。',
+      '完成后告诉我已删除，然后重启并新建对话确认不再加载 SAFS 工具。'
+    ].join('\n');
+    await vscode.env.clipboard.writeText(promptText);
+    void vscode.window.showInformationMessage(
+      `已复制 ${answer.agentName} 的卸载提示词。请把提示词粘贴到 Agent 输入框里，由 Agent 自己移除名为 safs 的 MCP 配置。`
+    );
+  });
   command('refreshExplorer', async () => tree.refresh());
   command('deleteConfigItem', async (mount) => {
     await deleteConfig(mount);
