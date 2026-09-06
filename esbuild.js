@@ -9,6 +9,10 @@ const production = process.argv.includes('--production');
 // older builds so VSIX packages contain a single authoritative set.
 const wslOut = path.join(__dirname, 'dist', 'resources', 'wsl');
 fs.rmSync(wslOut, { recursive: true, force: true });
+// The Agent entry point is a native binary. Never leave the old Node wrapper
+// in a package after switching branches or upgrading an existing checkout.
+fs.rmSync(path.join(__dirname, 'dist', 'safs-cli.js'), { force: true });
+fs.rmSync(path.join(__dirname, 'dist', 'safs-cli.js.map'), { force: true });
 
 // 构建期补丁：把 NSG 网关 MOTD banner 容忍逻辑注入 ssh2 的 SFTP 版本握手
 // （见 build/sftp-banner-patch.js），让 SFTP 子系统可用的网关不再回退 exec/SCP。
@@ -24,8 +28,7 @@ const sftpBannerPatch = {
 
 esbuild.build({
   entryPoints: {
-    extension: 'src/extension.ts',
-    'safs-cli': 'src/safs-cli.ts'
+    extension: 'src/extension.ts'
   },
   bundle: true,
   format: 'cjs',

@@ -9,3 +9,4 @@ node_modules/**
 *.png
 !images/icon.png
 build/**
+native-cli/**

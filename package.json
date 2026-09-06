@@ -648,7 +648,6 @@
       }
     ]
   },
-  "bin": { "safs": "dist/safs-cli.js" },
   "scripts": {
     "build:native-cli": "node build/build-native-cli.js",
     "test:native-cli": "cargo test --locked --manifest-path native-cli/Cargo.toml",
