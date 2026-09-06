@@ -70,6 +70,7 @@ jobs:
             mv "$artifact"/* "bin/$platform/"
             rmdir "$artifact"
           done
+          chmod +x bin/linux-*/safs bin/darwin-*/safs
       - run: npm ci
       - run: npm test
       - run: node build/verify-native-cli.js
