@@ -1144,9 +1144,6 @@ async function syncToLocal(uri?: vscode.Uri): Promise<void> {
   await syncCoordinator?.clearReady(location.mountName, remotePath, localTarget);
   await syncCoordinator?.clearStop(location.mountName, remotePath);
   if (!await startRemoteSyncWithProgress(manager, task)) return;
-  void vscode.window.showInformationMessage(
-    `已开始同步：${remotePath} → ${localTarget}`
-  );
 }
 
 async function confirmInitialSyncTarget(localDir: string): Promise<boolean | undefined> {
@@ -1188,7 +1185,6 @@ async function enableHistorySync(item: HistoryItem): Promise<void> {
   if (!await startRemoteSyncWithProgress(manager, {
     mountName: item.mountName, remotePath: item.path, localDir, resetLocalOnFirstSync
   })) return;
-  void vscode.window.showInformationMessage(`已开始同步：${item.path} → ${localDir}`);
 }
 
 async function disableHistorySync(item: HistoryItem): Promise<void> {
@@ -1205,6 +1201,12 @@ function formatDownloadBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${bytes} B`;
+}
+
+/** Keep the result visible after the transient progress notification closes. */
+function showTransferCompleted(message: string): void {
+  bridgeOutput?.appendLine(`[传输完成] ${message}`);
+  void vscode.window.showInformationMessage(`SAFS：${message}`);
 }
 
 async function startRemoteSyncWithProgress(
@@ -1251,6 +1253,16 @@ async function startRemoteSyncWithProgress(
         void vscode.window.showInformationMessage(`已取消同步 ${task.remotePath}。`);
         return false;
       }
+      // add may schedule a retry after failure; that is not a completed sync.
+      if (!manager.isReady(task.mountName, task.remotePath)) return false;
+      const files = (task.fingerprintLines ?? []).filter((line) => line.startsWith('f:'));
+      const bytes = files.reduce((sum, line) => {
+        const fields = line.split(':');
+        return sum + Number(fields.at(-2) ?? 0);
+      }, 0);
+      showTransferCompleted(
+        `初始同步完成：${path.posix.basename(task.remotePath)} · 镜像 ${files.length} 个文件，${formatDownloadBytes(bytes)} → ${task.localDir}；双向自动同步已开启。`
+      );
       return true;
     } finally {
       cancellation.dispose();
@@ -1360,6 +1372,7 @@ async function downloadRemoteFile(
         message: `完成：${baseName}（${formatDownloadBytes(totalBytes)}）`,
         increment: totalBytes > 0 ? 100 - cumulative / totalBytes * 100 : undefined
       });
+      showTransferCompleted(`下载完成：${baseName} · 1 个文件，${formatDownloadBytes(cumulative)} → ${target}`);
       return true;
     } catch (error) {
       if (controller.signal.aborted) {
@@ -1438,6 +1451,7 @@ async function downloadRemoteDirectory(
           formatDownloadBytes(result.transferredBytes)
         }）`
       });
+      showTransferCompleted(`目录下载完成：${baseName} · ${result.files} 个文件，${formatDownloadBytes(result.transferredBytes)} → ${selectedTargetRoot}`);
       return true;
     } catch (error) {
       if (controller.signal.aborted) {
@@ -1510,6 +1524,7 @@ async function visualUpload(
       progress.report({
         message: `完成：${result.completed} 个文件（${formatDownloadBytes(result.bytes)}）`
       });
+      showTransferCompleted(`上传完成：${result.completed} 个文件，${formatDownloadBytes(result.bytes)} → ${mount.name}:${targetDir}`);
       return true;
     } catch (error) {
       if (controller.signal.aborted) {
