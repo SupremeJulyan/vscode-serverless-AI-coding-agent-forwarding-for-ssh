@@ -1,4 +1,5 @@
 import { cliConfigPath, cliInstructions, updateCliInstructions, writeCliConnection } from './cli-integration';
+import { installNativeCli, nativeCliPlatform } from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
 import { pageDirectory, searchResult } from './remote-results';
@@ -543,8 +544,12 @@ function cliRouterUrl(url: string): string {
 
 async function refreshCliInstructions(localRoot: string): Promise<void> {
   const platform = settings().get<string>('agentPlatform', 'auto') === 'wsl' ? 'wsl' : undefined;
+  const nativePlatform = nativeCliPlatform(process.platform, process.arch, platform === 'wsl');
+  const executable = cliMode() ? await installNativeCli(
+    vscodeContext.extensionPath, vscodeContext.globalStorageUri.fsPath, nativePlatform
+  ) : '';
   const instructions = cliMode() ? cliInstructions(
-    localPathForAgent(path.join(vscodeContext.extensionPath, 'dist', 'safs-cli.js'), platform),
+    localPathForAgent(executable, platform),
     localPathForAgent(cliConfigPath(vscodeContext.globalStorageUri.fsPath), platform),
     platformAdapter.kind === 'windows' && platform !== 'wsl'
   ) : undefined;
@@ -4060,8 +4065,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const router = await ensureAgentHttpRouter(context);
       await writeCliConnection(context.globalStorageUri.fsPath, cliRouterUrl(router.url));
       const platform = settings().get<string>('agentPlatform', 'auto') === 'wsl' ? 'wsl' : undefined;
+      const executable = await installNativeCli(
+        context.extensionPath, context.globalStorageUri.fsPath,
+        nativeCliPlatform(process.platform, process.arch, platform === 'wsl')
+      );
       await vscode.env.clipboard.writeText(cliInstructions(
-        localPathForAgent(path.join(context.extensionPath, 'dist', 'safs-cli.js'), platform),
+        localPathForAgent(executable, platform),
         localPathForAgent(cliConfigPath(context.globalStorageUri.fsPath), platform),
         platformAdapter.kind === 'windows' && platform !== 'wsl'
       ));
