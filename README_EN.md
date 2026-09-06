@@ -170,6 +170,18 @@ Remote terminals connect over SSH; no VS Code Server is required on the host.
 
 ### Enable Agent Forwarding
 
+The default `safs.agentInterface: "cli"` publishes a private CLI connection file
+and removes detected Agent-facing SAFS MCP registrations. Reload VS Code windows
+and restart Agents to discard cached tool definitions. Removal failures are reported;
+manually registered, undetected clients may need manual MCP removal. Use `mcp` mode
+for MCP-only clients, consistently across windows.
+
+SAFS maintains CLI instruction blocks in AGENTS.md/CLAUDE.md beside its own local
+placeholder directories, never in the remote project. Instructions contain paths,
+not tokens. For clients that do not load those files, or local sync mirrors, use
+“Install Agent Forwarding” to copy token-free CLI instructions. Node.js 18+ is required.
+The following MCP registration steps apply to the optional `mcp` compatibility mode.
+
 The Agent can be a VS Code extension (Copilot Chat, Codex, ...) or a desktop
 app (Codex CLI, Claude Code, ...), but it must run on the same operating
 system platform as the VS Code window hosting SAFS: the MCP endpoint is
@@ -555,3 +567,19 @@ Execution requires an explicit binding and never rebinds on failure. Remote stdo
 stderr and exit codes are preserved; continuation metadata goes to stderr.
 Use returned byte offsets for UTF-8 continuation. The CLI reuses the existing
 connection/policy layer and does not fetch tool schemas or manage SSH credentials.
+
+### Structured CLI commands
+
+The generated command includes `--config /path/to/cli-connection.json`; the CLI
+reads credentials internally. `SAFS_MCP_URL` remains a manual override when no
+config file is specified. Do not print either credential source into Agent context.
+
+CLI commands now include list, read, search, edit, write, upload, download,
+delete, move, chmod, read-many, workspaces and switch, alongside bind/exec/output.
+Use `--binding ID` for every workspace operation. Use `--input options.json` for
+structured tool arguments (no bindingId/mountName override), and `write --file`
+for UTF-8 content. Edits retain exact-match and expectedHash validation. Transfers
+retain staging-directory validation. Run `--help` for examples.
+
+`switch --workspace ID --confirmed true` is only for an already-confirmed user
+choice; stop the old task after switching. No operation silently rebinds.

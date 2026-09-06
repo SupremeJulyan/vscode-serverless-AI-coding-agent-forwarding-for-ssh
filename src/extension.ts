@@ -3363,8 +3363,13 @@ async function configureDetectedAgents(
     if (!routerUrl) throw new Error('SAFS CLI router is unavailable.');
     await writeCliConnection(context.globalStorageUri.fsPath, cliRouterUrl(routerUrl));
     const removed = await configureDetectedAgents(context, false);
+    const pending = context.globalState.get<string[]>(agentSetupCompletedKey, []);
+    const succeeded = removed.succeeded && pending.length === 0;
     bridgeOutput?.appendLine('[Agent CLI] 已发布本地连接配置；旧 MCP 注册清理后请重启 Agent。');
-    return { succeeded: removed.succeeded, registeredAgents: ['SAFS CLI'] };
+    if (!succeeded) {
+      void vscode.window.showWarningMessage('SAFS CLI 已就绪，但部分旧 MCP 注册未能清理。请查看 SAFS 日志并在对应 Agent 中移除 safs MCP 后重启，否则工具定义仍可能加载。');
+    }
+    return { succeeded, registeredAgents: ['SAFS CLI'] };
   }
   const saved = context.globalState.get<unknown>(agentSetupCompletedKey);
   const configured = new Set(Array.isArray(saved) ? saved.filter(

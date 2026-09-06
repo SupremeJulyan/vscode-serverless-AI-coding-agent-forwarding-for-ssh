@@ -136,6 +136,19 @@ code --install-extension safs-serverless-agent-forwarding-1.7.3.vsix
 
 ### 启用 Agent 转发
 
+默认使用 **CLI 优先模式**（`safs.agentInterface: "cli"`）。启用转发时，扩展发布本地
+CLI 连接配置，并清理已检测到的旧 SAFS MCP 注册。重载 VS Code 窗口、重启 Agent，
+让旧工具列表退出上下文。清理失败会明确提示；手工配置且未被检测到的 Agent 仍需手工移除
+其 `safs` MCP。CLI 内部复用 MCP 后端，但不会向 Agent 加载工具定义。
+
+SAFS 在自己管理的本地占位目录的父目录维护 `AGENTS.md` / `CLAUDE.md` 指引块，
+包含 CLI 路径和配置文件路径，不包含令牌，不修改远程项目。Agent 若不读取这些指引，
+或使用本地同步镜像，可运行“SAFS：为我的Agent安装转发功能”复制无令牌 CLI 指引。
+本地需提供 Node.js 18+；仅支持 MCP 的客户端请设置 `safs.agentInterface: "mcp"`。
+多窗口应使用相同模式，切换模式后重载窗口并重启 Agent。
+
+**以下 MCP 自动注册步骤适用于 `mcp` 兼容模式。**
+
 Agent 可以是 VS Code 扩展（Copilot Chat、Codex 等），也可以是桌面 App
 （Codex CLI、Claude Code 等），但必须和运行 SAFS 的 VS Code 处于同一个
 操作系统平台：MCP 地址是仅回环可访问的 `127.0.0.1`，跨机器或跨系统无法
@@ -431,24 +444,36 @@ claude mcp add --transport http --scope user safs 'http://127.0.0.1:9848/mcp?tok
 - 长命令默认只展示 8 KiB 预览；用 `remote_output` 续取保留结果，无需重跑命令。
   结果最多保留 10 分钟，并有容量限制；详见 [性能说明](PERFORMANCE.md)。
 
-### SAFS CLI（复用现有连接）
+### SAFS CLI（默认 Agent 入口）
 
-构建后运行 `node dist/safs-cli.js --help`；可选在项目中执行 `npm link` 注册 `safs`。
-VSIX 安装本身不会注册全局 CLI；也可以用 Node 运行扩展目录中的 `dist/safs-cli.js`。
-需要本地 Node.js 18+，以及正在运行、已开启转发的 SAFS 窗口。
-
-将“SAFS：复制 Streamable HTTP URL”得到的固定路由器地址放入环境变量
-`SAFS_MCP_URL`（地址含令牌，不要放进会话提示词）。CLI 不加载工具列表，复用原有
-路由、工作区绑定及命令策略，不单独管理 SSH 凭据。
+构建后运行 `node dist/safs-cli.js --help`；可选 `npm link` 注册 `safs`。
+VSIX 安装不会修改全局 PATH；生成指引使用扩展目录中的绝对 CLI 路径。
+扩展自动生成私有的 `cli-connection.json`，CLI 用 `--config` 读取；仍兼容手工设置
+`SAFS_MCP_URL`。配置中的令牌不要打印或粘贴到会话。
 
 ```sh
-node dist/safs-cli.js bind --cwd /实际/Agent/工作目录
-# 使用上一步返回的 bindingId；以下 ID 为占位值。
-node dist/safs-cli.js exec --binding ID -- 'pwd'
-node dist/safs-cli.js output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
+node /扩展目录/dist/safs-cli.js --config /存储目录/cli-connection.json bind --cwd /Agent/实际工作目录
+# 后续命令沿用同一 --config，此处省略该参数以突出操作形式。
+safs list --binding ID --path .
+safs read --binding ID --path src/main.ts --start-line 10 --line-count 30
+safs search --binding ID --query TODO --mode files
+safs edit --binding ID --path src/main.ts --input edits.json
+safs write --binding ID --path note.txt --file local-note.txt
+safs upload --binding ID --input upload.json
+safs download --binding ID --input download.json
+safs exec --binding ID -- 'pwd'
+safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
 ```
 
-`bind` 沿用 MCP 的首次绑定规则。返回候选时，仍需用户通过既有 MCP 切换流程确认；
-CLI 不猜测候选。后续 `exec` 必须显式提供绑定，失效时失败，不自动改投当前焦点窗口。
-命令的 stdout/stderr 原样分流并保留退出码；截断时在 stderr 附续取元数据。
-`output` 返回带 `nextOffset` 的 JSON，请使用返回的字节偏移，不手工推算 UTF-8 偏移。
+`--input` 接受对应结构化工具的 JSON 字段，不允许覆盖 `bindingId` 或 `mountName`。
+例如编辑文件为 `{"edits":[{"oldText":"旧内容","newText":"新内容"}]}`；上传为
+`{"localPaths":["/本地绝对路径"],"remoteDirectory":"."}`；下载为
+`{"remotePath":"file","localPath":"/本地绝对目标"}`。可使用 `expectedHash` 检查编辑冲突。
+复杂批量读取使用 `read-many --input`；目录批量、搜索过滤也可通过 `--input` 传入。
+所有文件操作复用现有路径、传输和编辑校验，未改成 shell 字符串替换。
+
+`bind` 沿用首次绑定规则。返回候选时，先询问用户；确认后使用
+`switch --workspace ID --confirmed true`，然后结束旧任务并等待新请求。
+`workspaces` 列出候选。后续操作必须显式提供绑定；失效后失败，不自动切换到当前焦点。
+命令 stdout/stderr 原样分流并保留退出码；截断时 stderr 附续取元数据。
+结构化操作和 `output` 返回 JSON，续取应使用返回的字节偏移。

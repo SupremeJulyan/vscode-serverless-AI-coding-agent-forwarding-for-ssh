@@ -54,6 +54,12 @@ No SSH credentials or remote service installation are needed by this wrapper.
   const result = await callSafs(url, request);
   if (request.name !== 'run_remote_command') {
     process.stdout.write(JSON.stringify(result) + '\n');
+    if (typeof result.exitCode === 'number') {
+      process.exitCode = Number.isInteger(result.exitCode) && result.exitCode >= 0 && result.exitCode <= 255 ? result.exitCode : 1;
+    } else if (result.status === 'error' || (Array.isArray(result.results)
+        && result.results.some(item => item?.status === 'error'))) {
+      process.exitCode = 1;
+    }
     return;
   }
   if (typeof result.stdout === 'string') process.stdout.write(result.stdout);

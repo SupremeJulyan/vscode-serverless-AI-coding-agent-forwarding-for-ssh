@@ -64,3 +64,24 @@ Symbol/LSP retrieval remains optional future work: this implementation deliberat
 keeps the existing no-remote-service deployment model and adds no language server
 or indexing dependency. A real remote integration/token benchmark requires a live
 SAFS connection and Agent usage telemetry; the offline benchmark does not supply it.
+
+## CLI-first Agent integration
+
+`agentInterface` now defaults to `cli`. On forwarding setup SAFS writes a private
+connection JSON file and removes detected Agent-facing MCP registrations. The
+internal HTTP/MCP backend remains shared: replacing that internal protocol would
+not remove additional model-visible schemas, since the CLI never requests them.
+`mcp` remains an explicit compatibility mode; `agentMcpToolProfile` controls that
+mode, while the CLI backend exposes all structured operations.
+
+Local SAFS-owned placeholder parents receive managed AGENTS.md/CLAUDE.md blocks
+with an absolute CLI command and connection-file path. Remote projects and local
+sync mirrors are not modified. Clients that do not inherit those files can receive
+the same token-free instructions via the existing installation command. All modes
+require consistent settings across windows, a window reload and Agent restart on
+migration. Undetected/manual MCP registrations cannot be assumed removed.
+
+CLI file commands reuse structured backend validation and accept JSON argument
+files for edits/filters/batches. Search preserves grep exit codes (1 for no match,
+2 for errors); batch item errors set exit code 1, while budget-deferred items remain
+explicit in JSON. No binding recovery or workspace switching occurs implicitly.
