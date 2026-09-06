@@ -6,13 +6,14 @@ export async function readTextBatch(
 ) {
   let remaining = maxBytes;
   const results = [];
-  for (const request of requests) {
+  for (const [index, request] of requests.entries()) {
     if (remaining < 4) {
       results.push({ path: request.path, status: 'not_read', reason: 'batch_budget_exhausted' });
       continue;
     }
     try {
-      const value = await read({ ...request, length: Math.min(request.length ?? 8192, remaining) });
+      const fairShare = Math.max(4, Math.min(8192, Math.floor(remaining / (requests.length - index))));
+      const value = await read({ ...request, length: Math.min(request.length ?? fairShare, remaining) });
       if (!value || typeof value !== 'object' || typeof (value as any).content !== 'string') {
         throw new Error('Invalid text read response.');
       }

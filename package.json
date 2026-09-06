@@ -643,6 +643,7 @@
   },
   "bin": { "safs": "dist/safs-cli.js" },
   "scripts": {
+    "benchmark:mcp": "tsx build/mcp-efficiency.ts",
     "check-types": "tsx build/sync-high-risk-defaults.ts --check && tsc --noEmit",
     "sync-manifest-defaults": "tsx build/sync-high-risk-defaults.ts",
     "compile": "npm run check-types && node esbuild.js",

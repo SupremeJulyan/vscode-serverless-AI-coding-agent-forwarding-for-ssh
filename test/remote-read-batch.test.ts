@@ -13,3 +13,10 @@ test('batch budget bounds content and preserves partial failures and unattempted
   assert.deepEqual(result.results.map(r => r.status), ['error', 'ok', 'ok', 'not_read']);
   assert.equal(result.contentBytes, 8);
 });
+
+test('unspecified per-file sizes share the remaining budget across the batch', async () => {
+  const result = await readTextBatch(Array.from({ length: 8 }, (_, i) => ({ path: String(i) })), 16384,
+    async input => ({ content: 'x'.repeat(input.length!), truncated: true }));
+  assert.equal(result.results.filter(r => r.status === 'ok').length, 8);
+  assert.equal(result.contentBytes, 16384);
+});

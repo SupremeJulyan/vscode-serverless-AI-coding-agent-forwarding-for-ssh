@@ -44,3 +44,23 @@
   limit (default 100). Each result has its own status and continuation cursor;
   resume a truncated directory using a single-path call. `paths` cannot be
   combined with `path` or a single-directory `cursor`.
+
+## Repeatable efficiency checks
+
+Run `npm run benchmark:mcp` for schema byte counts and synthetic code-reading,
+long-output and multi-file workloads. It verifies exact selected evidence and
+lossless continuation within retention capacity. Defaults distribute a batch's
+remaining content budget across remaining files; explicit lengths can override
+that allocation, while the total cap still applies.
+
+These are UTF-8 JSON byte measurements, not tokenizer counts or measured Agent
+success rates. For a model-level comparison, fix model/version, reasoning settings,
+initial context and repository snapshot; repeat directory exploration, bug diagnosis,
+multi-file editing and failing-test tasks. Record total input/output usage, cached
+input separately, retries, elapsed time and objective correctness. Compare full MCP,
+core MCP and the CLI, rather than extrapolating from one session.
+
+Symbol/LSP retrieval remains optional future work: this implementation deliberately
+keeps the existing no-remote-service deployment model and adds no language server
+or indexing dependency. A real remote integration/token benchmark requires a live
+SAFS connection and Agent usage telemetry; the offline benchmark does not supply it.
