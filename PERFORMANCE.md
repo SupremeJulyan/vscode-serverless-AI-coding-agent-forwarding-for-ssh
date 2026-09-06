@@ -23,3 +23,7 @@
   Expired handles fail explicitly and must not trigger automatic command reruns.
 - Retention is in local process memory, scoped to the window/workspace and Agent
   source. It is not a persistent command log or an unbounded output archive.
+- `remote_read` defaults to 8 KiB. Choose byte offset, `head`, `tail`, or
+  `startLine`/`lineCount`; the byte budget applies to every selection. Tail lookup
+  reads a bounded suffix and reports `selectionTruncated` when requested lines
+  do not fit. Line lookup scans at most 16 MiB and fails explicitly beyond that.

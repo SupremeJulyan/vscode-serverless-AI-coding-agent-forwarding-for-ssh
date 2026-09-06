@@ -1,3 +1,4 @@
+import { RemoteReadOptions } from './remote-read';
 import { RemoteOutputStore } from './remote-output';
 import * as http from 'node:http';
 import express from 'express';
@@ -21,9 +22,7 @@ export interface AgentMcpCallbacks {
   /** 当前打开的远程文件元数据（无活动远程文件时为 null）。 */
   currentFile(input: { mountName?: string }): Promise<unknown>;
   list(input: { mountName?: string; path?: string; limit?: number; cursor?: string }): Promise<unknown>;
-  read(input: {
-    mountName?: string; path: string; offset?: number; length?: number;
-  }): Promise<unknown>;
+  read(input: RemoteReadOptions & { mountName?: string }): Promise<unknown>;
   edit(input: {
     mountName?: string; path: string;
     edits: Array<{ oldText: string; newText: string }>;

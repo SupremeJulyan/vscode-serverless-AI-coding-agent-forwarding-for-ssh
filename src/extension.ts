@@ -1,3 +1,4 @@
+import { readTextRange, RemoteReadOptions } from './remote-read';
 import { pageDirectory, searchResult } from './remote-results';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -2287,9 +2288,7 @@ async function remoteList(input: {
   return { path: remotePath, ...pageDirectory(entries, remotePath, input) };
 }
 
-async function remoteRead(input: {
-  mountName: string; path: string; offset?: number; length?: number;
-}): Promise<unknown> {
+async function remoteRead(input: RemoteReadOptions & { mountName: string }): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const requestedPath = resolveRemotePath(folder, input.path);
   const session = await pool.get(folder.hostName);
@@ -2297,51 +2296,9 @@ async function remoteRead(input: {
   if (resolved.stat.type !== 'file') {
     throw new Error(`remote_read 只能读取普通文件：${input.path}`);
   }
-  const offset = input.offset ?? 0;
-  const length = Math.min(input.length ?? 64 * 1024, 64 * 1024);
-  if (offset >= resolved.stat.size) {
-    return {
-      path: resolved.path, content: '', offset, bytes: 0,
-      nextOffset: offset, fileSize: resolved.stat.size, truncated: false
-    };
-  }
-  const data = await session.readFileRange(
-    resolved.path, offset, Math.min(length, resolved.stat.size - offset)
-  );
-  if (data.includes(0)) {
-    throw new Error(`文件包含二进制数据，请使用 remote_download：${input.path}`);
-  }
-  const controlBytes = data.reduce((count, byte) =>
-    count + (byte < 32 && ![8, 9, 10, 12, 13].includes(byte) ? 1 : 0), 0);
-  if (data.length > 0 && controlBytes / data.length > 0.1) {
-    throw new Error(`文件疑似二进制，请使用 remote_download：${input.path}`);
-  }
-  let consumed = data.length;
-  let content: string | undefined;
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  // 分块末尾可能落在一个 UTF-8 字符中间；最多回退 3 字节找到完整边界。
-  for (let backoff = 0; backoff <= Math.min(3, data.length); backoff += 1) {
-    try {
-      consumed = data.length - backoff;
-      content = decoder.decode(data.subarray(0, consumed));
-      break;
-    } catch {
-      // 下一轮缩短分块；若错误位于中间，所有尝试都会失败并按非 UTF-8 拒绝。
-    }
-  }
-  if (content === undefined || (data.length > 0 && consumed === 0)) {
-    throw new Error(`文件不是有效的 UTF-8 文本，请使用 remote_download：${input.path}`);
-  }
-  const nextOffset = offset + consumed;
-  return {
-    path: resolved.path,
-    content,
-    offset,
-    bytes: consumed,
-    nextOffset,
-    fileSize: resolved.stat.size,
-    truncated: nextOffset < resolved.stat.size
-  };
+  return { path: resolved.path, ...await readTextRange(resolved.stat.size,
+    (offset, length) => session.readFileRange(resolved.path, offset, length), input) };
+
 }
 
 async function remoteWrite(input: {

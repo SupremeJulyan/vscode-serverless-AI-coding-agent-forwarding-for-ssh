@@ -100,12 +100,14 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
     {
       name: 'remote_read',
       title: 'Read a remote text file',
-      description: 'Reads a bounded UTF-8 text chunk directly over SFTP. Relative paths start at the current VS Code workspace root; absolute paths may inspect files outside it for environment diagnostics. offset and length are byte counts; length defaults to and is capped at 65536 bytes. Binary or invalid UTF-8 content is rejected; use remote_download instead. Continue truncated reads with nextOffset.',
+      description: 'Reads a bounded UTF-8 text chunk directly over SFTP. Relative paths start at the current VS Code workspace root; absolute paths may inspect files outside it for environment diagnostics. Choose offset (bytes), head/tail (lines), or startLine with optional lineCount (default 100). length is a byte budget, default 8192, maximum 65536. Tail is limited to the last length bytes; selectionTruncated means requested lines did not fit. Line lookup scans at most 16 MiB. Binary or invalid UTF-8 content is rejected; use remote_download instead. Continue truncated reads with nextOffset.',
       inputSchema: {
         ...binding,
         path: z.string().min(1),
         offset: z.number().int().min(0).optional(),
-        length: z.number().int().min(1).max(65536).optional()
+        length: z.number().int().min(4).max(65536).optional(),
+        head: z.number().int().min(1).optional(), tail: z.number().int().min(1).optional(),
+        startLine: z.number().int().min(1).optional(), lineCount: z.number().int().min(1).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
