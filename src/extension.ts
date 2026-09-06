@@ -1,3 +1,4 @@
+import { cliConfigPath, cliInstructions, updateCliInstructions, writeCliConnection } from './cli-integration';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
 import { pageDirectory, searchResult } from './remote-results';
@@ -531,12 +532,35 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
   return picked?.mount;
 }
 
+function cliMode(): boolean { return settings().get<string>('agentInterface', 'cli') === 'cli'; }
+
+function cliRouterUrl(url: string): string {
+  const platform: AgentPlatformLabel = settings().get<string>('agentPlatform', 'auto') === 'wsl'
+    || platformAdapter.kind === 'wsl' ? 'wsl' : platformAdapter.kind === 'windows' ? 'win'
+      : platformAdapter.kind === 'macos' ? 'mac' : 'linux';
+  return agentTaggedMcpUrl(url, 'safs-cli', platform);
+}
+
+async function refreshCliInstructions(localRoot: string): Promise<void> {
+  const platform = settings().get<string>('agentPlatform', 'auto') === 'wsl' ? 'wsl' : undefined;
+  const instructions = cliMode() ? cliInstructions(
+    localPathForAgent(path.join(vscodeContext.extensionPath, 'dist', 'safs-cli.js'), platform),
+    localPathForAgent(cliConfigPath(vscodeContext.globalStorageUri.fsPath), platform),
+    platformAdapter.kind === 'windows' && platform !== 'wsl'
+  ) : undefined;
+  // workspaceRoot uses URI path syntax; normalize to the native filesystem view.
+  const nativeRoot = platformAdapter.kind === 'windows' && /^\/[A-Za-z]:/.test(localRoot)
+    ? vscode.Uri.from({ scheme: 'file', path: localRoot }).fsPath : localRoot;
+  await updateCliInstructions(path.dirname(nativeRoot), instructions);
+}
+
 async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   const existing = registry.get(mount.name);
   if (existing) {
     bridgeOutput?.trace(`[SFTP] 复用挂载 ${mount.name}，remoteRoot=${existing.remoteRoot}`);
     await pool.get(existing.hostName);
     refreshSafsEntryLabel();
+    await refreshCliInstructions(existing.workspaceRoot);
     return existing;
   }
   agentTrace('SFTP', `开始连接挂载 ${mount.name}，host=${mount.host}`);
@@ -550,6 +574,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   const placeholder = await ensureAgentCwdPlaceholder(
     remoteRoot, vscodeContext.globalStorageUri.fsPath, mount.name
   );
+  await refreshCliInstructions(placeholder.localPath);
   const workspaceRoot = vscode.Uri.file(placeholder.localPath).path;
   const folder = { mountName: mount.name, hostName: mount.host, remoteRoot, workspaceRoot };
   registry.set(folder);
@@ -2998,7 +3023,7 @@ async function ensureAgentHttpRouter(
             log: (message) => logMcpMessage('Agent HTTP Router', message),
             audit: auditMcpTool,
             forwardTimeoutMs: settings().get<number>('agentMcpTimeoutMs', 120_000),
-            toolProfile: () => settings().get<'full' | 'core'>('agentMcpToolProfile', 'full')
+            toolProfile: () => cliMode() ? 'full' : settings().get<'full' | 'core'>('agentMcpToolProfile', 'full')
           }
         );
         httpRouter = router;
@@ -3058,7 +3083,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
       settings().get<number>('agentMcpPort', 0),
       token,
       {
-        toolProfile: () => settings().get<'full' | 'core'>('agentMcpToolProfile', 'full'),
+        toolProfile: () => cliMode() ? 'full' : settings().get<'full' | 'core'>('agentMcpToolProfile', 'full'),
         listFolders: async () => (await forwardedFolders(context)).filter(
           (folder) => folder.name === boundMountName
         ),
@@ -3334,6 +3359,13 @@ async function configureDetectedAgents(
 ): Promise<AgentMcpSetupResult> {
   const router = shouldRegister ? await ensureAgentHttpRouter(context) : httpRouter;
   const routerUrl = router?.url;
+  if (shouldRegister && cliMode()) {
+    if (!routerUrl) throw new Error('SAFS CLI router is unavailable.');
+    await writeCliConnection(context.globalStorageUri.fsPath, cliRouterUrl(routerUrl));
+    const removed = await configureDetectedAgents(context, false);
+    bridgeOutput?.appendLine('[Agent CLI] 已发布本地连接配置；旧 MCP 注册清理后请重启 Agent。');
+    return { succeeded: removed.succeeded, registeredAgents: ['SAFS CLI'] };
+  }
   const saved = context.globalState.get<unknown>(agentSetupCompletedKey);
   const configured = new Set(Array.isArray(saved) ? saved.filter(
     (item): item is string => typeof item === 'string'
@@ -3609,7 +3641,7 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: enabledValue
-      ? `正在启用“${mount.name}”的 Agent 转发（注册 MCP）…`
+      ? `正在启用“${mount.name}”的 Agent 转发…`
       : `正在关闭“${mount.name}”的 Agent 转发…`
   }, async () => {
     const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
@@ -4019,6 +4051,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   });
   command('installAgentForwarding', async () => {
+    if (cliMode()) {
+      const router = await ensureAgentHttpRouter(context);
+      await writeCliConnection(context.globalStorageUri.fsPath, cliRouterUrl(router.url));
+      const platform = settings().get<string>('agentPlatform', 'auto') === 'wsl' ? 'wsl' : undefined;
+      await vscode.env.clipboard.writeText(cliInstructions(
+        localPathForAgent(path.join(context.extensionPath, 'dist', 'safs-cli.js'), platform),
+        localPathForAgent(cliConfigPath(context.globalStorageUri.fsPath), platform),
+        platformAdapter.kind === 'windows' && platform !== 'wsl'
+      ));
+      void vscode.window.showInformationMessage('已复制 SAFS CLI 使用指引（不含令牌）。重启 Agent 后粘贴指引即可使用；无需注册 MCP。');
+      return;
+    }
     const answer =
       await askAgentNameAndPlatform('SAFS：为我的Agent安装转发功能');
     if (!answer) return;

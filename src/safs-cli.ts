@@ -2,10 +2,18 @@
 import { readFile } from 'node:fs/promises';
 import { callSafs, prepareCliRequest } from './safs-cli-client';
 
+let connectionUrl: string | undefined;
 async function main() {
   const args = process.argv.slice(2);
+  const separator = args.indexOf('--');
+  const configIndex = args.findIndex((arg, i) => arg === '--config' && (separator < 0 || i < separator));
+  let configFile: string | undefined;
+  if (configIndex >= 0) {
+    if (!args[configIndex + 1]) throw new Error('--config requires a file path.');
+    configFile = args.splice(configIndex, 2)[1];
+  }
   if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
-    process.stdout.write(`SAFS CLI — requires SAFS_MCP_URL from the existing SAFS router configuration.
+    process.stdout.write(`SAFS CLI — use --config CONNECTION.json or SAFS_MCP_URL for the existing router.
 Usage:
   safs bind [--cwd LOCAL_AGENT_CWD]
   safs exec --binding ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
@@ -33,8 +41,16 @@ No SSH credentials or remote service installation are needed by this wrapper.
     return;
   }
   const request = await prepareCliRequest(args, process.cwd(), file => readFile(file, 'utf8'));
-  const url = process.env.SAFS_MCP_URL;
-  if (!url) throw new Error('Set SAFS_MCP_URL to the existing SAFS router URL.');
+  let url = process.env.SAFS_MCP_URL;
+  if (configFile) {
+    let config;
+    try { config = JSON.parse(await readFile(configFile, 'utf8')); }
+    catch { throw new Error('Cannot read a valid SAFS connection file.'); }
+    if (!config || config.version !== 1 || typeof config.url !== 'string') throw new Error('Invalid SAFS connection file.');
+    url = config.url;
+  }
+  connectionUrl = url;
+  if (!url) throw new Error('Use --config CONNECTION.json or set SAFS_MCP_URL.');
   const result = await callSafs(url, request);
   if (request.name !== 'run_remote_command') {
     process.stdout.write(JSON.stringify(result) + '\n');
@@ -51,7 +67,7 @@ No SSH credentials or remote service installation are needed by this wrapper.
 }
 main().catch(error => {
   let message = error instanceof Error ? error.message : String(error);
-  const url = process.env.SAFS_MCP_URL;
+  const url = connectionUrl ?? process.env.SAFS_MCP_URL;
   if (url) {
     message = message.replaceAll(url, '[SAFS URL]');
     try {

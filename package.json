@@ -497,6 +497,13 @@
           "default": 120000,
           "description": "Unified timeout for Agent MCP forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
         },
+        "safs.agentInterface": {
+          "type": "string",
+          "enum": ["cli", "mcp"],
+          "default": "cli",
+          "scope": "machine",
+          "description": "Agent entry point. cli (default) uses the local SAFS CLI and removes Agent-facing SAFS MCP registration; mcp retains the existing MCP integration. Use the same value across windows, reload VS Code windows and restart Agents after changing it. CLI requires Node.js 18+."
+        },
         "safs.agentMcpToolProfile": {
           "type": "string",
           "enum": ["full", "core"],
