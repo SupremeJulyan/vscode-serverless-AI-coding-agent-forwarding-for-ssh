@@ -50,7 +50,7 @@
 ### 安装
 
 ```sh
-code --install-extension safs-serverless-agent-forwarding-1.7.5.vsix
+code --install-extension safs-serverless-agent-forwarding-1.7.6.vsix
 ```
 
 ### 添加 SSH 配置并打开远程目录
@@ -463,6 +463,7 @@ Linux、macOS 和 WSL 使用 `~/.local/bin/safs`，Windows 使用
 
 ```sh
 safs bind --cwd /Agent/实际工作目录
+safs current-file --binding ID
 safs list --binding ID --path .
 safs read --binding ID --path src/main.ts --start-line 10 --line-count 30
 safs search --binding ID --query TODO --mode files
@@ -486,6 +487,8 @@ safs --compact batch --binding ID --input '{"operations":[{"command":"read","arg
 `bind` 沿用首次绑定规则。返回候选时，先询问用户；确认后使用
 `switch --workspace ID --confirmed true`，然后结束旧任务并等待新请求。
 `workspaces` 列出候选。后续操作必须显式提供绑定；失效后失败，不自动切换到当前焦点。
+`current-file` 返回绑定窗口当前打开的远程文件路径、相对路径、大小和未保存状态；
+没有打开远程文件时返回 `null`。
 命令 stdout/stderr 原样分流并保留退出码；截断时 stderr 附续取元数据。
 结构化操作和 `output` 返回 JSON，续取应使用返回的字节偏移。
 `--compact` 会省略常规成功状态以及值为 false 的分页/截断标记，以减少输出 Token；

@@ -60,7 +60,7 @@ intranet hosts and remote servers that forbid port forwarding.
 ### Install
 
 ```sh
-code --install-extension safs-serverless-agent-forwarding-1.7.5.vsix
+code --install-extension safs-serverless-agent-forwarding-1.7.6.vsix
 ```
 
 ### Add an SSH config and open a remote folder
@@ -569,6 +569,7 @@ stores the private `.safs-connection.json` beside the executable for automatic d
 
 ```sh
 safs bind --cwd /actual/agent/cwd
+safs current-file --binding ID
 safs exec --binding ID -- 'pwd'
 safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
 safs --compact batch --binding ID --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}},{"command":"search","arguments":{"query":"TODO"}}]}'
@@ -578,6 +579,8 @@ Replace ID using the bind response. Initial binding follows existing MCP rules;
 ambiguous candidates still require user confirmation through the MCP switch flow.
 Execution requires an explicit binding and never rebinds on failure. Remote stdout,
 stderr and exit codes are preserved; continuation metadata goes to stderr.
+`current-file` returns the remote file open in the bound VS Code window, including
+its path, relative path, size, and unsaved state, or `null` when none is open.
 Use returned byte offsets for UTF-8 continuation. The CLI reuses the existing
 connection/policy layer and does not fetch tool schemas or manage SSH credentials.
 `--compact` omits routine success metadata and false pagination/truncation flags

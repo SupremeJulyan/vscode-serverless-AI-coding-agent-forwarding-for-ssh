@@ -24,10 +24,15 @@ async function freePort(): Promise<number> {
 test('native CLI binds and executes through the existing SAFS router', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-e2e-'));
   let runs = 0;
+  let currentFileReads = 0;
   const backend = new AgentMcpServer(0, 'native-test', {
     currentWorkspace: async () => ({
       name: 'dev', host: 'dev', workspaceRoot: '/project', workspaceUri: 'safs://dev/project'
     }),
+    currentFile: async () => {
+      currentFileReads += 1;
+      return { path: '/project/open.ts', relativePath: 'open.ts', size: 12, dirty: true };
+    },
     list: async (input: { path?: string }) => {
       if (input.path === 'forbidden') throw new Error('denied detail');
       return { path: input.path, entries: [], truncated: false };
@@ -66,6 +71,14 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     assert.equal(run.stdout, 'native-out');
     assert.equal(run.stderr, 'native-err');
     assert.equal(runs, 1);
+    const currentFile = await executeCaptured({ command: executable, args: [
+      '--config', config, 'current-file', '--binding', bindingId
+    ] });
+    assert.equal(currentFile.exitCode, 0, currentFile.stderr);
+    assert.deepEqual(JSON.parse(currentFile.stdout), {
+      path: '/project/open.ts', relativePath: 'open.ts', size: 12, dirty: true
+    });
+    assert.equal(currentFileReads, 1);
     const batch = await executeCaptured({ command: executable, args: [
       '--config', config, '--compact', 'batch', '--binding', bindingId, '--input',
       JSON.stringify({ operations: [

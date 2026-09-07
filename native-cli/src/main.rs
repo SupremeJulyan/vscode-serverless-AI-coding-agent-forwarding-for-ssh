@@ -5,6 +5,7 @@ use url::Url;
 const HELP: &str = r#"SAFS native CLI
 Usage:
   safs [--config CONNECTION.json] bind [--cwd LOCAL_CWD]
+  safs [--config CONNECTION.json] current-file --binding ID
   safs [--config CONNECTION.json] list|read|search --binding ID [options]
   safs [--config CONNECTION.json] edit|upload|download|move|chmod|delete|read-many --binding ID --input 'JSON'
   safs [--config CONNECTION.json] write --binding ID --path PATH --file UTF8_FILE
@@ -63,6 +64,7 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
         "bind" => &["cwd"][..],
         "workspaces" => &[],
         "switch" => &["workspace", "confirmed"],
+        "current-file" => &["binding"],
         "list" => &["binding", "path", "limit", "cursor"],
         "read" => &[
             "binding",
@@ -164,6 +166,7 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
                     .and_then(Value::as_str)
                     .ok_or("Each batch operation requires command")?;
                 let name = match command {
+                    "current-file" => "current_remote_file",
                     "list" => "remote_list",
                     "read" => "remote_read",
                     "read-many" => "remote_read_many",
@@ -197,6 +200,7 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
         _ => {
             values.insert("bindingId".into(), binding.ok_or("--binding is required")?);
             match verb.as_str() {
+                "current-file" => "current_remote_file",
                 "list" => "remote_list",
                 "read" => "remote_read",
                 "read-many" => "remote_read_many",
@@ -548,5 +552,31 @@ mod tests {
         let mut result = json!({"status":"ok","truncated":false,"hasMore":false,"content":"x"});
         compact_result(&mut result);
         assert_eq!(result, json!({"content":"x"}));
+    }
+
+    #[test]
+    fn maps_current_file_for_direct_and_batch_calls() {
+        let (name, args) = request(
+            vec!["current-file", "--binding", "id"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            "/cwd".into(),
+        )
+        .unwrap();
+        assert_eq!(name, "current_remote_file");
+        assert_eq!(args["bindingId"], "id");
+
+        let input = r#"{"operations":[{"command":"current-file"}]}"#;
+        let (_, args) = request(
+            vec!["batch", "--binding", "id", "--input", input]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            "/cwd".into(),
+        )
+        .unwrap();
+        assert_eq!(args["operations"][0]["name"], "current_remote_file");
+        assert_eq!(args["operations"][0]["arguments"]["bindingId"], "id");
     }
 }

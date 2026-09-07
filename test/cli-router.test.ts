@@ -10,5 +10,8 @@ test('CLI result adapter preserves structured success and tool errors', () => {
     isError: true,
     content: [{ type: 'text', text: '{"code":"WORKSPACE_BINDING_INVALID"}' }]
   }), { ok: false, result: { code: 'WORKSPACE_BINDING_INVALID' } });
+  assert.deepEqual(unwrapCliToolResult({
+    content: [{ type: 'text', text: 'null' }]
+  }, true), { ok: true, result: null });
   assert.throws(() => unwrapCliToolResult({ content: [{ type: 'text', text: 'bad' }] }));
 });
