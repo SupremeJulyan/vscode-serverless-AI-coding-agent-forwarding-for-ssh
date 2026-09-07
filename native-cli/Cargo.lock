@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "safs-cli"
-version = "1.8.0"
+version = "1.7.5"
 dependencies = [
  "serde_json",
  "ureq",

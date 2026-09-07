@@ -3405,7 +3405,7 @@ async function configureDetectedAgents(
   const routerUrl = router?.url;
   if (shouldRegister && cliMode()) {
     if (!routerUrl) throw new Error('SAFS CLI router is unavailable.');
-    await installGlobalCli(context, cliRouterUrl(routerUrl));
+    const executable = await installGlobalCli(context, cliRouterUrl(routerUrl));
     const removed = await configureDetectedAgents(context, false);
     const pending = context.globalState.get<string[]>(agentSetupCompletedKey, []);
     const succeeded = removed.succeeded && pending.length === 0;
@@ -3413,7 +3413,7 @@ async function configureDetectedAgents(
     if (!succeeded) {
       void vscode.window.showWarningMessage('SAFS CLI 已就绪，但部分旧 MCP 注册未能清理。请查看 SAFS 日志并在对应 Agent 中移除 safs MCP 后重启，否则工具定义仍可能加载。');
     }
-    return { succeeded, registeredAgents: ['SAFS CLI'] };
+    return { succeeded, registeredAgents: ['SAFS CLI'], cliExecutable: executable };
   }
   const saved = context.globalState.get<unknown>(agentSetupCompletedKey);
   const configured = new Set(Array.isArray(saved) ? saved.filter(
@@ -3727,6 +3727,12 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
     }
   });
   if (enabledValue) {
+    if (integrationResult.cliExecutable) {
+      void vscode.window.showInformationMessage(
+        `SAFS CLI 已安装到 ${integrationResult.cliExecutable}。请重启 VS Code 和 Agent 后使用。`
+      );
+      return;
+    }
     const successMessage = agentForwardingInstallMessage(
       integrationResult.registeredAgents, integrationResult.succeeded
     );
@@ -4102,9 +4108,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   command('installAgentForwarding', async () => {
     if (cliMode()) {
       const router = await ensureAgentHttpRouter(context);
-      await installGlobalCli(context, cliRouterUrl(router.url));
+      const executable = await installGlobalCli(context, cliRouterUrl(router.url));
       void vscode.window.showInformationMessage(
-        'SAFS CLI 已安装。重启 Agent 后，在对话中明确要求“使用 safs 操作远程文件”即可。'
+        `SAFS CLI 已安装到 ${executable}。请重启 VS Code 和 Agent；重启后在对话中明确要求“使用全局 safs 命令在远程执行 XX 操作”即可。`
       );
       return;
     }
@@ -4283,6 +4289,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
+  // Settings can be changed without reloading the extension host. Install the
+  // global command immediately when CLI mode (or its target platform) is
+  // selected, instead of waiting for forwarding to be toggled again.
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
+    if (!event.affectsConfiguration('safs.agentInterface')
+      && !event.affectsConfiguration('safs.agentPlatform')) return;
+    if (!cliMode()) return;
+    void guard(async () => {
+      startAgentHttpRouterLeadership(context);
+      const result = await configureDetectedAgents(context, true);
+      void vscode.window.showInformationMessage(
+        `SAFS CLI 已安装或更新到 ${result.cliExecutable ?? '用户级全局命令目录'}。请重启 VS Code 和 Agent，使全局 safs 命令生效。`
+      );
+    });
+  }));
+
   // Agent MCP: keep one in-extension fixed HTTP router alive, then start the
   // dynamic backend only in an enabled remote window.
   await guard(async () => {
@@ -4292,11 +4314,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       'Activate',
       `当前远程挂载=${current?.mountName ?? '<none>'}，启用列表=${[...enabled].join(',') || '<empty>'}`
     );
+    // CLI mode is a user-level interface and must be installed even before a
+    // mount enables forwarding. This also repairs missing installs on reload.
+    if (cliMode()) {
+      agentTrace('Activate', 'CLI 模式已启用，安装或更新用户级全局 safs 命令');
+      startAgentHttpRouterLeadership(context);
+      await configureDetectedAgents(context, true);
+    }
     if (enabled.size > 0) {
       agentTrace('Activate', '启动或连接固定 HTTP MCP 路由器');
       startAgentHttpRouterLeadership(context);
       await ensureAgentHttpRouter(context);
-      await configureDetectedAgents(context, true);
+      if (!cliMode()) await configureDetectedAgents(context, true);
       if (current && enabled.has(current.mountName)) {
         agentTrace('Activate', `挂载 ${current.mountName} 已启用，启动窗口动态 MCP 后端`);
         const config = await readConfig();
@@ -4309,11 +4338,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else {
         agentTrace('Activate', '当前不是已启用的远程窗口，仅提供固定 HTTP 路由');
       }
-    } else if (enabled.size === 0) {
+    } else if (enabled.size === 0 && !cliMode()) {
       agentTrace('Activate', '没有已启用挂载，清理可能残留的固定 MCP');
       await configureDetectedAgents(context, false);
     } else {
-      agentTrace('Activate', '不启动 Agent MCP：当前窗口没有已启用的远程挂载');
+      agentTrace('Activate', 'CLI 路由已就绪；当前没有启用 Agent 转发的远程挂载');
     }
   });
   startAgentWorkspacePublishing(context);

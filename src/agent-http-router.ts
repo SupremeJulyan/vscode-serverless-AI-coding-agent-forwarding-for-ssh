@@ -15,8 +15,12 @@ const cliToolNames = new Set([
   'safs_get_remote_workspace', 'safs_switch_remote_workspace',
   'remote_list', 'remote_read', 'remote_read_many', 'remote_search',
   'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move',
-  'remote_upload', 'remote_download', 'remote_output', 'run_remote_command'
+  'remote_upload', 'remote_download', 'remote_output', 'run_remote_command',
+  'safs_cli_batch'
 ]);
+const cliBatchToolNames = new Set([...cliToolNames].filter((name) =>
+  !['safs_get_remote_workspace', 'safs_switch_remote_workspace', 'safs_cli_batch'].includes(name)
+));
 
 export function unwrapCliToolResult(value: any): Record<string, unknown> {
   const text = Array.isArray(value?.content)
@@ -408,6 +412,32 @@ export class AgentHttpRouter {
         ? platformValue as AgentPlatformLabel
         : undefined;
       try {
+        if (name === 'safs_cli_batch') {
+          const operations = (input as { operations?: unknown }).operations;
+          if (!Array.isArray(operations) || operations.length === 0 || operations.length > 50) {
+            response.status(400).json({ ok: false, error: 'CLI batch requires 1 to 50 operations' });
+            return;
+          }
+          const results: Record<string, unknown>[] = [];
+          for (let index = 0; index < operations.length; index += 1) {
+            const operation = operations[index] as { name?: unknown; arguments?: unknown };
+            if (!operation || typeof operation !== 'object'
+                || typeof operation.name !== 'string'
+                || !cliBatchToolNames.has(operation.name)
+                || !operation.arguments || typeof operation.arguments !== 'object'
+                || Array.isArray(operation.arguments)) {
+              response.status(400).json({ ok: false, error: `Invalid CLI batch operation at index ${index}` });
+              return;
+            }
+            const item = unwrapCliToolResult(await this.callTool(
+              operation.name, operation.arguments as Record<string, unknown>,
+              'safs-cli', agentPlatform
+            ));
+            results.push({ index, name: operation.name, ...item });
+          }
+          response.json({ ok: true, result: { results } });
+          return;
+        }
         response.json(unwrapCliToolResult(await this.callTool(
           name, input as Record<string, unknown>, 'safs-cli', agentPlatform
         )));

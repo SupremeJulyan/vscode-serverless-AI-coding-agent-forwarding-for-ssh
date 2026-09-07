@@ -60,7 +60,7 @@ intranet hosts and remote servers that forbid port forwarding.
 ### Install
 
 ```sh
-code --install-extension safs-serverless-agent-forwarding-1.7.4.vsix
+code --install-extension safs-serverless-agent-forwarding-1.7.5.vsix
 ```
 
 ### Add an SSH config and open a remote folder
@@ -176,8 +176,14 @@ is refreshed.
 
 The CLI is an experimental opt-in and requires the VSIX to contain a native binary
 matching the Agent platform. SAFS installs it as the user-level global `safs` command
-and writes nothing to AGENTS.md, CLAUDE.md, or the remote project. Restart the Agent,
-then explicitly ask it to “use safs to operate remote files.” Node.js is not required.
+and writes nothing to AGENTS.md, CLAUDE.md, or the remote project. CLI mode does not
+register MCP tools with the Agent, so MCP tool definitions do not need to be loaded
+into every conversation and token usage can theoretically be lower; actual savings
+depend on how the Agent discovers and invokes commands. Switching to CLI mode
+automatically removes the `safs` MCP service previously installed by SAFS itself.
+MCP services installed through a prompt or by manually pasting a URL are outside
+automatic cleanup; run `SAFS: 为我的Agent卸载转发功能` to remove one. Restart the Agent,
+then explicitly ask it to “use the global safs command to perform XX remotely.” Node.js is not required.
 The following registration steps apply to the default MCP mode.
 
 The Agent can be a VS Code extension (Copilot Chat, Codex, ...) or a desktop
@@ -565,6 +571,7 @@ stores the private `.safs-connection.json` beside the executable for automatic d
 safs bind --cwd /actual/agent/cwd
 safs exec --binding ID -- 'pwd'
 safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
+safs --compact batch --binding ID --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}},{"command":"search","arguments":{"query":"TODO"}}]}'
 ```
 
 Replace ID using the bind response. Initial binding follows existing MCP rules;
@@ -573,6 +580,11 @@ Execution requires an explicit binding and never rebinds on failure. Remote stdo
 stderr and exit codes are preserved; continuation metadata goes to stderr.
 Use returned byte offsets for UTF-8 continuation. The CLI reuses the existing
 connection/policy layer and does not fetch tool schemas or manage SSH credentials.
+`--compact` omits routine success metadata and false pagination/truncation flags
+to reduce output tokens. Errors show only a code and concise message by default;
+add `--verbose` for the complete structured error. `batch` executes 1–50 operations
+sequentially through one local HTTP request with a shared `--binding`; every item
+still reports its own success or failure.
 
 ### Structured CLI commands
 

@@ -28,6 +28,13 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     currentWorkspace: async () => ({
       name: 'dev', host: 'dev', workspaceRoot: '/project', workspaceUri: 'safs://dev/project'
     }),
+    list: async (input: { path?: string }) => {
+      if (input.path === 'forbidden') throw new Error('denied detail');
+      return { path: input.path, entries: [], truncated: false };
+    },
+    read: async (input: { path: string }) => ({
+      path: input.path, content: `content:${input.path}`, truncated: false
+    }),
     run: async () => {
       runs += 1;
       return { stdout: 'native-out', stderr: 'native-err', exitCode: 7 };
@@ -59,6 +66,24 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     assert.equal(run.stdout, 'native-out');
     assert.equal(run.stderr, 'native-err');
     assert.equal(runs, 1);
+    const batch = await executeCaptured({ command: executable, args: [
+      '--config', config, '--compact', 'batch', '--binding', bindingId, '--input',
+      JSON.stringify({ operations: [
+        { command: 'read', arguments: { path: 'a.txt' } },
+        { command: 'list', arguments: { path: 'src' } }
+      ] })
+    ] });
+    assert.equal(batch.exitCode, 0, batch.stderr);
+    const batchResult = JSON.parse(batch.stdout);
+    assert.equal(batchResult.results.length, 2);
+    assert.equal(batchResult.results[0].result.content, 'content:a.txt');
+    assert.equal('truncated' in batchResult.results[0].result, false);
+    const conciseError = await executeCaptured({ command: executable, args: [
+      '--config', config, 'list', '--binding', bindingId, '--path', 'forbidden'
+    ] });
+    assert.equal(conciseError.exitCode, 1);
+    assert.match(conciseError.stderr, /REMOTE_TOOL_ERROR: denied detail/);
+    assert.equal(conciseError.stderr.includes('{"code"'), false);
   } finally {
     await router.stop();
     await backend.stop();

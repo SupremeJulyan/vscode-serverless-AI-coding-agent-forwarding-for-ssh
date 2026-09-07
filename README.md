@@ -50,7 +50,7 @@
 ### 安装
 
 ```sh
-code --install-extension safs-serverless-agent-forwarding-1.7.4.vsix
+code --install-extension safs-serverless-agent-forwarding-1.7.5.vsix
 ```
 
 ### 添加 SSH 配置并打开远程目录
@@ -141,8 +141,13 @@ Agent 注册 SAFS MCP。重载 VS Code 窗口并重启 Agent 后，新工具列�
 
 CLI 是实验性可选入口；仅当 VSIX 包含 Agent 所在平台的原生程序时，才可设置
 `safs.agentInterface: "cli"`。扩展把它安装为用户级全局 `safs` 命令，不写入
-`AGENTS.md`、`CLAUDE.md` 或远程项目，也不要求 Node.js。安装后重启 Agent，
-在对话中明确要求“使用 safs 操作远程文件”即可。
+`AGENTS.md`、`CLAUDE.md` 或远程项目，也不要求 Node.js。CLI 模式不向 Agent 注册
+MCP 工具，因此无需在每次对话中加载 MCP 工具定义，理论上可以降低 Token 消耗；
+实际节省量取决于 Agent 如何发现和调用命令。切换到 CLI 模式时，扩展会自动卸载
+此前由 SAFS 自动安装的 `safs` MCP 服务；通过提示词或手动粘贴 URL 安装的 MCP
+不在自动清理范围内，需要运行 `SAFS: 为我的Agent卸载转发功能` 完成卸载。
+安装后重启 Agent，
+在对话中明确要求“使用全局 safs 命令在远程执行 XX 操作”即可。
 多窗口应使用相同模式，切换模式后重载窗口并重启 Agent。
 
 **以下步骤适用于默认的 MCP 模式。**
@@ -467,6 +472,7 @@ safs upload --binding ID --input '{"localPaths":["/本地绝对路径"],"remoteD
 safs download --binding ID --input '{"remotePath":"file","localPath":"/本地绝对目标"}'
 safs exec --binding ID -- 'pwd'
 safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
+safs --compact batch --binding ID --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}},{"command":"search","arguments":{"query":"TODO"}}]}'
 ```
 
 `--input` 内联传入对应结构化工具的 JSON 字段（`--input '{"edits":[...]}'`），
@@ -482,3 +488,7 @@ safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
 `workspaces` 列出候选。后续操作必须显式提供绑定；失效后失败，不自动切换到当前焦点。
 命令 stdout/stderr 原样分流并保留退出码；截断时 stderr 附续取元数据。
 结构化操作和 `output` 返回 JSON，续取应使用返回的字节偏移。
+`--compact` 会省略常规成功状态以及值为 false 的分页/截断标记，以减少输出 Token；
+默认错误只显示错误码和简短信息，需要完整结构化错误时添加 `--verbose`。
+`batch` 可在一次本地 HTTP 请求中按顺序执行 1～50 个操作，所有操作共享命令行的
+`--binding`，适合批量读取、搜索或文件修改；每项仍独立返回成功或失败结果。

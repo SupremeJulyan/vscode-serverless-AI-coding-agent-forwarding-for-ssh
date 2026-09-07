@@ -43,8 +43,11 @@ test('adds the user CLI directory to the Unix login PATH idempotently', async ()
     await writeFile(join(home, '.profile'), 'export LANG=C\n');
     await ensureUnixCliPath(home);
     const first = await readFile(join(home, '.profile'), 'utf8');
+    const firstZsh = await readFile(join(home, '.zprofile'), 'utf8');
     await ensureUnixCliPath(home);
     assert.equal(await readFile(join(home, '.profile'), 'utf8'), first);
+    assert.equal(await readFile(join(home, '.zprofile'), 'utf8'), firstZsh);
     assert.match(first, /export PATH="\$HOME\/\.local\/bin:\$PATH"/);
+    assert.match(firstZsh, /export PATH="\$HOME\/\.local\/bin:\$PATH"/);
   } finally { await rm(home, { recursive: true, force: true }); }
 });

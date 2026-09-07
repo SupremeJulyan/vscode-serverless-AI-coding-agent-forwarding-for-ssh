@@ -32,22 +32,27 @@ export function nativeCliConnectionPath(executable: string): string {
 
 /** Copy out of the immutable extension bundle and return a stable absolute path. */
 export async function installNativeCli(
-  extensionRoot: string, home: string, platform: NativeCliPlatform
+  extensionRoot: string, home: string, platform: NativeCliPlatform,
+  hostPlatform: NodeJS.Platform = process.platform
 ): Promise<string> {
   const source = bundledNativeCli(extensionRoot, platform);
   const destination = globalNativeCli(home, platform);
   const destinationDirectory = path.dirname(destination);
   await mkdir(destinationDirectory, { recursive: true });
   await copyFile(source, destination);
-  if (!platform.startsWith('win32-')) await chmod(destination, 0o755);
+  // A Windows extension host installing into WSL addresses the destination via
+  // UNC. Node's chmod on that path can fail even though chmod inside WSL works;
+  // the caller applies the mode through wsl.exe after the copy.
+  if (!platform.startsWith('win32-') && hostPlatform !== 'win32') {
+    await chmod(destination, 0o755);
+  }
   return destination;
 }
 
 const pathBegin = '# SAFS CLI PATH BEGIN';
 const pathEnd = '# SAFS CLI PATH END';
 
-export async function ensureUnixCliPath(home: string): Promise<void> {
-  const profile = path.join(home, '.profile');
+async function ensureUnixProfilePath(profile: string): Promise<void> {
   let previous = '';
   try { previous = await readFile(profile, 'utf8'); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -61,4 +66,12 @@ export async function ensureUnixCliPath(home: string): Promise<void> {
   const block = `${pathBegin}\nexport PATH="$HOME/.local/bin:$PATH"\n${pathEnd}\n`;
   const next = `${unrelated}${unrelated && !unrelated.endsWith('\n') ? '\n' : ''}${block}`;
   if (next !== previous) await writeFile(profile, next, { mode: 0o600 });
+}
+
+export async function ensureUnixCliPath(home: string): Promise<void> {
+  // POSIX login shells read .profile, while macOS and many Linux zsh setups
+  // read .zprofile instead. Keep both entry points consistent so a newly
+  // opened terminal can resolve the user-level global command.
+  await ensureUnixProfilePath(path.join(home, '.profile'));
+  await ensureUnixProfilePath(path.join(home, '.zprofile'));
 }
