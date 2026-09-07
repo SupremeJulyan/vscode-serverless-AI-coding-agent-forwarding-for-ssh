@@ -15,6 +15,14 @@ Usage:
   safs [--config CONNECTION.json] workspaces
   safs [--config CONNECTION.json] switch --workspace ID --confirmed true
 
+Agent workspace setup:
+  1. Run `safs bind` first. It uses the current working directory to match the
+     SAFS placeholder and automatically binds the corresponding remote workspace.
+  2. If binding requires a selection, run `safs workspaces`, show every returned
+     candidate to the user, and ask the user to choose. Never choose for the user.
+  3. After explicit confirmation, run
+     `safs switch --workspace ID --confirmed true` and use its new bindingId.
+
 Advanced list/read/search options may be supplied with --input as inline JSON,
 e.g. --input '{"path":"src","limit":20}'. The input must not contain bindingId
 or mountName. Bindings are explicit and never recover or switch automatically.
@@ -441,6 +449,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn help_guides_agents_through_workspace_binding() {
+        assert!(HELP.contains("Run `safs bind` first"));
+        assert!(HELP.contains("run `safs workspaces`"));
+        assert!(HELP.contains("Never choose for the user"));
+        assert!(HELP.contains("safs switch --workspace ID --confirmed true"));
+    }
     #[test]
     fn parses_structured_and_exact_command_arguments() {
         let (name, args) = request(

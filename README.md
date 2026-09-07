@@ -146,8 +146,11 @@ MCP 工具，因此无需在每次对话中加载 MCP 工具定义，理论上�
 实际节省量取决于 Agent 如何发现和调用命令。切换到 CLI 模式时，扩展会自动卸载
 此前由 SAFS 自动安装的 `safs` MCP 服务；通过提示词或手动粘贴 URL 安装的 MCP
 不在自动清理范围内，需要运行 `SAFS: 为我的Agent卸载转发功能` 完成卸载。
-安装后重启 Agent，
-在对话中明确要求“使用全局 safs 命令在远程执行 XX 操作”即可。
+安装后重启 Agent，在对话中输入 `safs -h`。Agent 会按照帮助信息先运行
+`safs bind`，根据当前 cwd 的占位符自动绑定对应的远程工作区；如果无法唯一匹配，
+则运行 `safs workspaces` 列出所有活动工作区供用户选择。用户明确确认后，Agent
+使用 `safs switch --workspace ID --confirmed true` 完成绑定，再通过返回的
+`bindingId` 执行后续远程操作；Agent 不应代替用户选择工作区。
 多窗口应使用相同模式，切换模式后重载窗口并重启 Agent。
 
 **以下步骤适用于默认的 MCP 模式。**

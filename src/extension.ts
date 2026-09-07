@@ -4110,7 +4110,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const router = await ensureAgentHttpRouter(context);
       const executable = await installGlobalCli(context, cliRouterUrl(router.url));
       void vscode.window.showInformationMessage(
-        `SAFS CLI 已安装到 ${executable}。请重启 VS Code 和 Agent；重启后在对话中明确要求“使用全局 safs 命令在远程执行 XX 操作”即可。`
+        `SAFS CLI 已安装到 ${executable}。请重启 VS Code 和 Agent；重启后在对话中输入“safs -h”，Agent 将按帮助信息绑定远程工作区。`
       );
       return;
     }

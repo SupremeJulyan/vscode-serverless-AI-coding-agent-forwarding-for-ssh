@@ -109,7 +109,8 @@ test('packages Agent integration without a spawned stdio router or Codex plugin'
 
 test('CLI mode installs a global command without copying Agent instructions', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extensionSource.includes('使用全局 safs 命令在远程执行 XX 操作'));
+  assert.ok(extensionSource.includes('在对话中输入“safs -h”'));
+  assert.ok(extensionSource.includes('Agent 将按帮助信息绑定远程工作区'));
   assert.equal(extensionSource.includes('已复制 SAFS CLI 使用指引'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
