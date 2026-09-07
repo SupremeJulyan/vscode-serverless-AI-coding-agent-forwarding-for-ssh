@@ -146,11 +146,9 @@ MCP 工具，因此无需在每次对话中加载 MCP 工具定义，理论上�
 实际节省量取决于 Agent 如何发现和调用命令。切换到 CLI 模式时，扩展会自动卸载
 此前由 SAFS 自动安装的 `safs` MCP 服务；通过提示词或手动粘贴 URL 安装的 MCP
 不在自动清理范围内，需要运行 `SAFS: 为我的Agent卸载转发功能` 完成卸载。
-安装后重启 Agent，在对话中输入 `safs -h`。Agent 会按照帮助信息先运行
-`safs bind`，根据当前 cwd 的占位符自动绑定对应的远程工作区；如果无法唯一匹配，
-则运行 `safs workspaces` 列出所有活动工作区供用户选择。用户明确确认后，Agent
-使用 `safs switch --workspace ID --confirmed true` 完成绑定，再通过返回的
-`bindingId` 执行后续远程操作；Agent 不应代替用户选择工作区。
+安装后重启 Agent，在对话中输入 `safs bind`。Agent 会根据当前 cwd 的占位符自动
+绑定远程工作区；cwd 不匹配时会使用唯一的聚焦 SAFS 窗口，否则列出所有工作区
+供用户选择。
 多窗口应使用相同模式，切换模式后重载窗口并重启 Agent。
 
 **以下步骤适用于默认的 MCP 模式。**
@@ -214,7 +212,8 @@ Agent，运行 `SAFS: 为我的Agent卸载转发功能`：输入 Agent 名并选
   也不会按焦点窗口、`~/` 或唯一候选猜测目标。
 - 用户要求列出、切换 SAFS 工作区/主机/配置时，Agent 调用
   `safs_switch_remote_workspace` 获取全部活动候选；get 工具不再判断切换。
-  切换成功会注销该 Agent 会话的旧 binding。
+  切换成功后 Agent 应丢弃自己的旧 binding 并停止旧任务；Router 不会注销同平台
+  其他 Agent 会话的 binding。
 - 每个窗口的动态端口服务只能访问自己绑定的挂载，不能通过请求参数跨窗口
   访问其他挂载。
 
@@ -243,9 +242,7 @@ Agent，运行 `SAFS: 为我的Agent卸载转发功能`：输入 Agent 名并选
 
 ## 配置
 
-所有平台统一使用 `~/.safs/config.json`。`mounts` 数组可以省略：省略时由
-`hosts` 自动派生（每个 host 生成一个同名 mount，`remote_path` 为 `.`，
-`remote_terminal` 为 `open`），也可保留显式 `mounts` 覆盖派生结果。
+所有平台统一使用 `~/.safs/config.json`，这里推荐使用SAFS图标里的加号交互式配置。
 
 ```json
 {
@@ -258,21 +255,9 @@ Agent，运行 `SAFS: 为我的Agent卸载转发功能`：输入 Agent 名并选
       "port": 22,
       "private_key_path": "~/.ssh/id_ed25519"
     }
-  ],
-  "mounts": [
-    {
-      "name": "project",
-      "host": "dev",
-      "remote_path": "/srv/project",
-      "remote_terminal": "open"
-    }
   ]
 }
 ```
-
-顶层 `mounts` 数组定义 SFTP 远程目录；远程目录不会挂载到本地文件系统。
-删除配置时，若该挂载的 SFTP 连接仍处于连接状态，会先弹窗确认“断开并删除”，
-确认后自动断开连接再删除配置。
 
 ## Agent 工具
 
@@ -489,12 +474,15 @@ safs --compact batch --binding ID --input '{"operations":[{"command":"read","arg
 
 `bind` 沿用首次绑定规则。返回候选时，先询问用户；确认后使用
 `switch --workspace ID --confirmed true`，然后结束旧任务并等待新请求。
-`workspaces` 列出候选。后续操作必须显式提供绑定；失效后失败，不自动切换到当前焦点。
+`workspaces` 以正常成功结果列出候选。后续操作必须显式提供绑定；失效后失败，
+不自动切换到当前焦点。
 `current-file` 返回绑定窗口当前打开的远程文件路径、相对路径、大小和未保存状态；
 没有打开远程文件时返回 `null`。
 命令 stdout/stderr 原样分流并保留退出码；截断时 stderr 附续取元数据。
 结构化操作和 `output` 返回 JSON，续取应使用返回的字节偏移。
 `--compact` 会省略常规成功状态以及值为 false 的分页/截断标记，以减少输出 Token；
 默认错误只显示错误码和简短信息，需要完整结构化错误时添加 `--verbose`。
+CLI 本地 HTTP 请求超时比 `safs.agentMcpTimeoutMs` 多 5 秒，为 Router 返回超时结果
+留出余量；该设置为 `0` 时 CLI 也不限制请求时间。
 `batch` 可在一次本地 HTTP 请求中按顺序执行 1～50 个操作，所有操作共享命令行的
 `--binding`，适合批量读取、搜索或文件修改；每项仍独立返回成功或失败结果。

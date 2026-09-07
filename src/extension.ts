@@ -3361,7 +3361,14 @@ async function installGlobalCli(
   const executable = await installNativeCli(
     context.extensionPath, agentPlatform.home, nativePlatform
   );
-  await writeCliConnectionFile(nativeCliConnectionPath(executable), routerUrl);
+  bridgeOutput?.appendLine(
+    `[Agent CLI] 已刷新 ${nativePlatform} bin 文件：${executable}`
+  );
+  const forwardingTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+  const cliTimeoutMs = forwardingTimeoutMs > 0 ? forwardingTimeoutMs + 5_000 : 0;
+  await writeCliConnectionFile(
+    nativeCliConnectionPath(executable), routerUrl, cliTimeoutMs
+  );
   const binDirectory = path.dirname(executable);
   if (nativePlatform.startsWith('win32-')) {
     const script = [
@@ -4110,7 +4117,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const router = await ensureAgentHttpRouter(context);
       const executable = await installGlobalCli(context, cliRouterUrl(router.url));
       void vscode.window.showInformationMessage(
-        `SAFS CLI 已安装到 ${executable}。请重启 VS Code 和 Agent；重启后在对话中输入“safs -h”，Agent 将按帮助信息绑定远程工作区。`
+        `SAFS CLI 已安装到 ${executable}。请重启 VS Code 和 Agent；重启后在对话中输入“safs bind”即可绑定远程工作区。`
       );
       return;
     }

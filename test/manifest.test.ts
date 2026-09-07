@@ -47,6 +47,24 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
 });
 
+test('every SAFS menu item references a contributed command', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest & {
+    contributes?: { menus?: Record<string, Array<{ command?: string }>> }
+  };
+  const commands = new Set(
+    (manifest.contributes?.commands ?? []).map((item) => item.command)
+  );
+  const menuCommands = Object.values(manifest.contributes?.menus ?? {})
+    .flat().map((item) => item.command)
+    .filter((command): command is string => command?.startsWith('safs.') === true);
+  assert.deepEqual(
+    menuCommands.filter((command) => !commands.has(command)),
+    []
+  );
+});
+
 test('contributes a remote-directory switch command instead of relying on the local picker', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
@@ -109,11 +127,11 @@ test('packages Agent integration without a spawned stdio router or Codex plugin'
 
 test('CLI mode installs a global command without copying Agent instructions', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extensionSource.includes('在对话中输入“safs -h”'));
-  assert.ok(extensionSource.includes('Agent 将按帮助信息绑定远程工作区'));
+  assert.ok(extensionSource.includes('在对话中输入“safs bind”'));
   assert.equal(extensionSource.includes('已复制 SAFS CLI 使用指引'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
+  assert.ok(extensionSource.includes('已刷新 ${nativePlatform} bin 文件'));
 });
 
 test('packages session-only remote shell integration scripts', async () => {

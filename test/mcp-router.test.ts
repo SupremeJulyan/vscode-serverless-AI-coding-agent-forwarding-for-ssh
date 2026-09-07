@@ -259,7 +259,7 @@ test('unmatched cwd automatically binds the uniquely focused SAFS window', async
   }
 });
 
-test('unmatched cwd returns Agent-conversation candidates and accepts workspaceId', async () => {
+test('workspace selection accepts workspaceId and preserves existing bindings', async () => {
   const first = new AgentMcpServer(0, 'first', callbacks('first'));
   const second = new AgentMcpServer(0, 'second', callbacks('second'));
   let workspaces: DiscoveredAgentWorkspace[] = [];
@@ -364,11 +364,7 @@ test('unmatched cwd returns Agent-conversation candidates and accepts workspaceI
     const originalBinding = await client.callTool({
       name: 'remote_list', arguments: { bindingId, path: '.' }
     });
-    assert.equal(originalBinding.isError, true);
-    assert.equal(
-      JSON.parse((originalBinding.content as any[])[0].text).code,
-      'WORKSPACE_BINDING_INVALID'
-    );
+    assert.equal(JSON.parse((originalBinding.content as any[])[0].text).label, 'second');
   } finally {
     await client.close();
     await Promise.allSettled([router.stop(), first.stop(), second.stop()]);

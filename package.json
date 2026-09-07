@@ -235,10 +235,6 @@
         },
         {
           "command": "safs.visualUpload"
-        },
-        {
-          "command": "safs.mounts.focus",
-          "when": "false"
         }
       ],
       "view/title": [

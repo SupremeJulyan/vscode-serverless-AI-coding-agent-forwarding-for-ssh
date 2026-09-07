@@ -1,34 +1,141 @@
 use serde_json::{json, Map, Value};
-use std::{env, fs, process};
+use std::{env, fs, process, time::Duration};
 use url::Url;
 
-const HELP: &str = r#"SAFS native CLI
-Usage:
-  safs [--config CONNECTION.json] bind [--cwd LOCAL_CWD]
-  safs [--config CONNECTION.json] current-file --binding ID
-  safs [--config CONNECTION.json] list|read|search --binding ID [options]
-  safs [--config CONNECTION.json] edit|upload|download|move|chmod|delete|read-many --binding ID --input 'JSON'
-  safs [--config CONNECTION.json] write --binding ID --path PATH --file UTF8_FILE
-  safs [--config CONNECTION.json] exec --binding ID [--cwd REMOTE_CWD] -- REMOTE_COMMAND
-  safs [--config CONNECTION.json] output --binding ID --id ID --stream stdout|stderr [--offset N] [--length N]
-  safs [--config CONNECTION.json] batch --binding ID --input '{"operations":[...]}'
-  safs [--config CONNECTION.json] workspaces
-  safs [--config CONNECTION.json] switch --workspace ID --confirmed true
+const HELP: &str = r#"Usage: safs COMMAND [options]
 
-Agent workspace setup:
-  1. Run `safs bind` first. It uses the current working directory to match the
-     SAFS placeholder and automatically binds the corresponding remote workspace.
-  2. If binding requires a selection, run `safs workspaces`, show every returned
-     candidate to the user, and ask the user to choose. Never choose for the user.
-  3. After explicit confirmation, run
-     `safs switch --workspace ID --confirmed true` and use its new bindingId.
+Workspace: bind, workspaces, switch, current-file
+Read:      list, read, read-many, search, output
+Write:     edit, write, delete, chmod, move, upload, download
+Execute:   exec, batch
 
-Advanced list/read/search options may be supplied with --input as inline JSON,
-e.g. --input '{"path":"src","limit":20}'. The input must not contain bindingId
-or mountName. Bindings are explicit and never recover or switch automatically.
-Use --compact to omit routine success metadata. Errors are concise by default;
-use --verbose to print their complete structured result.
+Run `safs COMMAND --help` for exact arguments and JSON examples.
+Global options: --compact, --verbose
 "#;
+
+fn command_help(command: &str) -> Option<&'static str> {
+    match command {
+        "bind" => Some(
+            r#"Usage: safs bind [--cwd LOCAL_CWD]
+Matches the current cwd (or --cwd) to a SAFS placeholder. If none matches,
+the uniquely focused workspace is used; otherwise candidates are returned.
+"#,
+        ),
+        "workspaces" => Some(
+            r#"Usage: safs workspaces
+Lists all active SAFS workspaces and their workspaceId values.
+"#,
+        ),
+        "switch" => Some(
+            r#"Usage: safs switch --workspace ID --confirmed true
+Call only after the user explicitly chooses a workspace. Returns a new bindingId.
+"#,
+        ),
+        "current-file" => Some(
+            r#"Usage: safs current-file --binding ID
+Returns the active remote editor file, or null when no remote file is open.
+"#,
+        ),
+        "list" => Some(
+            r#"Usage: safs list --binding ID [--path PATH] [--limit N] [--cursor CURSOR]
+Batch form: safs list --binding ID --input '{"paths":["src","test"],"limit":100}'
+"#,
+        ),
+        "read" => Some(
+            r#"Usage: safs read --binding ID --path PATH [selection]
+Selection: --offset N [--length N] | --head N | --tail N |
+           --start-line N [--line-count N]
+"#,
+        ),
+        "read-many" => Some(
+            r#"Usage: safs read-many --binding ID --input JSON
+Example: --input '{"requests":[{"path":"a.txt"},{"path":"b.txt","head":20}],"maxBytes":16384}'
+"#,
+        ),
+        "search" => Some(
+            r#"Usage: safs search --binding ID --query QUERY [--path PATH] [--mode content|files|count]
+Advanced filters use --input JSON: fixedStrings, ignoreCase, contextLines, include,
+and excludeDirs.
+"#,
+        ),
+        "edit" => Some(
+            r#"Usage: safs edit --binding ID --path PATH --input JSON
+Example: --input '{"edits":[{"oldText":"old","newText":"new"}],"expectedHash":"SHA256"}'
+"#,
+        ),
+        "write" => Some(
+            r#"Usage: safs write --binding ID --path PATH --file LOCAL_UTF8_FILE
+Creates or replaces a remote UTF-8 file with the local file content.
+"#,
+        ),
+        "delete" => Some(
+            r#"Usage: safs delete --binding ID --path PATH [--input '{"recursive":true}']
+recursive=true is required for a non-empty directory.
+"#,
+        ),
+        "chmod" => Some(
+            r#"Usage: safs chmod --binding ID --path PATH --mode MODE
+MODE is exactly three octal digits, for example 644 or 755.
+"#,
+        ),
+        "move" => Some(
+            r#"Usage: safs move --binding ID --input JSON
+Example: --input '{"sourcePath":"old","targetPath":"new","overwrite":false}'
+"#,
+        ),
+        "upload" => Some(
+            r#"Usage: safs upload --binding ID --input JSON
+Example: --input '{"localPaths":["/absolute/local/path"],"remoteDirectory":"."}'
+"#,
+        ),
+        "download" => Some(
+            r#"Usage: safs download --binding ID --input JSON
+Example: --input '{"remotePath":"file","localPath":"/absolute/local/target"}'
+"#,
+        ),
+        "exec" => Some(
+            r#"Usage: safs exec --binding ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
+The complete remote command must be passed as one shell argument after --.
+"#,
+        ),
+        "output" => Some(
+            r#"Usage: safs output --binding ID --id ID --stream stdout|stderr [--offset N] [--length N]
+Continues a retained, truncated command stream without rerunning the command.
+"#,
+        ),
+        "batch" => Some(
+            r#"Usage: safs batch --binding ID --input JSON
+Example: --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
+Runs 1 to 50 operations sequentially in one local HTTP request.
+"#,
+        ),
+        _ => None,
+    }
+}
+
+fn requested_help(args: &[String]) -> Option<Option<&str>> {
+    let boundary = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    if !args[..boundary]
+        .iter()
+        .any(|arg| arg == "--help" || arg == "-h")
+    {
+        return None;
+    }
+    let mut skip_value = false;
+    for arg in &args[..boundary] {
+        if skip_value {
+            skip_value = false;
+        } else if arg == "--config" {
+            skip_value = true;
+        } else if !arg.starts_with('-') {
+            return Some(Some(arg));
+        }
+    }
+    Some(None)
+}
 
 fn take_option(args: &mut Vec<String>, name: &str) -> Result<Option<String>, String> {
     if let Some(index) = args.iter().position(|arg| arg == name) {
@@ -142,17 +249,16 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
             values.insert("agentCwd".into(), agent_cwd);
             "safs_get_remote_workspace"
         }
-        "workspaces" | "switch" => {
-            if verb == "switch" {
-                let workspace = values
-                    .remove("workspace")
-                    .ok_or("--workspace is required")?;
-                if values.remove("confirmed") != Some(Value::String("true".into())) {
-                    return Err("--confirmed true is required after user confirmation".into());
-                }
-                values.insert("workspaceId".into(), workspace);
-                values.insert("userConfirmed".into(), Value::Bool(true));
+        "workspaces" => "cli_list_workspaces",
+        "switch" => {
+            let workspace = values
+                .remove("workspace")
+                .ok_or("--workspace is required")?;
+            if values.remove("confirmed") != Some(Value::String("true".into())) {
+                return Err("--confirmed true is required after user confirmation".into());
             }
+            values.insert("workspaceId".into(), workspace);
+            values.insert("userConfirmed".into(), Value::Bool(true));
             "safs_switch_remote_workspace"
         }
         "batch" => {
@@ -283,10 +389,19 @@ fn invoke(config_path: &str, name: String, arguments: Value) -> Result<Value, St
         return Err("SAFS connection must be an authenticated loopback URL".into());
     }
     url.set_path("/cli");
-    let mut response = ureq::post(url.as_str())
+    let timeout = config
+        .get("timeoutMs")
+        .and_then(Value::as_u64)
+        .unwrap_or(120_000);
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global((timeout > 0).then(|| Duration::from_millis(timeout)))
+        .build()
+        .into();
+    let mut response = agent
+        .post(url.as_str())
         .header("content-type", "application/json")
         .send_json(json!({ "name": name, "arguments": arguments }))
-        .map_err(|_| "Cannot connect to the local SAFS router")?;
+        .map_err(|_| "Local SAFS router request failed or timed out")?;
     let envelope: Value = response
         .body_mut()
         .read_json()
@@ -378,8 +493,8 @@ fn concise_error(result: &Value) -> String {
 
 fn run() -> Result<i32, String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print!("{HELP}");
+    if let Some(command) = requested_help(&args) {
+        print!("{}", command.and_then(command_help).unwrap_or(HELP));
         return Ok(0);
     }
     let compact = args.iter().any(|arg| arg == "--compact");
@@ -449,13 +564,102 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn help_guides_agents_through_workspace_binding() {
-        assert!(HELP.contains("Run `safs bind` first"));
-        assert!(HELP.contains("run `safs workspaces`"));
-        assert!(HELP.contains("Never choose for the user"));
-        assert!(HELP.contains("safs switch --workspace ID --confirmed true"));
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).into()).collect()
     }
+
+    #[test]
+    fn routes_global_and_command_help_without_intercepting_remote_arguments() {
+        assert_eq!(requested_help(&strings(&["-h"])), Some(None));
+        assert_eq!(
+            requested_help(&strings(&["edit", "--help"])),
+            Some(Some("edit"))
+        );
+        assert_eq!(
+            requested_help(&strings(&["--config", "file", "upload", "-h"])),
+            Some(Some("upload"))
+        );
+        assert_eq!(requested_help(&strings(&["exec", "--", "--help"])), None);
+        for command in [
+            "bind",
+            "workspaces",
+            "switch",
+            "current-file",
+            "list",
+            "read",
+            "read-many",
+            "search",
+            "edit",
+            "write",
+            "delete",
+            "chmod",
+            "move",
+            "upload",
+            "download",
+            "exec",
+            "output",
+            "batch",
+        ] {
+            assert!(command_help(command).unwrap().starts_with("Usage: safs "));
+        }
+    }
+
+    #[test]
+    fn maps_every_cli_command_to_its_router_operation() {
+        let cases: &[(&[&str], &str)] = &[
+            (&["bind"], "safs_get_remote_workspace"),
+            (&["workspaces"], "cli_list_workspaces"),
+            (
+                &["switch", "--workspace", "w", "--confirmed", "true"],
+                "safs_switch_remote_workspace",
+            ),
+            (&["current-file", "--binding", "b"], "current_remote_file"),
+            (&["list", "--binding", "b"], "remote_list"),
+            (&["read", "--binding", "b"], "remote_read"),
+            (
+                &["read-many", "--binding", "b", "--input", "{}"],
+                "remote_read_many",
+            ),
+            (&["search", "--binding", "b"], "remote_search"),
+            (&["edit", "--binding", "b", "--input", "{}"], "remote_edit"),
+            (
+                &["write", "--binding", "b", "--input", "{}"],
+                "remote_write",
+            ),
+            (&["delete", "--binding", "b"], "remote_delete"),
+            (&["chmod", "--binding", "b"], "remote_chmod"),
+            (&["move", "--binding", "b", "--input", "{}"], "remote_move"),
+            (
+                &["upload", "--binding", "b", "--input", "{}"],
+                "remote_upload",
+            ),
+            (
+                &["download", "--binding", "b", "--input", "{}"],
+                "remote_download",
+            ),
+            (
+                &[
+                    "output",
+                    "--binding",
+                    "b",
+                    "--id",
+                    "o",
+                    "--stream",
+                    "stdout",
+                ],
+                "remote_output",
+            ),
+            (
+                &["exec", "--binding", "b", "--", "pwd"],
+                "run_remote_command",
+            ),
+        ];
+        for (arguments, expected) in cases {
+            let (actual, _) = request(strings(arguments), "/cwd".into()).unwrap();
+            assert_eq!(&actual, expected, "arguments: {arguments:?}");
+        }
+    }
+
     #[test]
     fn parses_structured_and_exact_command_arguments() {
         let (name, args) = request(

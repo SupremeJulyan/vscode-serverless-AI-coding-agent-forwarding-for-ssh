@@ -4,16 +4,18 @@ import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 
 export function cliConfigPath(storageRoot: string) { return path.join(storageRoot, 'cli-connection.json'); }
 
-export async function writeCliConnection(storageRoot: string, url: string) {
+export async function writeCliConnection(storageRoot: string, url: string, timeoutMs = 120_000) {
   await mkdir(storageRoot, { recursive: true });
-  await writeCliConnectionFile(cliConfigPath(storageRoot), url);
+  await writeCliConnectionFile(cliConfigPath(storageRoot), url, timeoutMs);
 }
 
-export async function writeCliConnectionFile(target: string, url: string) {
+export async function writeCliConnectionFile(target: string, url: string, timeoutMs = 120_000) {
   await mkdir(path.dirname(target), { recursive: true });
   const temporary = `${target}.${randomBytes(8).toString('hex')}.tmp`;
   try {
-    await writeFile(temporary, JSON.stringify({ version: 1, url }) + '\n', { mode: 0o600, flag: 'wx' });
+    await writeFile(temporary, JSON.stringify({ version: 1, url, timeoutMs }) + '\n', {
+      mode: 0o600, flag: 'wx'
+    });
     await rename(temporary, target);
   } finally { await unlink(temporary).catch(() => {}); }
 }

@@ -259,8 +259,9 @@ user-scoped `safs` MCP configuration by itself.
   Quick Pick, focused-window fallback, home-cwd special case, or single-candidate guess is used.
 - When the user asks to list or switch SAFS workspaces, hosts, or configurations,
   the Agent calls `safs_switch_remote_workspace` to retrieve every active candidate;
-  the get tool no longer decides whether a request is a switch. A successful switch
-  invalidates that Agent session's older bindings.
+  the get tool no longer decides whether a request is a switch. After a successful
+  switch, the Agent discards its old binding and stops the old task; the Router does
+  not invalidate bindings owned by other Agent conversations on the same platform.
 - Each window's dynamic-port service can only access its own mount and cannot
   reach other mounts through request parameters.
 
@@ -309,12 +310,6 @@ overrides the derived result.
     "user": "alice",
     "port": 22,
     "private_key_path": "~/.ssh/id_ed25519"
-  }],
-  "mounts": [{
-    "name": "project",
-    "host": "dev",
-    "remote_path": "/srv/project",
-    "remote_terminal": "open"
   }]
 }
 ```
@@ -576,7 +571,9 @@ safs --compact batch --binding ID --input '{"operations":[{"command":"read","arg
 ```
 
 Replace ID using the bind response. Initial binding follows existing MCP rules;
-ambiguous candidates still require user confirmation through the MCP switch flow.
+an unmatched cwd uses the uniquely focused SAFS window, while ambiguous candidates
+still require user confirmation through the MCP switch flow. `workspaces` returns
+the active candidates as a normal successful result.
 Execution requires an explicit binding and never rebinds on failure. Remote stdout,
 stderr and exit codes are preserved; continuation metadata goes to stderr.
 `current-file` returns the remote file open in the bound VS Code window, including
@@ -588,6 +585,8 @@ to reduce output tokens. Errors show only a code and concise message by default;
 add `--verbose` for the complete structured error. `batch` executes 1–50 operations
 sequentially through one local HTTP request with a shared `--binding`; every item
 still reports its own success or failure.
+The local CLI HTTP timeout is five seconds longer than `safs.agentMcpTimeoutMs` so
+the Router can return its timeout result; setting it to `0` disables both limits.
 
 ### Structured CLI commands
 

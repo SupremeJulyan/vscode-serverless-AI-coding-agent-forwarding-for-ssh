@@ -12,14 +12,17 @@ import {
 
 const routerIdentity = 'safs-http-router-v1';
 const cliToolNames = new Set([
-  'safs_get_remote_workspace', 'safs_switch_remote_workspace',
+  'safs_get_remote_workspace', 'cli_list_workspaces', 'safs_switch_remote_workspace',
   'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many', 'remote_search',
   'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move',
   'remote_upload', 'remote_download', 'remote_output', 'run_remote_command',
   'safs_cli_batch'
 ]);
 const cliBatchToolNames = new Set([...cliToolNames].filter((name) =>
-  !['safs_get_remote_workspace', 'safs_switch_remote_workspace', 'safs_cli_batch'].includes(name)
+  ![
+    'safs_get_remote_workspace', 'cli_list_workspaces',
+    'safs_switch_remote_workspace', 'safs_cli_batch'
+  ].includes(name)
 ));
 
 export function unwrapCliToolResult(value: any, allowNull = false): Record<string, unknown> {
@@ -223,6 +226,13 @@ export class AgentHttpRouter {
     name: string, input: Record<string, unknown>, agentName?: string,
     agentPlatform?: AgentPlatformLabel
   ): Promise<any> {
+    if (name === 'cli_list_workspaces') {
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify({
+          workspaces: this.workspaces().map((workspace) => this.selectableWorkspace(workspace))
+        }) }]
+      };
+    }
     if (name === 'safs_get_remote_workspace' || name === 'safs_switch_remote_workspace') {
       const workspaces = this.workspaces();
       if (!workspaces.length) {
@@ -290,11 +300,6 @@ export class AgentHttpRouter {
       }
       const selectedWorkspace = workspace!;
       const owner = this.bindingKey(agentName, agentPlatform);
-      if (switching) {
-        for (const [existingId, existing] of this.bindings) {
-          if (existing.owner === owner) this.bindings.delete(existingId);
-        }
-      }
       const bindingId = randomUUID().replace(/-/g, '').slice(0, 16);
       this.bindings.set(bindingId, {
         instanceId: selectedWorkspace.instanceId,
