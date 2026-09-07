@@ -1,248 +1,31 @@
 # SAFS
 
-**S**erverless **A**gent **F**orwarding for **SSH**
+**S**erverless **A**gent **F**orwarding for **S**SH
 
 [简体中文](README.md) | [English](README_EN.md)
 
-通过 SFTP 在 VS Code 中直接浏览和编辑远程文件，并通过 SSH 打开远程终端，
-无需在服务器安装 VS Code Server。开启 Agent 转发后，VS Code Agent 与
-桌面版 Agent（Codex、Claude Code 等）可通过 MCP 直接读写、搜索远程文件，
-并通过 SSH 执行远程命令。适用于内网环境、禁止端口转发的远程服务器。
+SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SSH 使用远程终端；服务器无需安装 VS Code Server。启用 Agent 转发后，Copilot、Codex、Claude Code 等 Agent 也能在当前远程工作区读写文件、搜索代码和执行命令。
 
-## 功能
+![SAFS 完整界面](插件完整效果实体图.png)
 
-- 使用 `safs://` 虚拟工作区直接显示远程目录。
-- 浏览、打开、保存、新建、重命名和删除远程文件及目录。
-- 密码或私钥认证；配置密码可通过主口令加密。
-- SFTP 连接池、断线重试、元数据缓存和远程文件轮询。
-- 从当前远程文件或工作区打开相同目录下的 SSH 终端。
-- 每个远程配置记住最后切换的目录，重新打开时恢复工作区和终端目录。
-- 远程目录侧栏按配置显示：连接状态，行内按钮可
-  **打开远程目录 / 打开终端 / 启用（关闭）Agent 转发 / 删除配置**；
-  配置可展开查看**最近打开的远程目录历史**（每个配置最多 10 条），
-  每条历史可直接重新打开、打开终端、开启（关闭）本地双向同步或删除记录。
-- 侧栏中 `👁` 表示该配置是**当前聚焦窗口**所绑定的挂载（默认 MCP 路由目标）；
-  配置名称旁显示 `Agent State: ` 前缀加一个符号：`👁`（聚焦窗口）>
-  `⚡`（转发中）> `○`（已启用未转发），优先级依次降低；
-  Agent 转发与 MCP 绑定的完整状态（关闭 / 已启用未转发 / 转发中）在
-  **鼠标悬浮提示**中显示。
-- GitHub Copilot Language Model Tools 和本机 MCP 服务可直接列出、读取、写入、
-  搜索远程文件，并通过 SSH 执行远程命令。
-- 右键远程文件/目录 **SAFS：可视化下载**：大文件**流式下载**（进度条、可取消），
-  目录递归下载。
-- 右键远程文件/目录 **SAFS：可视化同步**：建立本地 ↔ 远程**双向自动同步**任务，
-  把远程目录镜像成真实的本地 `file://` 工作区，绕开 `safs://` 虚拟工作区的
-  局限——本地命令行程序访问不了虚拟文件、只支持 `file://` 工作区的第三方扩展
-  无法使用；同步后可用完整本机工具链（Git、构建、语言服务器等）编辑，改动
-  双向自动同步（增量、重载续传）；首次基线下载复用可视化下载体验（扫描、
-  当前文件、进度、可取消），同一任务以跨窗口文件锁避免多个 VS Code 窗口并发
-  同步；同步就绪状态跨窗口共享，历史记录“打开”直接进入本地镜像，并完整保留
-  远程上下文。
-- 底部状态栏常驻 `SAFS SFTP` 传输入口与 `SAFS SYNC` 同步入口；Agent 转发焦点
-  提示独立成项：就绪时显示 `Agent 已聚焦当前窗口😏`，识别来源后如
-  `codex（wsl）远程转发中💪`。服务器未提供 SFTP 子系统而回退 SCP/exec 时，
-  传输入口相应显示为 `SAFS SCP`。
-- 右键本地文件/文件夹 **SAFS：可视化上传**：**流式上传**到远程（无需打开远程
-  目录，两步选择挂载与目标目录），目录递归上传。
+## 适用场景
 
-## 使用
+- 服务器不能或不方便安装 VS Code Server。
+- 内网、VPN、跳板机或禁止端口转发的环境。
+- 希望 Agent 操作远程代码，但不想在服务器安装 Agent 服务。
+- 需要将远程目录同步到本地，继续使用 Git、语言服务器、构建和调试工具。
 
-### 安装
+## 快速开始
 
-```sh
-code --install-extension safs-serverless-agent-forwarding-1.7.6.vsix
-```
+### 1. 添加 SSH 配置
 
-### 添加 SSH 配置并打开远程目录
+1. 安装并启用 SAFS 扩展。
+2. 点击左侧活动栏的 **SAFS** 图标。
+3. 点击远程目录视图右上角的 **＋**，或运行 `SAFS: 添加 SSH 配置`。
+4. 填写配置名称、`user@host`、端口，并选择密码或私钥认证。
+5. 首次连接时核对并确认服务器主机密钥指纹。
 
-1. 运行 `SAFS: 添加 SSH 配置`。
-2. 输入配置名称、`user@host`，并选择密码或私钥认证。
-3. 运行 `SAFS: 打开远程目录`，选择刚添加的配置；也可以在左侧活动栏的
-   SAFS 视图（远程目录）中点击连接项上的“打开远程目录”按钮。
-4. 远程目录以 `safs://` 虚拟工作区打开，直接在资源管理器中编辑远程文件。
-5. 使用 `SAFS: 断开 SFTP 连接` 关闭连接；点击连接项上的“删除配置”按钮会先断开
-   已连接的 SFTP 再删除配置。
-
-### 打开远程终端
-
-远程终端通过 SSH 建立，不需要在服务器安装 VS Code Server。
-
-- 在命令面板运行 `SAFS: 打开远程终端`。
-- 或在 SAFS 视图的远程目录连接项上点击“打开远程终端”按钮。
-- 终端会在当前远程目录打开：有打开的远程文件时使用其所在目录，否则使用
-  挂载根目录（或上次记住的目录）。终端名称形如 `SSH: <配置名> — <相对路径>`。
-- 普通密码直连在所有平台使用内置 ssh2，主机密钥由实际终端连接确认；WSL VPN、
-  私钥以及内置 shell 不兼容时使用系统 SSH。
-- 系统 SSH 终端退出时，扩展会把退出码和捕获到的 stderr 写入输出面板的
-  **SAFS Log**；即使错误只在终端短暂出现，也可在日志中追溯。异常退出遗留的
-  诊断会在下次激活插件时恢复。
-- 插件创建的远程终端支持 `Ctrl+点击`（macOS 为 `Cmd+点击`）文件路径，可识别
-  绝对路径、相对路径和 `文件:行:列` 并直接打开远程文件。文件可以位于当前资源
-  管理器目录之外，但必须仍在该配置的挂载根目录内；超出范围时会提示添加 SSH
-  配置，不会绕过挂载边界或符号链接校验。若 `ls 子目录` 等命令只输出文件名，
-  直接路径不存在时会在当前远程工作区内受限搜索：唯一结果直接打开，多项结果
-  由用户选择。内置 ssh2 终端会自动探测 Bash、Zsh、Fish，并通过独立的会话级
-  Shell Integration 上报 `$PWD` 和完整的命令生命周期，因此执行 `cd` 后相对路径会
-  立即按新目录打开，并启用 VS Code 的命令成功/失败标记、命令导航、输出范围、
-  Sticky Scroll、最近命令和终端 Quick Fix。若 Bash 已安装无法安全串接的第三方
-  DEBUG trap，则自动降级为仅上报 cwd，不干扰用户现有 hook。
-  它不修改 `.bashrc`、`.zshrc` 或 Fish 配置；Bash/Fish 只使用会话文件描述符，
-  Zsh 的私有临时启动目录会在用户配置加载后立即删除。
-- 配置 `remote_terminal: "open"` 时，打开远程目录后会自动连接终端。
-- 开启本地同步后打开的是本地镜像工作区：仍会按原 `remote_terminal` 设置自动
-  连接原远程目录的终端；`safs.terminalFollowsActiveFile` 对镜像中的本地文件
-  同样生效——先把相对路径映射回远程目录再 `cd`。镜像窗口完整保留远程上下文：
-  终端重连、远程目录操作、Agent/MCP 绑定、“当前远程文件”与相对路径命令都会
-  映射回对应的远程位置。
-
-### 打开远程目录
-
-- 在命令面板运行 `SAFS: 打开远程目录`。
-- 输入挂载根目录内的路径，或从补全列表选择候选目录后回车，会在**新窗口**中打开
-  该目录（只能打开挂载根目录内真实存在的目录）；**当前窗口保持不变**，两个窗口
-  各自的 Agent 转发/MCP 独立绑定各自目录。
-- 运行 `SAFS: 切换远程目录` 则在**当前窗口**内切换到目标目录（工作区与
-  终端一起切换）。
-- 每个远程配置会记住最后切换的目录；重新打开远程目录时，工作区和终端
-  都会恢复到该目录。
-- SAFS 视图（远程目录）中的配置项可展开，显示该配置**最近打开的远程目录
-  历史**（最多 10 条，最新在前）：每条历史有“打开历史目录 / 从历史打开终端 /
-  开启本地同步 / 删除历史记录”按钮（已开启同步时变为“关闭本地同步”，此时
-  “打开历史目录”直接进入本地镜像工作区）；再次打开或切换目录会把该记录移到最前。
-
-### 快捷键
-
-| 功能 | Windows | Linux | macOS |
-|---|---|---|---|
-| 打开远程目录 | `Ctrl+Alt+R` | `Ctrl+Alt+O` | `Cmd+Ctrl+R` |
-| 打开远程终端 | `Ctrl+Alt+T` | `Ctrl+Alt+X` | `Cmd+Ctrl+T` |
-
-### 可视化下载 / 上传 / 同步
-
-- **SAFS：可视化下载**：在远程文件/目录上右键选择——大文件**流式下载**（边下
-  边写、进度条、可取消），目录递归下载到所选位置。
-- **SAFS：可视化上传**：在**本地**文件/文件夹上右键选择（任意窗口可见，无需
-  打开远程目录）——先选远程挂载，再输入远程目标目录（Tab 补全），**流式上传**
-  + 进度条 + 可取消，目录递归上传。
-- **SAFS：可视化同步**（原"同步…"）：在远程文件/目录上右键选择——选择本地
-  目标目录后建立**双向自动同步**（远程 ↔ 本地），增量同步并持久化，重载窗口后
-  继续。它解决的是 `safs://` 虚拟工作区“看得见改不了”的问题：本地命令行程序
-  和只支持本地工作区的扩展都无法作用于虚拟文件，而同步镜像是一个真实的本地
-  目录，Git、构建工具、语言服务器、调试器等本机工具链全部可用，保存后自动
-  上传远程，远程改动自动拉回。首次基线下载复用可视化下载体验：显示扫描、当前
-  文件、文件数、累计字节和百分比，支持取消；使用唯一临时文件名避免并发基线
-  冲突，本地 watcher 忽略 `.safs-part` 下载临时文件。同一同步任务以跨
-  Extension Host 文件锁协调，多个 VS Code 窗口不会同时下载、监听或反向上传。
-
-### 启用 Agent 转发
-
-默认使用稳定的 **MCP 模式**（`safs.agentInterface: "mcp"`）。启用转发时，扩展为检测到的
-Agent 注册 SAFS MCP。重载 VS Code 窗口并重启 Agent 后，新工具列表才会生效。
-
-CLI 是实验性可选入口；仅当 VSIX 包含 Agent 所在平台的原生程序时，才可设置
-`safs.agentInterface: "cli"`。扩展把它安装为用户级全局 `safs` 命令，不写入
-`AGENTS.md`、`CLAUDE.md` 或远程项目，也不要求 Node.js。CLI 模式不向 Agent 注册
-MCP 工具，因此无需在每次对话中加载 MCP 工具定义，理论上可以降低 Token 消耗；
-实际节省量取决于 Agent 如何发现和调用命令。切换到 CLI 模式时，扩展会自动卸载
-此前由 SAFS 自动安装的 `safs` MCP 服务；通过提示词或手动粘贴 URL 安装的 MCP
-不在自动清理范围内，需要运行 `SAFS: 为我的Agent卸载转发功能` 完成卸载。
-安装后重启 Agent，在对话中输入 `safs bind`。Agent 会根据当前 cwd 的占位符自动
-绑定远程工作区；cwd 不匹配时会使用唯一的聚焦 SAFS 窗口，否则列出所有工作区
-供用户选择。
-多窗口应使用相同模式，切换模式后重载窗口并重启 Agent。
-
-**以下步骤适用于默认的 MCP 模式。**
-
-Agent 可以是 VS Code 扩展（Copilot Chat、Codex 等），也可以是桌面 App
-（Codex CLI、Claude Code 等），但必须和运行 SAFS 的 VS Code 处于同一个
-操作系统平台：MCP 地址是仅回环可访问的 `127.0.0.1`，跨机器或跨系统无法
-连接。
-
-1. 先在 SAFS 视图的远程目录连接项上点击“启用 Agent 转发”按钮（配置行内
-   第一个按钮）。扩展会为检测到的 Agent CLI（默认 `codex`、`claude`、
-   `pi` 和 `dsh`，可用 `safs.agentForwardingAgents` 扩展）安装或更新名为
-   `safs` 的固定 HTTP MCP。
-2. 验证注册：打开 Agent 并输入 `/mcp`（或打开其 MCP 管理界面），看到
-   `safs` 条目即表示 MCP 注册成功。Agent 若是 VS Code 扩展，直接在新窗口的
-   Agent 会话中确认即可。
-3. 再运行 `SAFS: 打开远程目录` 进入远程目录（或点击连接项上的“打开远程
-   文件夹”按钮，即配置行内第二个按钮）。打开前扩展会先启动固定 HTTP 路由
-   并注册 Agent；新窗口会
-   启动该窗口的动态端口服务。对于已确认的 SAFS 远程任务，Agent 首次调用
-   `safs_get_remote_workspace` 并传入当前 cwd；Router 将空占位 cwd 精确映射到
-   该窗口的 `instanceId` 并自动绑定，之后工具调用沿用该绑定。
-4. 重启 Agent 并新建对话（首次安装、更新或移除 MCP 后都需要）。
-5. 之后 Agent 可直接使用远程工具：VS Code Agent 的 `#safsList`、
-   `#safsWrite`、`#safsSearch`、`#safsRun`，或 MCP 工具
-   `safs_get_remote_workspace`、`remote_list`、
-   `remote_read`、`remote_edit`、`remote_write`、`remote_delete`、`remote_chmod`、`remote_move`、
-   `remote_upload`、`remote_download`、
-   `remote_search`、`run_remote_command`，
-   以及 `current_remote_file`（查看当前打开的远程文件路径与元数据）。
-6. 关闭转发：点击连接项上的“关闭 Agent 转发”。只有最后一个启用挂载也被
-   关闭后，扩展才会执行 `mcp remove`。
-
-#### 其他安装方式
-
-除了上面的自动注册，还可以这样安装名为 `safs` 的 MCP：
-
-- 命令面板运行 `SAFS: 为我的Agent安装转发功能`：输入 Agent 名并选择平台后，
-  剪贴板得到一段**安装提示词**——把它粘贴到 Agent 输入框，由 Agent 自行把
-  名为 `safs` 的 Streamable HTTP MCP 注册为用户级配置。
-- 在 Agent 的 MCP 管理界面手动添加 `SAFS: 复制 Streamable HTTP URL`
-  生成的地址（见下文「统一 Agent MCP」）。
-
-手动（提示词或手动粘贴 URL）安装的 MCP **不在**自动清理范围内：切换到 CLI
-界面、关闭所有转发时只清理自动配置的 `safs` MCP。如需卸载某个手动安装的
-Agent，运行 `SAFS: 为我的Agent卸载转发功能`：输入 Agent 名并选择平台后，
-剪贴板得到一段**卸载提示词**——把它粘贴到 Agent 输入框，由 Agent 自行删除
-名为 `safs` 的用户级 MCP 配置。
-
-#### 多个远程窗口
-
-- 同时打开多个远程窗口时，所有窗口共用同一个固定 HTTP MCP 入口；窗口之间
-  通过固定端口选举一个 Router Leader，Leader 关闭后其他窗口自动接管。
-- Agent 首次调用 `safs_get_remote_workspace` 时传入自己的当前 cwd；Router 只在它
-  与某个窗口发布的空占位 cwd 精确匹配，或 cwd 不匹配但恰好一个 SAFS 窗口处于焦点时
-  自动绑定，并把 `bindingId` 固定到该窗口的
-  `instanceId`。窗口关闭后绑定失效，绝不改投剩余窗口。
-- cwd 无法精确匹配或匹配不唯一时，get 工具返回带 `workspaceId` 的候选；Agent 在自身
-  对话中询问用户，收到明确回复后再用所选 `workspaceId` 和 `userConfirmed: true`
-  调用 `safs_switch_remote_workspace`；选择成功后停止旧任务并等待新请求。不会打开 VS Code Quick Pick，
-  也不会按焦点窗口、`~/` 或唯一候选猜测目标。
-- 用户要求列出、切换 SAFS 工作区/主机/配置时，Agent 调用
-  `safs_switch_remote_workspace` 获取全部活动候选；get 工具不再判断切换。
-  切换成功后 Agent 应丢弃自己的旧 binding 并停止旧任务；Router 不会注销同平台
-  其他 Agent 会话的 binding。
-- 每个窗口的动态端口服务只能访问自己绑定的挂载，不能通过请求参数跨窗口
-  访问其他挂载。
-
-#### 确认 Agent 会话绑定哪个远程
-
-- 仅当用户明确要求操作 SAFS，或上下文已表明当前是 `safs://` 虚拟工作区时，
-  调用 `safs_get_remote_workspace` 并传入 Agent 当前工作目录 `agentCwd`；普通本地
-  工作区不要调用 SAFS 工具。精确匹配时自动绑定；否则由用户在 Agent 对话中从返回的
-  候选选择 `workspaceId`，确认后调用 `safs_switch_remote_workspace` 并传入
-  `userConfirmed: true`。后续远程工具必须携带
-  返回的 `bindingId`。
-- `workspaceRoot` 是该 VS Code 窗口当前实际打开的远程目录，不是
-  SFTP 配置的挂载根。`remote_list`、`remote_read`、`remote_search` 的相对路径以及
-  `run_remote_command` 的默认工作目录都以它为基准。
-- `remote_edit` 用唯一精确匹配原子修改现有 UTF-8 文件，`remote_write` 用于新建或
-  完整替换文件；两者只能在 `workspaceRoot` 及其子目录内写入文件。只读的
-  `remote_list`、`remote_read`、`remote_search` 仍可用绝对路径查看其他位置。
-- **当前打开的远程文件**：调用 `current_remote_file` 获取 VS Code 中当前
-  打开的远程文件（路径、相对挂载根的路径、大小、是否有未保存修改）。需要查看内容时
-  使用有 64 KB 分块上限的 `remote_read`；二进制、大文件或目录使用
-  `remote_download`。用户说"这个远程文件内容是什么"时，先用
-  `current_remote_file` 拿到路径，再调用 `remote_read`。
-- 尚未选择、绑定失效或 Router Leader 接管后，工作区工具会要求重新选择，绝不
-  静默回退到其他窗口。
-- VS Code 侧可运行 `SAFS: 显示状态` 在输出面板查看各挂载的连接状态。
-
-## 配置
-
-所有平台统一使用 `~/.safs/config.json`，这里推荐使用SAFS图标里的加号交互式配置。
+配置保存在 `~/.safs/config.json`。一般使用界面添加即可；需要手动维护时，可运行 `SAFS: 打开配置`：
 
 ```json
 {
@@ -259,230 +42,116 @@ Agent，运行 `SAFS: 为我的Agent卸载转发功能`：输入 Agent 名并选
 }
 ```
 
-## Agent 工具
+### 2. 打开并编辑远程目录
 
-VS Code Agent 可使用：
+在 SAFS 视图中点击连接项旁的 **打开远程目录**，或运行 `SAFS: 打开远程目录`。选择目录后，SAFS 会在新窗口中打开 `safs://` 虚拟工作区。
 
-- `#safsList`
-- `#safsWrite`
-- `#safsSearch`
-- `#safsRun`
-- `#safsCurrentRemoteFile`（当前打开的远程文件路径与元数据）
+之后可以像编辑本地项目一样浏览、打开、保存、新建、重命名和删除文件。SAFS 会记住每个连接最近打开的目录；展开连接项即可从历史记录重新打开。
 
-扩展还在 `127.0.0.1` 上提供令牌保护的 Streamable HTTP MCP 服务，工具包括
-`safs_get_remote_workspace`、`remote_list`、`remote_read`、`remote_edit`、`remote_write`、
-`remote_delete`、`remote_chmod`、`remote_move`、
-`remote_upload`、`remote_download`、`remote_search`、`run_remote_command` 和
-`current_remote_file`。`remote_upload` / `remote_download` 的本地与远程路径均由
-Agent 通过参数指定，不弹路径选择框；VS Code 只显示传输进度和取消入口。两者支持目录
-递归传输，文件字节不经过 Agent 上下文。上传源和下载目标必须位于当前 SAFS 窗口自动
-创建的 Agent cwd 暂存目录内，不增加额外配置；扩展会校验真实路径或最近已存在父目录，
-阻止符号链接逃逸。
-删除、权限修改和移动分别使用 `remote_delete`、`remote_chmod`、`remote_move`；三者在
-SFTP 操作前验证真实路径及父目录均位于当前工作区，避免依赖 Shell 变量解析。
+| 操作 | 方式 |
+|---|---|
+| 在新窗口打开远程目录 | `SAFS: 打开远程目录` |
+| 在当前窗口更换目录 | `SAFS: 切换远程目录` |
+| 打开 SSH 终端 | `SAFS: 打开远程终端` |
+| 查看连接状态 | `SAFS: 显示状态` |
+| 断开连接 | `SAFS: 断开 SFTP 连接` |
 
-Agent 仅在 SAFS 远程任务中绑定当前 SFTP 虚拟工作区；
-普通本地工作区不调用 SAFS 工具。
-开启转发并选择工作区后，文件工具通过返回的 `bindingId` 绑定当前工作区。所有远程文件访问
-都通过 SFTP 工具完成，构建、测试、Git 和系统检查通过 SSH 远程命令完成；结构化修改
-和传输目标被限制在当前工作区内。UTF-8 文本通过最多 64 KB 的
-`remote_read` 分块读取；二进制、大文件和目录通过 `remote_download` 传输。Agent 路由和
-使用约束由固定 MCP 服务统一管理，扩展
-不会在远端创建或读取 Agent 指引文件。
+远程终端默认在当前文件所在目录打开；没有活动文件时使用工作区根目录。终端中的文件路径支持 `Ctrl+点击`（macOS 为 `Cmd+点击`）直接打开。
 
-`run_remote_command` 不再对 Shell 命令弹出逐次确认。命中高风险规则的命令按配置
-直接拒绝或放行，普通命令直接执行；普通文件创建或覆盖仍建议使用受当前工作区边界
-保护的 `remote_edit` 或 `remote_write`。命令工具不是文件系统沙箱，获准执行后拥有 SSH 登录账号的全部
-权限；强隔离应使用非 root 最小权限账号并禁用免密提权，必要时再在远端使用容器、chroot
-或受限执行账号。`remote_list`、`remote_read` 和 `remote_search` 保持可读取工作区外的
-绝对路径，便于排查系统环境，但不会因此扩大结构化写工具的边界。
+### 3. 让 Agent 操作远程工作区
 
-工具结果默认采用有预算的预览：目录每页 100 项并提供校验游标；文本读取默认
-8 KiB，支持行范围、头尾选择及批量预算；搜索保留原始匹配行与退出状态。
-命令和搜索默认展示 8 KiB，并支持 `remote_output` 续取保留结果。
-完整性、缓存容量及有效期说明见 [性能说明](PERFORMANCE.md)。
+默认使用 MCP 模式：
 
-### 统一 Agent MCP（Codex / Claude Code）
+1. 在 SAFS 视图中点击连接项旁的 **启用 Agent 转发**。
+2. 打开该连接的远程目录。
+3. 重启 Agent 并新建对话。首次安装、更新或移除 MCP 后必须重启。
+4. 在 Agent 中输入 `/mcp` 或打开 MCP 管理界面，确认存在 `safs` 服务。
+5. 告诉 Agent：`使用 safs mcp 检查当前远程项目并运行测试`。
 
-每个开启 Agent 转发的远程 VS Code 窗口会启动独立的动态端口 MCP。扩展为 Codex 和
-Claude Code 注册同一个由扩展进程托管的固定 Streamable HTTP MCP 路由器，并在每次工具
-调用时找到目标窗口的最新动态端口。Agent 不再启动 STDIO 路由子进程，因此不会继承
-`safs` 虚拟工作区 cwd。`safs_get_remote_workspace` 将 Agent 当前 cwd 与窗口发布的
-空占位 cwd 精确匹配，并把绑定固定到该窗口 `instanceId`。不匹配时只返回候选，不使用
-VS Code Quick Pick、焦点窗口或唯一候选兜底。窗口服务只能访问其绑定挂载。
+SAFS 默认检测 `codex`、`claude`、`pi` 和 `dsh`。其他 Agent 可运行 `SAFS: 为我的Agent安装转发功能`，再把生成的提示词粘贴给 Agent；也可运行 `SAFS: 复制 Streamable HTTP URL`，在 Agent 的 MCP 管理界面手动添加名为 `safs` 的 Streamable HTTP 服务。
 
-某些 Agent 扩展仍会把虚拟 URI 的 POSIX 路径当成本机 cwd 并在启动时调用
-`lstat` 或创建 Git watcher。开启 Agent 转发时，扩展会在用户级扩展存储中创建空的
-占位目录，并在第一个不存在的本机路径段建立 Windows Junction 或 Linux/macOS
-目录符号链接。该目录不包含或同步远程文件，只用于让 Agent 完成本机启动。扩展不会
-覆盖已存在的本机路径；如果父目录权限不允许创建链接，会在输出面板中报告。
+> MCP 地址只监听 `127.0.0.1`。Agent 与运行 SAFS 的 VS Code 必须位于同一操作系统环境。VS Code 在 Windows、Agent 在 WSL 时，将 `safs.agentPlatform` 设为 `wsl`。
 
-窗口发现、目标选择、动态端口路由、断线判断、挂载校验和远程工具说明全部由扩展内置的
-HTTP 路由器完成，不安装 Codex 插件、Skill 或 hooks。多个 VS Code 窗口通过固定端口选出
-一个 Router Leader；Leader 关闭后，其他窗口会自动接管。MCP instructions
-会要求 Agent 对 `safs` 工作区只使用远程
-工具；由于 MCP 无法拦截客户端自身的本地工具，该约束依赖 Agent 遵循工具说明。
+启用后，Agent 可以：
 
-“启用 Agent 转发”会先为检测到的 Codex 和 Claude Code 安装或更新名为
-`safs` 的固定 HTTP MCP；如果当前已打开该远程目录，还会立即启动该窗口的
-动态端口 MCP 服务。关闭某个挂载的 Agent 转发会停止该窗口服务；只有最后一个已启用挂载
-也被关闭后，扩展才会执行 `mcp remove`。首次安装、更新或移除 MCP 后请重启 Agent 并
-新建对话。
+- 列出、读取、搜索、创建和精确修改远程文件；
+- 移动、删除、修改权限以及上传或下载文件；
+- 在当前远程目录执行命令并分段读取长输出；
+- 获取 VS Code 当前打开的远程文件；
+- 在多个 SAFS 窗口之间明确选择目标工作区。
 
-扩展会生成鉴权令牌并自动执行等价于以下形式的配置：
+关闭时点击 **关闭 Agent 转发**。如果 MCP 是通过提示词或 URL 手动安装的，请运行 `SAFS: 为我的Agent卸载转发功能`。
 
-```sh
-codex mcp add safs --url 'http://127.0.0.1:9848/mcp?token=<generated-token>&agent=codex&platform=wsl'
-claude mcp add --transport http --scope user safs 'http://127.0.0.1:9848/mcp?token=<generated-token>&agent=claude&platform=wsl'
-```
+#### CLI 模式
 
-如果未安装 Agent CLI，可在 VS Code 命令面板执行
-**SAFS: 复制 Streamable HTTP URL**，在输入框中填写 Agent 名并选择
-`wsl`/`mac`/`linux`/`win` 平台，然后在桌面版
-**Settings > MCP servers** 中添加名为 `safs` 的
-**Streamable HTTP** 服务器并粘贴该地址。地址包含鉴权令牌，不要共享或
-提交到仓库。URL 中的 `agent`/`platform` 参数仅用于状态栏、
-路由输出和命令日志，
-可记录自动配置列表之外的 Agent，但不是安全身份认证。
+将 `safs.agentInterface` 设为 `cli` 后，扩展会安装全局 `safs` 命令。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。此模式要求 VSIX 包含 Agent 所在平台的原生程序；一般保持默认的 `mcp` 即可，但如果有极致token少量消耗需求，还是手动在设置里切换为cil，因为此模式不安装mcp 工具，理论token消耗更少。
 
-安装后重启 Agent 并新建对话。VS Code 扩展必须保持运行，并为相应挂载开启“Agent 转发”。断开 SFTP
-不会关闭 Agent 转发偏好，重连相同挂载后 MCP 会发现新端口。如果同时打开多个远程窗口，
-通过 `safs_get_remote_workspace` 的 `agentCwd` 自动绑定，或用返回候选的 `workspaceId`
-显式选择或切换目标窗口。设置
-`safs.agentMcpPort` 应保持为默认值 `0`；固定入口端口由
-`safs.agentHttpRouterPort` 控制，默认是 `9848`。如果该端口被其他程序占用，
-扩展会拒绝连接并提示更换端口，不会误连到未知服务。
+## 文件传输与本地同步
+
+在资源管理器中右键文件或目录：
+
+- **SAFS：可视化下载**：将远程文件或目录下载到本地，支持递归、进度显示和取消。
+- **SAFS：可视化上传**：将本地文件或目录上传到选定连接，无需先打开远程工作区。
+- **SAFS：可视化同步**：为远程目录建立本地镜像，并持续进行本地 ↔ 远程双向增量同步。
+
+如果命令行工具或 VS Code 扩展不支持 `safs://`，请选择双向同步。同步后的工作区是真实的本地 `file://` 目录，可正常使用 Git、语言服务器、构建和调试工具；本地保存会自动上传，远程变化也会自动拉取。
+
+首次同步会显示扫描与下载进度，并可取消。任务会在窗口重载后恢复，也会用文件锁避免多个 VS Code 窗口同时处理同一任务。
+
+## 常用设置
+
+在 VS Code 设置中搜索 `SAFS`：
+
+| 设置 | 默认值 | 用途 |
+|---|---:|---|
+| `safs.terminalFollowsActiveFile` | `false` | 切换文件时，让已打开的远程终端自动 `cd` 到对应目录 |
+| `safs.terminalAutoReconnect` | `true` | 远程终端意外结束后自动重连 |
+| `safs.agentPlatform` | `auto` | Agent 在 WSL 中运行时改为 `wsl` |
+| `safs.agentMcpToolProfile` | `full` | 改为 `core` 可减少 Agent 工具定义的上下文开销 |
+| `safs.agentMcpTimeoutMs` | `120000` | Agent 命令、搜索和传输的超时；`0` 表示关闭 |
+| `safs.sftp.watchInterval` | `5` | 轮询远程文件变化的间隔（秒） |
+| `safs.hostKeyChangedAction` | `prompt` | 主机密钥变化时询问、拒绝或接受 |
+| `safs.highRiskCommandAction` | `deny` | Agent 命中高风险命令规则时拒绝或放行 |
+
+更多高级选项及说明可直接查看 VS Code 的 SAFS 设置页。
+
+## 工作原理
+
+SAFS 在本地 VS Code 扩展进程中建立 SSH/SFTP 连接，将远程目录映射为 `safs://` 虚拟文件系统。文件浏览与编辑通过 SFTP 完成，终端和 Agent 命令通过 SSH 执行，因此服务器无需安装 VS Code Server 或 Agent。
+
+启用 Agent 转发后，每个远程窗口都会启动仅本机可访问的 MCP 服务。多个窗口共用固定的本地路由入口；Agent 首次调用时绑定到具体窗口，后续操作沿用该绑定，避免将命令发到错误的服务器或工作区。
+
+结构化写入被限制在当前远程工作区。Agent 发起的 SSH 命令若命中高风险规则，默认会被拒绝并记录脱敏审计日志。但 SSH 命令不是沙箱：获准执行后仍拥有登录账号的权限，建议使用非 root、最小权限账号并禁用免密提权。
 
 ## 限制
 
-- 本地命令行程序不能直接访问 `safs://` 文件。
-- 只支持 `file://` 工作区的第三方 VS Code 扩展可能无法使用。
-- SFTP 没有原生文件变更通知，扩展使用定时轮询检测外部修改。
-- 目标服务器只提供旧式主机密钥（`ssh-rsa`/`ssh-dss`，OpenSSH 8.8+ 默认禁用）时，
-  扩展会在所有连接路径（系统 `ssh`、WSL bridge、内置 SFTP/终端）自动重新启用这些算法。
-- 主机密钥校验：扩展维护独立的 `~/.safs/known_hosts`（TOFU），首次连接或密钥
-  变化按 `safs.hostKeyChangedAction` 处理（见「设置」）。普通密码直连由实际的
-  内置终端连接直接校验；必须使用系统 ssh 的路径会在连接前
-  先探测主机密钥并把新密钥写入该文件；极端情况下（VPN 中继探测超时等）探测
-  失败会临时降级为不校验主机密钥（`StrictHostKeyChecking=no`）以保证终端可用，
-  内置 ssh2 通道仍保留完整校验。
-- 服务器只接受 `keyboard-interactive` 认证（如 NSG/公司网关）时，SFTP 与终端路径
-  都会用配置的密码自动应答交互式提示。
-- 内置终端被服务器拒绝 pty/shell（如 NSG 网关设备）时，会自动改用系统 `ssh` 重连。
-- 部分 NSG/网关按客户端标识白名单放行（PuTTY 标识可以连，ssh2js 被拒）。
-  插件默认把 SFTP/内置终端的客户端标识伪装为 `OpenSSH_9.6`，可用设置
-  `safs.sshClientIdent` 改为 `PuTTY_Release_0.78` 等。
-- 服务器没有 SFTP 子系统（如老版本 OpenSSH 未装 sftp-server 的 NSG 网关）时，
-  远程目录会自动降级到 SCP/exec 传输，
-  文件树、读写、搜索与 Agent MCP 工具均可继续使用。列目录/路径解析优先使用
-  GNU 命令（`find -printf`/`readlink -f`），BSD/macOS/Solaris 等非 GNU 服务器
-  会自动回退到 `ls`/`pwd` 解析。
-- WSL 的 `vpn: true` 配置复用 `wsl-vpn-ssh-bridge` 的 Windows TCP 中继；
-  使用该模式前需要安装 bridge。`vpn: false` 时 SFTP 直接连接目标地址。
+- 本地命令行和只支持 `file://` 的扩展不能直接访问 `safs://`；需要时请使用双向同步。
+- SFTP 没有原生文件变更通知，SAFS 通过轮询检测远程修改。
+- 支持Agent转发的 safs MCP/CIL 依赖本地 VS Code 持续运行，并保持对应挂载的转发已启用。
+- 服务器没有 SFTP 子系统时会回退到 SCP/exec；基础文件操作仍可用，但性能和兼容性可能不同。
+- MCP 工具能限制结构化文件操作，但无法拦截 Agent 自己调用的其他本地工具。
 
-## 设置
+## SAFS 与免密 SSH alias 对比
 
-- `safs.terminalFollowsActiveFile`：切换/打开远程文件时实时把终端 `cd` 到文件所在目录（默认 `false`）；打开远程终端和重开远程窗口始终跟随活动文件目录，与此设置无关）
-- `safs.terminalAutoReconnect`：远程终端进程结束后自动重连（默认 `true`）。稳定运行超过 60 秒的终端结束时会重开同一目录；重连后的终端若在 60 秒内再次结束，则视为用户主动退出并停止重连。手动在 VS Code 中关闭终端或窗口不会触发重连。
-- `safs.configPath`
-- `safs.reuseSshConnection`
-- `safs.sshClientIdent`：SSH 客户端标识字符串，默认伪装为 `OpenSSH_9.6`；
-  被 NSG/网关白名单拒绝时可改为 `PuTTY_Release_0.78` 等。
-- `safs.hostKeyChangedAction`：主机密钥处理方式（`prompt` 默认 / `reject` /
-  `accept`）。默认 `prompt`：首次连接与每次遇到新密钥（负载均衡 VIP 轮换后端、
-  服务器重装）都弹窗确认目标 IP:端口与新密钥指纹，接受后记录到扩展独立的
-  `~/.safs/known_hosts`，已确认密钥不再询问；`accept` 静默接受并记录；`reject`
-  直接拒绝密钥变化的连接。作用于所有路径：内置 ssh2（普通密码终端、SFTP、
-  命令执行）与系统 ssh（WSL VPN、私钥及兼容性回退的终端与命令执行）。
-- `safs.sftp.cacheTtl`
-- `safs.sftp.watchInterval`
-- `safs.agentMcpPort`
-- `safs.agentHttpRouterPort`
-- `safs.agentMcpMaxOutputBytes`：命令/搜索输出预览预算
-  （默认 8192，超限返回 `truncated: true` 和可用的续取信息）。
-- `safs.agentForwardingAgents`：选择启用 MCP 转发的 Agent，默认
-  `codex`、`claude`、`pi` 和 `dsh`。配置值直接使用 Agent 的 CLI 命令名（如 `codex`、
-  `claude`、`pi`、`dsh`），支持任意 CLI。扩展优先从 `PATH` 查找支持 `mcp` 指令的 CLI，
-  找不到时再从对应的 VS Code Agent 扩展安装路径查找内置 CLI；检测到 CLI 不支持
-  `mcp` 子命令时会跳过并提示。`pi` 通过内置处理器注册：把 SAFS 地址写入
-  pi-mcp-extension 的配置文件（`~/.pi/agent/mcp.json`），无需 `pi mcp add`。
-  **使用 `pi` 需要先在 pi 中安装 `pi-mcp-extension`**（`pi install npm:pi-mcp-extension`），
-  并在启用转发后重启 pi 会话以加载工具。`dsh`（DeepSeek Harness）同样没有
-  `mcp` 子命令，由内置处理器把 `@deepseek-ai/dsh-mcp-client` 插件条目写入
-  `$DSH_HOME/cordis.patch.yml`（默认 `~/.dsh/cordis.patch.yml`）；DSH 的 HMR
-  会热加载该配置，无需重启。
-- `safs.agentPlatform`：Agent 工作位置，默认 `auto`（与插件运行平台相同）。
-  插件运行在 Windows、Agent 在 WSL 中运行时选择 `wsl`：MCP 注册读写 WSL
-  家目录下的配置文件（`~/.pi/agent/mcp.json`、`$DSH_HOME/cordis.patch.yml`），
-  Agent CLI（`codex`/`claude`）也通过 `wsl.exe` 在 WSL 内检测与执行。
-- `safs.agentMcpTimeoutMs`：Agent MCP 工具转发、远程命令、搜索及上传/下载的统一超时（毫秒，默认
-  120000；`0` 关闭）。
-- `safs.sftp.idleConnectionTtl`：空闲 SFTP 连接回收秒数（默认 600；`0` 关闭）。
-- `safs.highRiskCommandPatterns`：Agent 通过 MCP 请求远程命令时的高危匹配规则（正则数组），
-  默认包含递归删除、磁盘/分区/文件系统操作、关机重启、管道执行远程脚本，以及 `sudo`/`su`/
-  `doas`/`pkexec`/`runas`、setuid/setgid、账号管理、`visudo`/`sudoers` 等提权操作。命中即按
-  `safs.highRiskCommandAction` 处理；设为 `[]` 可关闭拦截。匹配会忽略引号内的内容，避免搜索
-“sudo” 这类关键词时误伤。`cat`/`tee` 的 heredoc 正文按数据处理，不参与匹配；Shell 或
-解释器实际执行的 heredoc 仍会扫描。动态且无法确认目标范围的破坏操作直接拒绝，不弹窗。
-- MCP 命令审计日志位于 `~/.safs/mcp_logs/`，记录脱敏后的命令原文、原始字节数和
-  SHA-256；常见 Token、密码、认证头和 URL 凭据会替换为 `<hidden>`。
-- `safs.highRiskCommandAction`：`deny`（默认）直接拒绝高危命令并记录日志；`allow` 直接
-  放行。两种模式均不弹出逐次确认；旧版 `confirm` 值按 `deny` 处理。
+另一种常见的无Agent服务操作远程主机的方式是在 `~/.ssh/config` 中配置主机别名和密钥，让 Agent 直接执行 `ssh dev '命令'`。两者都不需要在远程安装 Agent，但侧重点不同。
 
-### 降低 Agent 上下文开销
+| 对比项 | SAFS | 免密 SSH alias |
+|---|---|---|
+| 上手成本 | 在扩展内添加连接并启用转发，步骤集中 | 需自行配置密钥、`authorized_keys`、alias，并告诉 Agent 正确用法 |
+| 浏览与编辑 | 有远程文件树、编辑器集成、历史目录和当前文件感知 | 没有文件树；依赖 `ssh`、`scp`、`rsync` 或 Shell 命令 |
+| Agent 工具 | 读取、搜索、精确编辑、传输和命令均为结构化工具 | 主要是自由形式 Shell，灵活但更依赖 Agent 正确解析与修改 |
+| 工作区定位 | 绑定当前 SAFS 窗口和目录，多窗口可明确切换 | alias 只定位主机，工作目录需在命令中自行维护 |
+| 写入边界 | 结构化写工具限制在当前工作区，另有高风险命令规则 | 默认拥有 SSH 账号的全部权限，没有额外工作区边界 |
+| 安全控制 | 主机密钥确认、本地 MCP Token、高危命令拦截与脱敏日志 | 可充分利用 OpenSSH；安全性取决于密钥、账号和服务器权限 |
+| 文件传输 | 内置可视化上传、下载和双向同步 | `scp`/`rsync` 成熟通用，适合脚本化和批量传输 |
+| 兼容性 | 对密码、私钥、部分 VPN/网关和无 SFTP 环境做了兼容 | OpenSSH 能连接即可；特殊网络和交互认证需自行编排 |
+| 依赖 | 必须运行 VS Code 与 SAFS；Agent 需支持 MCP 或 SAFS CLI | 只依赖 SSH 客户端和密钥，对编辑器与 Agent 要求较少 |
+| 更适合 | 交互式开发，让 Agent 安全操作当前项目 | 已有 SSH 运维体系、CI 脚本和跨工具自动化 |
 
-- `safs.agentMcpToolProfile` 可设为 `core`：保留绑定、目录分页、读取/批量读取、
-  搜索、编辑/写入和命令/输出续取；`full`（默认）另外提供传输和文件管理工具。
-  多窗口使用相同设置，修改后重启 Agent 刷新工具列表。
-- `remote_read` 默认 8 KiB，可选 `head`、`tail` 或 `startLine`/`lineCount`。
-  `remote_read_many` 共享内容预算，逐项报告成功、失败或未读取。
-- `remote_search` 支持 `mode: content|files|count`、固定字符串、上下文行和文件过滤。
-  `excludeDirs: []` 可取消默认依赖/构建目录排除。
-- 长命令默认只展示 8 KiB 预览；用 `remote_output` 续取保留结果，无需重跑命令。
-  结果最多保留 10 分钟，并有容量限制；详见 [性能说明](PERFORMANCE.md)。
+选择建议：
 
-### SAFS CLI（实验性可选入口）
+- 需要文件树、编辑器、同步，并希望 Agent 明确绑定当前工作区：选择 **SAFS**。
+- 已有成熟的 SSH 密钥和权限体系，只需执行命令或现有脚本：**SSH alias** 更简单。
+- 两者可以并用：日常编辑与 Agent 文件操作走 SAFS，已审查的运维脚本或批量传输走 SSH/rsync。
 
-发布流水线可为 Windows、macOS、Linux 构建 x64/ARM64 原生程序；CLI 只有在当前 VSIX
-包含匹配平台程序时才可使用。扩展按 Agent 平台安装为用户级全局 `safs` 命令：
-Linux、macOS 和 WSL 使用 `~/.local/bin/safs`，Windows 使用
-`%USERPROFILE%\\AppData\\Local\\SAFS\\bin\\safs.exe`。扩展维护用户 PATH，连接配置保存在
-程序旁的 `.safs-connection.json` 并由 CLI 自动读取。配置中的令牌不要打印或粘贴到会话。
-
-```sh
-safs bind --cwd /Agent/实际工作目录
-safs current-file --binding ID
-safs list --binding ID --path .
-safs read --binding ID --path src/main.ts --start-line 10 --line-count 30
-safs search --binding ID --query TODO --mode files
-safs edit --binding ID --path src/main.ts --input '{"edits":[{"oldText":"旧","newText":"新"}]}'
-safs write --binding ID --path note.txt --file local-note.txt
-safs upload --binding ID --input '{"localPaths":["/本地绝对路径"],"remoteDirectory":"."}'
-safs download --binding ID --input '{"remotePath":"file","localPath":"/本地绝对目标"}'
-safs exec --binding ID -- 'pwd'
-safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
-safs --compact batch --binding ID --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}},{"command":"search","arguments":{"query":"TODO"}}]}'
-```
-
-`--input` 内联传入对应结构化工具的 JSON 字段（`--input '{"edits":[...]}'`），
-不允许覆盖 `bindingId` 或 `mountName`。
-例如编辑文件为 `{"edits":[{"oldText":"旧内容","newText":"新内容"}]}`；上传为
-`{"localPaths":["/本地绝对路径"],"remoteDirectory":"."}`；下载为
-`{"remotePath":"file","localPath":"/本地绝对目标"}`。可使用 `expectedHash` 检查编辑冲突。
-复杂批量读取使用 `read-many --input`；目录批量、搜索过滤也可通过 `--input` 传入。
-所有文件操作复用现有路径、传输和编辑校验，未改成 shell 字符串替换。
-
-`bind` 沿用首次绑定规则。返回候选时，先询问用户；确认后使用
-`switch --workspace ID --confirmed true`，然后结束旧任务并等待新请求。
-`workspaces` 以正常成功结果列出候选。后续操作必须显式提供绑定；失效后失败，
-不自动切换到当前焦点。
-`current-file` 返回绑定窗口当前打开的远程文件路径、相对路径、大小和未保存状态；
-没有打开远程文件时返回 `null`。
-命令 stdout/stderr 原样分流并保留退出码；截断时 stderr 附续取元数据。
-结构化操作和 `output` 返回 JSON，续取应使用返回的字节偏移。
-`--compact` 会省略常规成功状态以及值为 false 的分页/截断标记，以减少输出 Token；
-默认错误只显示错误码和简短信息，需要完整结构化错误时添加 `--verbose`。
-CLI 本地 HTTP 请求超时比 `safs.agentMcpTimeoutMs` 多 5 秒，为 Router 返回超时结果
-留出余量；该设置为 `0` 时 CLI 也不限制请求时间。
-`batch` 可在一次本地 HTTP 请求中按顺序执行 1～50 个操作，所有操作共享命令行的
-`--binding`，适合批量读取、搜索或文件修改；每项仍独立返回成功或失败结果。
+> “免密”不等于“无保护”。建议使用带口令的私钥配合 `ssh-agent`，为 Agent 单独创建最小权限账号，并按需用 `from=`、`command=` 等 `authorized_keys` 限制；不要向 Agent 开放 root 登录或免密 `sudo`。

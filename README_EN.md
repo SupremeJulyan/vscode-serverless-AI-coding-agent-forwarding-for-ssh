@@ -1,604 +1,157 @@
 # SAFS
 
-**S**erverless **A**gent **F**orwarding for **SSH**
+**S**erverless **A**gent **F**orwarding for **S**SH
 
 [简体中文](README.md) | [English](README_EN.md)
 
-Browse and edit remote files directly in VS Code over SFTP and open real SSH
-terminals without installing VS Code Server. Enable Agent Forwarding to let
-VS Code agents and desktop agents (Codex, Claude Code, ...) read, write, and
-search remote files and run remote commands over SSH through MCP. Built for
-intranet hosts and remote servers that forbid port forwarding.
+SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote terminal over SSH, without installing VS Code Server on the server. After Agent Forwarding is enabled, agents such as Copilot, Codex, and Claude Code can also read and write files, search code, and run commands in the current remote workspace.
 
-## Features
+![Full SAFS interface](插件完整效果实体图.png)
 
-- Opens remote folders as `safs://` virtual workspaces.
-- Browse, read, save, create, rename, and delete remote files and directories.
-- Password and private-key authentication with optional master-password encryption.
-- Pooled SFTP connections, metadata caching, reconnect support, and file polling.
-- Opens SSH terminals in the directory selected in the remote workspace.
-- Remembers the last switched directory per remote configuration and restores its workspace and terminal there.
-- The SAFS view (Remote Folders) shows each configuration with its connection
-  state; inline buttons open the remote
-  folder, open a terminal, toggle Agent forwarding, or delete the config. A
-  config expands to show **recently opened remote directories** (up to 10 per
-  config); each history entry can be reopened, opened in a terminal, toggled for
-  local two-way sync, or removed.
-- In the SAFS view, `👁` marks the config bound to the **currently focused
-  window** (the default MCP routing target). A `Agent State: ` prefix shows one
-  symbol next to the config name, in priority order: `👁` (focused window) >
-  `⚡` (forwarding) > `○` (enabled-not-forwarding). The complete Agent-forwarding
-  and MCP-binding state (off / enabled-not-forwarding / forwarding) is shown in
-  the **hover tooltip**.
-- Direct remote list/read/write/search tools for VS Code agents and MCP clients.
-- Runs builds, tests, Git, and system commands remotely over SSH.
-- **SAFS: Visual Download** on remote files/folders: streaming download with
-  progress and cancellation; recursive folder download.
-- **SAFS: Visual Sync** on remote files/folders: two-way automatic local ↔ remote
-  sync that mirrors the remote directory into a real local `file://` workspace,
-  working around `safs://` virtual-workspace limits — local command-line programs
-  cannot touch virtual files and third-party extensions that only support local
-  workspaces cannot load; once synced you edit with a full native toolchain
-  (Git, builds, language servers, ...) and changes flow both ways automatically
-  (incremental, resumes after reload); the first baseline download reuses the
-  visual download experience (scanning, current file, progress, cancellable),
-  and a cross-window file lock prevents several VS Code windows from syncing the
-  same task concurrently; the sync-ready state is shared across windows, so
-  history entries open the local mirror directly with full remote context
-  preserved.
-- The bottom status bar keeps a persistent `SAFS SFTP` transport entry and a
-  `SAFS SYNC` sync entry; the Agent-forwarding focus hint is its own item:
-  `Agent 已聚焦当前窗口😏` when ready, or e.g. `codex（wsl）远程转发中💪` once
-  the source is known. When the server has no SFTP subsystem and the extension
-  falls back to SCP/exec, the transport entry reads `SAFS SCP`.
-- **SAFS: Visual Upload** on local files/folders: streaming upload to the remote
-  (no open remote directory needed; pick the mount, then the target directory),
-  recursive folder upload.
+## When to use SAFS
 
-## Usage
+- VS Code Server cannot or should not be installed on the server.
+- You are working with an intranet, VPN, jump host, or environment where port forwarding is prohibited.
+- You want an Agent to work on remote code without installing an Agent service on the server.
+- You need to sync a remote directory locally so you can keep using Git, language servers, build tools, and debuggers.
 
-### Install
+## Quick start
 
-```sh
-code --install-extension safs-serverless-agent-forwarding-1.7.6.vsix
-```
+### 1. Add an SSH configuration
 
-### Add an SSH config and open a remote folder
+1. Install and enable the SAFS extension.
+2. Click the **SAFS** icon in the Activity Bar.
+3. Click **+** in the upper-right corner of the Remote Folders view, or run `SAFS: Add SSH Config`.
+4. Enter a configuration name, `user@host`, and port, then choose password or private-key authentication.
+5. On the first connection, verify and accept the server's host-key fingerprint.
 
-1. Run `SAFS: Add SSH Config`.
-2. Enter a name, `user@host`, and choose password or private-key auth.
-3. Run `SAFS: Open Remote Folder` and pick the config you just added; you can
-   also click the "Open Remote Folder" button on the connection item in the
-   SAFS view (Remote Folders) in the Activity Bar.
-4. The remote directory opens as a `safs://` virtual workspace; edit remote
-   files directly in the Explorer.
-5. Run `SAFS: Disconnect` when finished; the "Delete Config" button on the
-   connection item disconnects an active SFTP connection first, then removes
-   the config.
-
-### Open a remote terminal
-
-Remote terminals connect over SSH; no VS Code Server is required on the host.
-
-- Run `SAFS: Open Remote Terminal` from the Command Palette.
-- Or click the "Open Remote Terminal" button on a connection item in the SAFS
-  view.
-- The terminal opens in the current remote directory: the directory of the
-  active remote file when there is one, otherwise the mount root (or the last
-  remembered directory). Terminal names look like
-  `SSH: <name> — <relative path>`.
-- When a system SSH terminal exits, its exit code and captured stderr are written
-  to **SAFS Log** in the Output panel. Diagnostics left by an abnormal extension
-  shutdown are recovered on the next activation.
-- Remote terminals created by SAFS support Ctrl+click (Cmd+click on macOS) for
-  absolute paths, relative paths, and `file:line:column` references. A file may
-  be outside the directory currently shown in Explorer, but it must remain
-  inside the configured mount root; out-of-range paths prompt for another SSH
-  config and cannot bypass mount or symbolic-link boundaries. If a command such
-  as `ls subdirectory` prints only a basename, a missing direct path triggers a
-  bounded search inside the current remote workspace: one match opens directly,
-  while multiple matches require a selection. Built-in ssh2 terminals detect
-  Bash, Zsh, and Fish and report `$PWD` plus the full command lifecycle through
-  an independent session-level shell integration. Relative links follow `cd`,
-  while VS Code gains command status decorations, navigation, output ranges,
-  sticky scroll, recent commands, and terminal quick fixes. Bash safely falls
-  back to cwd-only reporting when an incompatible third-party DEBUG trap is present.
-  It does not modify `.bashrc`, `.zshrc`, or Fish configuration;
-  Bash/Fish use session file descriptors, while Zsh removes its private
-  temporary startup directory immediately after loading the user's config.
-- With `remote_terminal: "open"`, a terminal is connected automatically after
-  opening the remote folder.
-- Opening a synced task opens the local mirror workspace: the terminal still
-  connects to the original remote directory per the original `remote_terminal`
-  setting, and `safs.terminalFollowsActiveFile` also applies to local files in
-  the mirror — the relative path is mapped back to the remote directory before
-  `cd`. Mirror windows fully preserve the remote context: terminal reconnects,
-  remote directory operations, Agent/MCP bindings, "current remote file", and
-  relative-path commands are all mapped back to the corresponding remote
-  locations.
-
-### Open the remote directory
-
-- Run `SAFS: Open Remote Directory` from the Command Palette.
-- Type a path inside the mount root, or pick a candidate from the completion
-  list, then press Enter. The directory opens in a **new window** (only real
-  directories inside the mount root are accepted); the current window stays
-  open, and each window's Agent-forwarding/MCP stays bound to its own
-  directory.
-- Run `SAFS: Switch Remote Directory` to switch to the target directory in the
-  **current window** (workspace and terminal switch together).
-- Each remote config remembers the last opened directory; reopening the
-  remote folder restores both the workspace and the terminal there.
-- A config entry in the SAFS view (Remote Folders) can be expanded to show the
-  **recently opened remote directory history** (up to 10 entries, newest
-  first). Each history entry has buttons to open the history directory, open a
-  terminal there, toggle local sync, or delete the record (the toggle reads
-  "disable local sync" once enabled, and opening the entry then goes straight
-  to the local mirror workspace). Reopening or switching to a directory moves
-  its record to the top.
-
-### Keyboard Shortcuts
-
-| Action | Windows | Linux | macOS |
-|---|---|---|---|
-| Open Remote Directory | `Ctrl+Alt+R` | `Ctrl+Alt+O` | `Cmd+Ctrl+R` |
-| Open Remote Terminal | `Ctrl+Alt+T` | `Ctrl+Alt+X` | `Cmd+Ctrl+T` |
-
-### Visual download / upload / sync
-
-- **SAFS: Visual Download**: right-click a remote file/folder — **streaming
-  download** (written as it arrives, progress bar, cancellable); folders are
-  downloaded recursively.
-- **SAFS: Visual Upload**: right-click a **local** file/folder (visible in any
-  window; no remote directory needs to be open) — pick the remote mount, then
-  enter the remote target directory (Tab completion); streaming upload with
-  progress and cancellation, folders upload recursively.
-- **SAFS: Visual Sync** (formerly "Sync…"): right-click a remote file/folder —
-  pick a local target directory to start **two-way automatic sync**
-  (remote ↔ local); incremental and persisted, it resumes after a window reload.
-  Sync exists to solve a virtual-workspace problem: `safs://` files are invisible
-  to local command-line programs and unusable by extensions that require local
-  workspaces, while the mirror is a real local directory where Git, build tools,
-  language servers, and debuggers all work — edits upload automatically and
-  remote changes are pulled back down. The first baseline download reuses the
-  visual download experience: scanning,
-  current file, file count, accumulated bytes, and percentage, with cancellation;
-  unique temp file names avoid concurrent baseline conflicts, and the local
-  watcher ignores `.safs-part` temp files. The same sync task is coordinated by a
-  cross-Extension-Host file lock, so multiple VS Code windows never download,
-  watch, or reverse-upload at the same time.
-
-### Enable Agent Forwarding
-
-The default `safs.agentInterface: "mcp"` uses the stable MCP integration. Reload
-VS Code windows and restart Agents after changing the interface so their tool list
-is refreshed.
-
-The CLI is an experimental opt-in and requires the VSIX to contain a native binary
-matching the Agent platform. SAFS installs it as the user-level global `safs` command
-and writes nothing to AGENTS.md, CLAUDE.md, or the remote project. CLI mode does not
-register MCP tools with the Agent, so MCP tool definitions do not need to be loaded
-into every conversation and token usage can theoretically be lower; actual savings
-depend on how the Agent discovers and invokes commands. Switching to CLI mode
-automatically removes the `safs` MCP service previously installed by SAFS itself.
-MCP services installed through a prompt or by manually pasting a URL are outside
-automatic cleanup; run `SAFS: 为我的Agent卸载转发功能` to remove one. Restart the Agent,
-then explicitly ask it to “use the global safs command to perform XX remotely.” Node.js is not required.
-The following registration steps apply to the default MCP mode.
-
-The Agent can be a VS Code extension (Copilot Chat, Codex, ...) or a desktop
-app (Codex CLI, Claude Code, ...), but it must run on the same operating
-system platform as the VS Code window hosting SAFS: the MCP endpoint is
-loopback-only (`127.0.0.1`) and cannot be reached across machines or
-platforms.
-
-1. First click the "Enable Agent Forwarding" button on the connection item in
-   the SAFS view (the first inline button on the config row). The
-   extension installs or updates the fixed `safs` HTTP MCP for the detected
-   Agent CLIs (default `codex`, `claude`, `pi`, and `dsh`; extend with
-   `safs.agentForwardingAgents`).
-2. Verify the registration: open the Agent and type `/mcp` (or open its MCP
-   management view); seeing the `safs` entry means the MCP was registered
-   successfully. If the Agent is a VS Code extension, just confirm it in the
-   Agent session of the new window.
-3. Then run `SAFS: Open Remote Folder` to enter the remote directory (or click
-   the "Open Remote Folder" button on the connection item — the second inline
-   button on the config row). Before creating
-   the new window, the extension starts the fixed HTTP router and registers
-   the Agent. The new window starts its dynamic-port service, and the Agent
-   for a confirmed SAFS remote task, the Agent calls
-   `safs_get_remote_workspace` with its current cwd. The router maps the exact
-   empty placeholder cwd to that window's `instanceId`; later calls retain the binding.
-4. Restart the Agent and start a new conversation (required after installing,
-   updating, or removing MCP).
-5. The Agent can now use the remote tools directly: `#safsList`,
-   `#safsWrite`, `#safsSearch`, and `#safsRun` for VS Code agents, or the MCP
-   tools `safs_get_remote_workspace`, `remote_list`,
-   `remote_read`, `remote_edit`, `remote_write`, `remote_delete`, `remote_chmod`, `remote_move`,
-   `remote_upload`, `remote_download`, `remote_search`, and
-   `run_remote_command`, plus
-   `current_remote_file` to inspect the remote file currently open in VS Code.
-6. To disable: click "Disable Agent Forwarding" on the connection item. The
-   extension runs `mcp remove` only after the last enabled mount is disabled.
-
-#### Other ways to install
-
-Besides the automatic registration above, the `safs` MCP can also be installed
-as follows:
-
-- Run `SAFS: 为我的Agent安装转发功能` from the Command Palette: after entering
-  the Agent name and platform, an **installation prompt** is copied to the
-  clipboard — paste it into the Agent input box and the Agent registers the
-  user-scoped Streamable HTTP MCP named `safs` by itself.
-- Manually add the URL generated by `SAFS: Copy Streamable HTTP URL` in the
-  Agent's MCP management UI (see "Unified Agent MCP" below).
-
-Manually installed MCPs (via the prompt or a pasted URL) are **not** covered by
-the automatic cleanup: switching to the CLI interface or disabling all
-forwarding only removes the `safs` MCP that SAFS configured by itself. To remove
-a manually installed Agent, run `SAFS: 为我的Agent卸载转发功能`: after entering
-the Agent name and platform, an **uninstallation prompt** is copied to the
-clipboard — paste it into the Agent input box and the Agent removes the
-user-scoped `safs` MCP configuration by itself.
-
-#### Multiple remote windows
-
-- When several remote windows are open, they all share the same fixed HTTP MCP
-  entry; the windows elect one Router Leader on the fixed port, and another
-  window takes over when the leader exits.
-- On its first `safs_get_remote_workspace` call, the Agent passes its current cwd.
-  The router binds automatically when that cwd exactly matches one window's empty
-  placeholder, or when the cwd does not match and exactly one SAFS window is focused,
-  and pins the returned `bindingId` to that window's `instanceId`.
-  Closing the window expires the binding; it never falls back to another window.
-- If the cwd has no exact match or is ambiguous, the get tool returns candidates with
-  `workspaceId`. The Agent asks the user in its own conversation and calls
-  `safs_switch_remote_workspace` with the selected ID and `userConfirmed: true` only
-  after an explicit reply.
-  A manual selection stops the previous task and waits for a new request. No VS Code
-  Quick Pick, focused-window fallback, home-cwd special case, or single-candidate guess is used.
-- When the user asks to list or switch SAFS workspaces, hosts, or configurations,
-  the Agent calls `safs_switch_remote_workspace` to retrieve every active candidate;
-  the get tool no longer decides whether a request is a switch. After a successful
-  switch, the Agent discards its old binding and stops the old task; the Router does
-  not invalidate bindings owned by other Agent conversations on the same platform.
-- Each window's dynamic-port service can only access its own mount and cannot
-  reach other mounts through request parameters.
-
-#### Determine which remote the Agent session is bound to
-
-- Call `safs_get_remote_workspace` only when the user explicitly asks to use
-  SAFS or the context already identifies a `safs://` virtual workspace, and pass
-  the Agent's current directory as `agentCwd`. Do not call SAFS tools for an
-  ordinary local workspace. An exact placeholder match binds automatically;
-  otherwise the user chooses a returned `workspaceId` in the Agent conversation and
-  calls `safs_switch_remote_workspace` with `userConfirmed: true`.
-  Later tools pass the returned `bindingId`.
-- `workspaceRoot` is the remote directory actually open in that VS Code window,
-  not the configured SFTP mount root. Relative `remote_list`/`remote_read`/`remote_search`
-  paths and the default `run_remote_command` working directory start there.
-- `remote_edit` atomically changes an existing UTF-8 file using unique exact
-  matches; use `remote_write` to create or fully replace a file. Both can write
-  only inside `workspaceRoot` and its descendants.
-  Read-only `remote_list`, `remote_read`, and `remote_search` may still inspect
-  explicitly supplied absolute paths elsewhere.
-- **Currently open remote file**: call `current_remote_file` to get the remote
-  file open in the VS Code editor (absolute path, path relative to the remote
-  root, size, and whether the editor has unsaved changes). Inspect content with
-  `remote_read`, which caps each UTF-8 text chunk at 64 KB; use `remote_download`
-  for binary files, large files, and directories. When the user asks "what is
-  the content of this remote file", get its path with `current_remote_file`
-  first, then call `remote_read`.
-- Before selection, after binding expiry, or after Router Leader takeover,
-  workspace tools require a fresh selection and never silently fall back.
-- On the VS Code side, run `SAFS: Show Status` to see each mount's connection
-  state in the output panel.
-
-## Configuration
-
-All platforms use `~/.safs/config.json`. The `mounts` array may be omitted: it
-is then derived from `hosts` (each host becomes a mount with the same name,
-`remote_path` `.`, and `remote_terminal` `open`). An explicit `mounts` array
-overrides the derived result.
+Configurations are stored in `~/.safs/config.json`. The UI is recommended for normal use. To edit the file manually, run `SAFS: Open Config`:
 
 ```json
 {
   "encrypt_passwords": true,
-  "hosts": [{
-    "name": "dev",
-    "ip": "10.0.0.2",
-    "user": "alice",
-    "port": 22,
-    "private_key_path": "~/.ssh/id_ed25519"
-  }]
+  "hosts": [
+    {
+      "name": "dev",
+      "ip": "10.0.0.2",
+      "user": "alice",
+      "port": 22,
+      "private_key_path": "~/.ssh/id_ed25519"
+    }
+  ]
 }
 ```
 
-The top-level `mounts` array defines SFTP remote folders. Remote directories are
-not mounted into the local filesystem. When you delete a config whose SFTP
-connection is still active, the extension asks to confirm "disconnect and
-delete" first, then disconnects before removing the config.
+### 2. Open and edit a remote directory
 
-## Agent access
+Click **Open Remote Folder** beside a connection in the SAFS view, or run `SAFS: Open Remote Folder`. After you select a directory, SAFS opens it in a new window as a `safs://` virtual workspace.
 
-VS Code tools: `#safsList`,
-`#safsWrite`, `#safsSearch`, `#safsRun`, and
-`#safsCurrentRemoteFile` (path and metadata of the currently open remote file).
+You can then browse, open, save, create, rename, and delete files just as you would in a local project. SAFS remembers recently opened directories for every connection; expand a connection to reopen one from its history.
 
-The loopback-only, token-protected MCP service exposes
-`safs_get_remote_workspace`, `remote_list`, `remote_read`, `remote_edit`, `remote_write`,
-`remote_delete`, `remote_chmod`, `remote_move`,
-`remote_upload`, `remote_download`, `remote_search`, `run_remote_command`, and
-`current_remote_file`. For `remote_upload` and `remote_download`, the Agent
-supplies both local and remote paths directly, so no path picker is opened;
-VS Code only shows transfer progress and cancellation. Both support recursive
-folder transfers without putting file bytes in the Agent context. Upload sources
-and download targets must stay inside the Agent cwd staging directory created
-automatically for the current SAFS window; there is no additional setting. The
-extension checks the real path or nearest existing parent to prevent symlink escapes.
-Use `remote_delete`, `remote_chmod`, and `remote_move` for deletion, permission
-changes, and moves. Each validates the real path and parent inside the current
-workspace before the SFTP operation, avoiding Shell-variable ambiguity.
+| Action | Command |
+|---|---|
+| Open a remote directory in a new window | `SAFS: Open Remote Folder` |
+| Change the directory in the current window | `SAFS: Switch Remote Directory` |
+| Open an SSH terminal | `SAFS: Open Remote Terminal` |
+| View connection status | `SAFS: Show Status` |
+| Disconnect | `SAFS: Disconnect` |
 
-Agents bind workspaces only for SAFS remote tasks, not for
-ordinary local workspaces. Once forwarding is enabled and a workspace is
-selected, tools bind to it through the returned `bindingId`. Remote URIs are not
-local paths: agents use SFTP tools for files and SSH execution for builds, tests,
-Git, and operating-system inspection. Structured mutations and transfer targets
-are restricted to the current workspace. UTF-8 text is read in chunks of at most 64 KB through
-`remote_read`; binary files, large files, and directories use `remote_download`. Agent routing
-and tool guidance are managed by the fixed MCP service; the
-extension does not create or read Agent guidance files on the remote host.
+The remote terminal opens in the directory of the active file by default, or at the workspace root when there is no active file. Ctrl+click a file path in the terminal to open it directly; use Cmd+click on macOS.
 
-`run_remote_command` does not show per-command Shell confirmation prompts.
-Commands matching the high-risk rules are denied or allowed directly according
-to configuration, while ordinary commands run directly. Prefer workspace-confined
-`remote_edit` or `remote_write` for ordinary file changes. The command tool is not a filesystem
-sandbox: once allowed, it has every permission of the SSH login account. For
-strong isolation, use a least-privilege non-root account without passwordless
-privilege escalation and, when needed, a remote container, chroot, or restricted
-execution account. `remote_list`, `remote_read`, and `remote_search` may read
-absolute paths outside the workspace for environment diagnostics; this does not
-expand the boundary of the structured write tools.
+### 3. Let an Agent operate the remote workspace
 
-MCP command audit logs under `~/.safs/mcp_logs/` include the redacted command text,
-its original byte count, and SHA-256. Common tokens, passwords, authentication
-headers, and URL credentials are replaced with `<hidden>`.
+MCP is the default mode:
 
-Tool results use bounded previews: directories default to 100 entries with validated
-cursors; text reads default to 8 KiB with line/head/tail and batch selection.
-Search preserves original lines and exit status. Commands/search default to 8 KiB
-previews with `remote_output` continuation. See [Performance Notes](PERFORMANCE.md)
-for completeness metadata, retention capacity and expiry.
+1. Click **Enable Agent Forwarding** beside the connection in the SAFS view.
+2. Open the remote directory for that connection.
+3. Restart the Agent and start a new conversation. A restart is required after MCP is installed, updated, or removed.
+4. Enter `/mcp` in the Agent, or open its MCP management view, and confirm that a `safs` service is present.
+5. Tell the Agent: `Use the safs MCP to inspect the current remote project and run its tests.`
 
-### Unified Agent MCP (Codex / Claude Code)
+SAFS detects `codex`, `claude`, `pi`, and `dsh` by default. For another Agent, run `SAFS: Install Agent Forwarding for My Agent` and paste the generated prompt into the Agent. Alternatively, run `SAFS: Copy Streamable HTTP URL` and manually add a Streamable HTTP service named `safs` in the Agent's MCP management view.
 
-Each Agent-forwarded remote VS Code window starts an MCP server on an independent
-dynamically allocated port. The extension registers the same stable Streamable HTTP MCP
-router, hosted inside the extension process, for Codex and Claude Code. Agents no longer
-spawn a stdio router process and therefore cannot inherit a `safs` virtual cwd.
-The router resolves the target window's latest port on every call.
-`safs_get_remote_workspace` exactly matches the Agent cwd to the empty placeholder
-published by a window and pins the binding to that window's `instanceId`. If it
-cannot match exactly, it returns candidates without using VS Code Quick Pick,
-window focus, or a single-candidate fallback. Each window service remains restricted
-to its own mount.
+> The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment. If VS Code runs on Windows and the Agent runs in WSL, set `safs.agentPlatform` to `wsl`.
 
-Some Agent extensions still treat the virtual URI's POSIX path as a native cwd and call
-`lstat` or start a Git watcher during startup. When Agent forwarding is enabled, this
-extension uses a real, empty workspace cwd inside per-user extension storage. The SFTP
-provider maps that URI namespace back to the actual remote root, so no directory or
-symbolic link is created at the remote machine's absolute path and administrator access
-is not required. The placeholder contains no remote files and exists only to let Agents
-finish native startup. Workspaces opened by older versions must be reopened from the
-SAFS view to use the new URI namespace.
+Once enabled, the Agent can:
 
-Window discovery, target selection, dynamic-port routing, disconnect detection,
-mount validation, and remote-tool guidance all live in the extension-hosted HTTP router. VS Code
-windows elect one router leader by claiming the fixed port, and another window takes over when
-that leader exits. The
-integration does not install a Codex plugin, skill, or hooks. MCP instructions tell agents to use only
-remote tools for `safs` workspaces; because MCP cannot intercept a client's
-own local tools, enforcement depends on the agent following those instructions.
+- list, read, search, create, and precisely edit remote files;
+- move and delete files, change permissions, and upload or download files;
+- run commands in the current remote directory and retrieve long output in chunks;
+- identify the remote file currently open in VS Code;
+- explicitly choose a target workspace when multiple SAFS windows are open.
 
-Enable Agent Forwarding first installs or updates the fixed `safs` HTTP MCP
-for detected Codex and Claude Code installations. If that remote folder is already open,
-the action also starts its window-scoped dynamic-port MCP service immediately. Disabling
-a mount stops its window service; the extension runs `mcp remove` only after the last
-enabled mount is disabled. Restart the Agent and start a new conversation after installing,
-updating, or removing MCP.
+To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed manually through a prompt or URL, run `SAFS: Uninstall Agent Forwarding for My Agent`.
 
-The extension generates an authentication token and automatically applies configurations
-equivalent to:
+#### CLI mode
 
-```sh
-codex mcp add safs --url 'http://127.0.0.1:9848/mcp?token=<generated-token>&agent=codex&platform=wsl'
-claude mcp add --transport http --scope user safs 'http://127.0.0.1:9848/mcp?token=<generated-token>&agent=claude&platform=wsl'
-```
+Set `safs.agentInterface` to `cli` to install the global `safs` command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. This mode requires the VSIX to include a native binary for the Agent's platform. The default `mcp` mode is recommended for most users. If minimizing token usage is critical, you can switch to CLI manually because it does not install MCP tools and may therefore use fewer tokens in theory.
 
-If no Agent CLI is installed, run **SAFS: Copy Streamable HTTP
-URL** from the VS Code Command Palette, enter the Agent name, and select its
-`wsl`, `mac`, `linux`, or `win` platform.
-In the desktop app, open **Settings > MCP
-servers**, add a **Streamable HTTP** server named `safs`, and paste the
-copied URL. The URL contains an authentication token; do not share it or commit it
-to the repository. The `agent` and `platform` query parameters are only source
-labels for the status bar, router output, and command logs; they can identify Agents outside the automatic configuration
-list, but it is not secure authentication.
+## File transfer and local sync
 
-Restart the Agent and start a new conversation. The VS Code extension must remain running with Agent forwarding enabled for the
-mount. Disconnecting SFTP preserves that preference, and MCP discovers the new port after
-the mount reconnects. If multiple remote windows are open, use
-`safs_get_remote_workspace` with `agentCwd` for automatic binding or a returned
-`workspaceId` for explicit selection or switching.
-Keep `safs.agentMcpPort` at its
-default value of `0`. `safs.agentHttpRouterPort` controls the stable Agent-facing
-port and defaults to `9848`; the extension rejects an unrelated process occupying that port.
+Right-click a file or directory in the Explorer:
+
+- **SAFS: Visual Download** downloads a remote file or directory locally, with recursive transfer, progress, and cancellation.
+- **SAFS: Visual Upload** uploads a local file or directory to a selected connection without requiring an open remote workspace.
+- **SAFS: Visual Sync** creates a local mirror of a remote directory and continuously performs incremental two-way local ↔ remote synchronization.
+
+If a command-line tool or VS Code extension does not support `safs://`, use two-way sync. The synced workspace is a real local `file://` directory, so Git, language servers, build tools, and debuggers work normally. Local saves are uploaded automatically, and remote changes are pulled down.
+
+The initial sync shows scanning and download progress and can be cancelled. A task resumes after a window reload, and file locking prevents multiple VS Code windows from processing the same task simultaneously.
+
+## Common settings
+
+Search for `SAFS` in VS Code Settings:
+
+| Setting | Default | Purpose |
+|---|---:|---|
+| `safs.terminalFollowsActiveFile` | `false` | Automatically `cd` an open remote terminal when the active file changes |
+| `safs.terminalAutoReconnect` | `true` | Reconnect a remote terminal after an unexpected exit |
+| `safs.agentPlatform` | `auto` | Change to `wsl` when the Agent runs in WSL |
+| `safs.agentMcpToolProfile` | `full` | Change to `core` to reduce the Agent context used by tool definitions |
+| `safs.agentMcpTimeoutMs` | `120000` | Timeout for Agent commands, searches, and transfers; `0` disables it |
+| `safs.sftp.watchInterval` | `5` | Polling interval for remote file changes, in seconds |
+| `safs.hostKeyChangedAction` | `prompt` | Prompt, reject, or accept when a host key changes |
+| `safs.highRiskCommandAction` | `deny` | Reject or allow Agent commands that match high-risk rules |
+
+See the SAFS page in VS Code Settings for additional advanced options.
+
+## How it works
+
+SAFS establishes SSH/SFTP connections inside the local VS Code extension process and maps a remote directory to a `safs://` virtual file system. Browsing and editing use SFTP, while terminals and Agent commands run over SSH. The server therefore needs neither VS Code Server nor an Agent.
+
+With Agent Forwarding enabled, every remote window starts an MCP service accessible only from the local machine. Multiple windows share a stable local routing endpoint. On its first call, the Agent binds to a specific window and keeps that binding for later operations, preventing commands from being sent to the wrong server or workspace.
+
+Structured writes are restricted to the current remote workspace. An SSH command matching a high-risk rule is denied by default and recorded in a redacted audit log. SSH commands are not a sandbox, however: an allowed command still has all permissions of the login account. Use a non-root, least-privilege account and disable passwordless privilege escalation.
 
 ## Limitations
 
-- Local command-line programs cannot access `safs://` files.
-- Extensions that only support `file://` workspaces may be unavailable.
-- SFTP has no native change notifications, so external changes are polled.
-- When a server only offers legacy host keys (`ssh-rsa`/`ssh-dss`, disabled by
-  default since OpenSSH 8.8), the extension automatically re-enables them on
-  every connection path (system `ssh`, WSL bridge, built-in SFTP/terminal).
-- Host-key verification uses an extension-owned `~/.safs/known_hosts` (TOFU);
-  first connect and key changes are handled per `safs.hostKeyChangedAction`
-  (see Settings). System-`ssh` paths probe the host key before connecting and
-  write newly discovered keys to that file; in rare cases where the probe
-  fails (e.g. VPN relay probe timeout), the system-`ssh` path temporarily
-  degrades to not checking the host key (`StrictHostKeyChecking=no`) so the
-  terminal stays usable, while the built-in ssh2 channels keep full
-  verification.
-- When a server only accepts `keyboard-interactive` auth (e.g. NSG/company
-  gateways), both the SFTP and terminal paths answer the interactive prompts
-  with the configured password automatically.
-- When the built-in terminal is rejected at the pty/shell level (e.g. NSG
-  gateway appliances), the extension automatically retries with the system
-  `ssh` CLI.
-- Some NSG/gateways whitelist SSH clients by identification string (PuTTY
-  works; `ssh2js` gets rejected). The
-  extension now presents itself as `OpenSSH_9.6` by default on SFTP/built-in
-  terminal connections; set `safs.sshClientIdent` to e.g. `PuTTY_Release_0.78`
-  if the default is still rejected.
-- When the server has no SFTP subsystem (e.g. old-OpenSSH NSG gateways
-  without sftp-server), remote folders automatically fall back to an
-  exec/SCP transport — reusing the authenticated ssh2 connection — so
-  the file tree, read/write/search and Agent MCP tools keep working.
-  Directory listing / path resolution prefer GNU commands
-  (`find -printf`/`readlink -f`) and fall back to `ls`/`pwd` parsing on
-  BSD/macOS/Solaris servers.
-- WSL configurations with `vpn: true` reuse the Windows TCP relay supplied by
-  `wsl-vpn-ssh-bridge`; install the bridge before using that mode. With
-  `vpn: false`, SFTP connects directly.
+- Local command-line tools and extensions that only support `file://` cannot access `safs://` directly; use two-way sync when needed.
+- SFTP has no native file-change notification, so SAFS polls for remote changes.
+- The SAFS MCP/CLI used for Agent Forwarding requires the local VS Code instance to remain running with forwarding enabled for the relevant mount.
+- If the server has no SFTP subsystem, SAFS falls back to SCP/exec. Basic file operations remain available, but performance and compatibility may differ.
+- MCP tools can constrain structured file operations, but they cannot intercept other local tools invoked directly by the Agent.
 
-## Settings
+## SAFS vs. a passwordless SSH alias
 
-- `safs.configPath`
-- `safs.reuseSshConnection`
-- `safs.sshClientIdent`: SSH client identification string, masquerading as
-  `OpenSSH_9.6` by default; switch to e.g. `PuTTY_Release_0.78` when a
-  NSG/gateway whitelist rejects the default.
-- `safs.hostKeyChangedAction`: how host keys are handled (`prompt` default /
-  `reject` / `accept`). Default `prompt`: on first connect and on every new
-  host key (load-balanced VIPs rotating backends, server reinstalls) a dialog
-  shows the target IP:port and the new key fingerprint; accepting records it
-  to the extension-owned `~/.safs/known_hosts`, and confirmed keys are no
-  longer asked about. `accept` silently accepts and records new keys; `reject`
-  refuses the connection on key change. Applies to every transport: built-in
-  ssh2 (Windows terminal, SFTP, command execution) and system ssh (WSL /
-  Linux / macOS terminal and command execution).
-- `safs.sftp.cacheTtl`
-- `safs.sftp.watchInterval`
-- `safs.agentMcpPort`
-- `safs.agentHttpRouterPort`
-- `safs.agentMcpMaxOutputBytes`: command/search preview budget
-  (default `8192`; truncated previews include available continuation metadata).
-- `safs.agentForwardingAgents`: selects Agents enabled for MCP forwarding;
-  defaults to `codex`, `claude`, `pi`, and `dsh`. Values are the Agent CLI
-  command names directly (e.g. `codex`, `claude`, `pi`, `dsh`); any CLI is
-  accepted. The extension
-  first searches `PATH` for a CLI supporting the `mcp` instruction; if it is not
-  found, it looks inside the corresponding installed VS Code extension. CLIs
-  without an `mcp` subcommand are skipped and reported. `pi` is handled by a
-  built-in file-based handler: the SAFS URL is written to the
-  `pi-mcp-extension` config file (`~/.pi/agent/mcp.json`), no `pi mcp add`
-  needed. **Using `pi` requires installing `pi-mcp-extension` in pi**
-  (`pi install npm:pi-mcp-extension`) and restarting the pi session after
-  enabling forwarding so the tools load. `dsh` (DeepSeek Harness) also has no
-  `mcp` subcommand; its built-in handler writes an
-  `@deepseek-ai/dsh-mcp-client` plugin entry into `$DSH_HOME/cordis.patch.yml`
-  (default `~/.dsh/cordis.patch.yml`), which DSH hot-applies through its
-  config HMR watch without a restart.
-- `safs.agentPlatform`: the Agents' working location; defaults to `auto` (same
-  platform as the extension). Choose `wsl` when the extension runs on Windows
-  but the Agents run inside WSL: MCP registration reads/writes the Agents'
-  config files under the WSL home (`~/.pi/agent/mcp.json`,
-  `$DSH_HOME/cordis.patch.yml`), and Agent CLIs (`codex`/`claude`) are detected
-  and executed through `wsl.exe` inside WSL.
-- `safs.agentMcpTimeoutMs`: unified timeout for Agent MCP forwarding, remote
-  commands, search, and uploads/downloads in milliseconds (default `120000`;
-  `0` disables it).
-- `safs.sftp.idleConnectionTtl`: seconds before an idle SFTP connection is
-  recycled by the pool (default `600`; `0` disables recycling).
-- `safs.terminalFollowsActiveFile`: when a remote file is switched/opened,
-  the terminal `cd`s to that file's directory in real time (default `false`);
-  opening a remote terminal and reopening a remote window always follow the
-  active file's directory regardless of this setting.
-- `safs.terminalAutoReconnect`: automatically reconnect the remote terminal
-  after its process exits (default `true`). A terminal that had been stable for
-  at least 60 seconds is reopened in the same directory. If that replacement
-  exits again within 60 seconds, SAFS treats it as an intentional exit and
-  stops reconnecting. Closing the terminal or VS Code window manually never
-  triggers reconnection.
-- `safs.highRiskCommandPatterns`: regex rules for dangerous remote commands
-  requested by Agents through MCP (defaults include recursive delete,
-  disk/partition/filesystem operations, shutdown/reboot, piping remote
-  scripts, and privilege-escalation like `sudo`/`su`/`doas`/`pkexec`/`runas`,
-  setuid/setgid, account management, `visudo`/`sudoers`). Matches are handled
-  per `safs.highRiskCommandAction`; set to `[]` to disable interception.
-  Matches inside quotes are ignored to avoid false positives when searching
-  for keywords like `sudo`. Heredoc bodies consumed as data by `cat`/`tee` are
-  ignored, while heredocs executed by a shell or interpreter are still scanned.
-  Destructive operations with dynamically scoped targets are denied without a prompt.
-- `safs.highRiskCommandAction`: `deny` (default) rejects and logs matching
-  commands; `allow` runs them. Neither mode shows per-command prompts; legacy
-  `confirm` values are treated as `deny`.
+Another common way to operate a remote host without an Agent service is to configure a host alias and key in `~/.ssh/config`, then let the Agent run `ssh dev 'command'` directly. Neither approach installs an Agent remotely, but they serve different priorities.
 
-### Compact MCP and CLI access
+| Category | SAFS | Passwordless SSH alias |
+|---|---|---|
+| Setup | Add a connection and enable forwarding in one extension | Configure keys, `authorized_keys`, an alias, and teach the Agent how to use them |
+| Browsing and editing | Remote file tree, editor integration, directory history, and active-file awareness | No file tree; relies on `ssh`, `scp`, `rsync`, or shell commands |
+| Agent tools | Structured tools for reading, searching, precise edits, transfers, and commands | Mostly free-form shell: flexible, but more dependent on correct Agent parsing and edits |
+| Workspace targeting | Binds to the current SAFS window and directory; explicit switching across windows | The alias identifies only a host; every command must maintain its own working directory |
+| Write boundaries | Structured writes stay within the workspace, with separate high-risk command rules | Has all permissions of the SSH account by default, with no additional workspace boundary |
+| Security controls | Host-key confirmation, local MCP token, high-risk command blocking, and redacted logs | Full OpenSSH capabilities; security depends on key, account, and server permission design |
+| File transfer | Built-in visual upload, download, and two-way sync | Mature, portable `scp`/`rsync` workflows suit scripts and bulk transfers |
+| Compatibility | Handles passwords, keys, some VPN/gateway cases, and servers without SFTP | Works wherever OpenSSH connects; special networks and interactive auth require custom setup |
+| Dependencies | Requires VS Code and SAFS to stay running; the Agent needs MCP or SAFS CLI support | Requires only an SSH client and key, with fewer editor or Agent requirements |
+| Best suited for | Interactive development with safer Agent access to the current project | Existing SSH operations, CI scripts, and tool-independent automation |
 
-Set `safs.agentMcpToolProfile` to `core` to expose inspection, typed edit/write,
-commands and continuation; `full` remains the compatibility default. Use the same
-setting across windows and restart the Agent after changing tool profiles.
-Reads default to 8 KiB and support head/tail or line selection. Batch reads share
-a content budget. Search supports content/files/count modes and explicit filters.
-Long output is retained with bounded capacity for continuation without rerunning
-commands; see [Performance Notes](PERFORMANCE.md).
+Recommendations:
 
-The release workflow builds native x64/ARM64 executables for Windows, macOS and Linux.
-CLI mode is available only when the installed VSIX contains the matching binary.
-Linux, macOS, and WSL install `~/.local/bin/safs`; Windows installs
-`%USERPROFILE%\\AppData\\Local\\SAFS\\bin\\safs.exe`. SAFS updates the user PATH and
-stores the private `.safs-connection.json` beside the executable for automatic discovery.
+- Choose **SAFS** when you need a file tree, editor integration, sync, and an Agent explicitly bound to the current workspace.
+- A **passwordless SSH alias** is simpler when you already have a mature SSH key and permission setup and only need to run commands or existing scripts.
+- They can be combined: use SAFS for daily editing and Agent file operations, and SSH/rsync for reviewed operations scripts or bulk transfers.
 
-```sh
-safs bind --cwd /actual/agent/cwd
-safs current-file --binding ID
-safs exec --binding ID -- 'pwd'
-safs output --binding ID --id OUTPUT_ID --stream stdout --offset 8192
-safs --compact batch --binding ID --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}},{"command":"search","arguments":{"query":"TODO"}}]}'
-```
-
-Replace ID using the bind response. Initial binding follows existing MCP rules;
-an unmatched cwd uses the uniquely focused SAFS window, while ambiguous candidates
-still require user confirmation through the MCP switch flow. `workspaces` returns
-the active candidates as a normal successful result.
-Execution requires an explicit binding and never rebinds on failure. Remote stdout,
-stderr and exit codes are preserved; continuation metadata goes to stderr.
-`current-file` returns the remote file open in the bound VS Code window, including
-its path, relative path, size, and unsaved state, or `null` when none is open.
-Use returned byte offsets for UTF-8 continuation. The CLI reuses the existing
-connection/policy layer and does not fetch tool schemas or manage SSH credentials.
-`--compact` omits routine success metadata and false pagination/truncation flags
-to reduce output tokens. Errors show only a code and concise message by default;
-add `--verbose` for the complete structured error. `batch` executes 1–50 operations
-sequentially through one local HTTP request with a shared `--binding`; every item
-still reports its own success or failure.
-The local CLI HTTP timeout is five seconds longer than `safs.agentMcpTimeoutMs` so
-the Router can return its timeout result; setting it to `0` disables both limits.
-
-### Structured CLI commands
-
-The CLI discovers its adjacent connection file automatically. Do not print that file into Agent context.
-
-CLI commands now include list, read, search, edit, write, upload, download,
-delete, move, chmod, read-many, workspaces and switch, alongside bind/exec/output.
-Use `--binding ID` for every workspace operation. Use `--input` for
-structured tool arguments (no bindingId/mountName override); pass inline JSON
-(e.g. `--input '{"edits":[...]}'`). Use `write --file`
-for UTF-8 content. Edits retain exact-match and expectedHash validation. Transfers
-retain staging-directory validation. Run `--help` for examples.
-
-`switch --workspace ID --confirmed true` is only for an already-confirmed user
-choice; stop the old task after switching. No operation silently rebinds.
+> “Passwordless” does not mean “unprotected.” Prefer a passphrase-protected private key with `ssh-agent`, create a dedicated least-privilege account for the Agent, and use `from=` or `command=` restrictions in `authorized_keys` where appropriate. Do not give the Agent root login or passwordless `sudo`.
