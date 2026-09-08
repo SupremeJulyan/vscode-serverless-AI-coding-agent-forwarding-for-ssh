@@ -49,7 +49,7 @@ __safs_command_status=0
 # status first and return it unchanged so the existing first hook still sees
 # the real `$?` value.
 __safs_prompt_capture() {
-  local status=$?
+  local status=${1-$?}
   __safs_command_status=$status
   return "$status"
 }
@@ -97,13 +97,20 @@ elif [[ $- == *i* && -z $__safs_debug_trap ]]; then
   __safs_rich_command_detection=1
 fi
 
+# PROMPT_COMMAND can be exported by user startup files and then propagated by
+# schedulers/attach commands to another Bash process. Shell functions are not
+# inherited with it, so every SAFS entry must remain a silent status-preserving
+# no-op when its session-local function is absent.
+__safs_prompt_capture_hook='__safs_prompt_status=$?; if builtin declare -F __safs_prompt_capture >/dev/null; then __safs_prompt_capture "$__safs_prompt_status"; else (exit "$__safs_prompt_status"); fi'
+__safs_prompt_finish_hook='if builtin declare -F __safs_prompt_finish >/dev/null; then __safs_prompt_finish; else (exit "${__safs_prompt_status:-0}"); fi'
 if [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
-  PROMPT_COMMAND=(__safs_prompt_capture "${PROMPT_COMMAND[@]}" __safs_prompt_finish)
+  PROMPT_COMMAND=("$__safs_prompt_capture_hook" "${PROMPT_COMMAND[@]}" "$__safs_prompt_finish_hook")
 elif [[ -n ${PROMPT_COMMAND:-} ]]; then
-  PROMPT_COMMAND="__safs_prompt_capture"$'\n'"${PROMPT_COMMAND}"$'\n'"__safs_prompt_finish"
+  PROMPT_COMMAND="$__safs_prompt_capture_hook"$'\n'"${PROMPT_COMMAND}"$'\n'"$__safs_prompt_finish_hook"
 else
-  PROMPT_COMMAND=$'__safs_prompt_capture\n__safs_prompt_finish'
+  PROMPT_COMMAND="$__safs_prompt_capture_hook"$'\n'"$__safs_prompt_finish_hook"
 fi
+unset __safs_prompt_capture_hook __safs_prompt_finish_hook
 
 PS1="\[$(__safs_prompt_start)\]${PS1}\[$(__safs_prompt_end)\]"
 if (( __safs_rich_command_detection )); then

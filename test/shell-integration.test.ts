@@ -62,6 +62,31 @@ for (const form of ['string', 'array'] as const) {
   });
 }
 
+test('Bash exported PROMPT_COMMAND is safe when attach inherits it without SAFS functions', {
+  skip: process.platform === 'win32' ? 'Bash integration is Unix-only' : false
+}, () => {
+  const script = `
+    export PROMPT_COMMAND='__safs_user_prompt_status=$?'
+    source resources/shell-integration/bash.sh >/dev/null
+    child_result=$(/bin/bash --noprofile --norc -c '
+      builtin declare -F __safs_prompt_capture >/dev/null && exit 90
+      (exit 23)
+      eval "$PROMPT_COMMAND"
+      prompt_status=$?
+      printf "RESULT=%s:%s" "$__safs_user_prompt_status" "$prompt_status"
+    ' 2>&1)
+    printf '%s' "$child_result"
+  `;
+  const result = spawnSync('/bin/bash', ['--noprofile', '--norc', '-c', script], {
+    cwd: new URL('..', import.meta.url),
+    encoding: 'utf8'
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout, 'RESULT=23:23');
+  assert.doesNotMatch(result.stdout, /command not found/u);
+});
+
 test('Bash, Fish and Zsh integrations emit the rich OSC 633 command lifecycle', async () => {
   const root = new URL('../resources/shell-integration/', import.meta.url);
   const [bash, fish, zsh] = await Promise.all([
