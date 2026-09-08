@@ -200,10 +200,10 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
     {
       name: 'remote_search',
       title: 'Search remote files',
-      description: 'Searches file contents on the remote SSH host. Relative paths start at the current VS Code workspace root. Modes: content (default), files (matching paths), count (per-file counts, including zeros). query uses basic grep regex unless fixedStrings=true. include filters basenames; excludeDirs overrides default dependency/build exclusions (use [] to search all directories). Returns original matching lines within the output byte budget. status distinguishes matches, no_matches and error; truncated means results are incomplete.',
+      description: 'Searches on the remote SSH host. Relative paths start at the current VS Code workspace root. Modes: content (default, matching content lines), files (paths of files whose CONTENT matches), count (content-match counts per file, including zeros), names (paths of files whose BASENAME matches the query glob). For content/files/count, query uses basic grep regex unless fixedStrings=true. For names, query is a shell-style basename glob such as *.ts and ignoreCase selects case-insensitive matching; fixedStrings/contextLines are invalid. include filters basenames; excludeDirs overrides default dependency/build exclusions (use [] to search all directories). status distinguishes matches, no_matches and error; truncated means results are incomplete.',
       inputSchema: {
         ...binding, query: z.string().min(1), path: z.string().optional(),
-        mode: z.enum(['content', 'files', 'count']).optional(),
+        mode: z.enum(['content', 'files', 'count', 'names']).optional(),
         fixedStrings: z.boolean().optional(), ignoreCase: z.boolean().optional(),
         contextLines: z.number().int().min(0).max(20).optional(),
         include: z.array(z.string().min(1).max(256)).max(20).optional(),

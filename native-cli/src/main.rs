@@ -10,7 +10,7 @@ use url::Url;
 const HELP: &str = r#"Usage: safs COMMAND [options]
 
 Workspace: bind, workspaces, switch, current-file
-Read:      list, read, read-many, search, output
+Read:      list, read, read-many, search, find, output
 Write:     edit, write, delete, chmod, move, upload, download
 Execute:   exec, batch
 
@@ -58,9 +58,17 @@ Example: --input '{"requests":[{"path":"a.txt"},{"path":"b.txt","head":20}],"max
 "#,
         ),
         "search" => Some(
-            r#"Usage: safs search --binding ID --query QUERY [--path PATH] [--mode content|files|count]
+            r#"Usage: safs search --binding ID --query QUERY [--path PATH] [--mode content|files|count|names]
+       safs search --binding ID --name GLOB [--path PATH]
+files returns paths of files whose CONTENT matches; names matches file BASENAMES.
 Advanced filters use --input JSON: fixedStrings, ignoreCase, contextLines, include,
 and excludeDirs.
+"#,
+        ),
+        "find" => Some(
+            r#"Usage: safs find --binding ID --name GLOB [--path PATH]
+Finds files by basename. GLOB uses shell-style patterns such as '*.ts'.
+Equivalent to: safs search --binding ID --query GLOB --mode names
 "#,
         ),
         "edit" => Some(
@@ -69,8 +77,9 @@ Example: --input '{"edits":[{"oldText":"old","newText":"new"}],"expectedHash":"S
 "#,
         ),
         "write" => Some(
-            r#"Usage: safs write --binding ID --path PATH --file LOCAL_UTF8_FILE|-
-Creates or replaces a remote UTF-8 file with the local file content.
+            r#"Usage: safs write --binding ID --path PATH (--file LOCAL_UTF8_FILE|- | --content TEXT)
+--content is convenient for short, non-sensitive text. Use --file - for multiline
+or sensitive content so it does not appear in command arguments.
 "#,
         ),
         "delete" => Some(
@@ -100,7 +109,8 @@ Example: --input '{"remotePath":"file","localPath":"/absolute/local/target"}'
         ),
         "exec" => Some(
             r#"Usage: safs exec --binding ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
-The complete remote command must be passed as one shell argument after --.
+       safs exec --binding ID [--cwd REMOTE_CWD] --command 'REMOTE_COMMAND'
+The complete remote command must be passed as one shell argument.
 "#,
         ),
         "output" => Some(
@@ -123,23 +133,29 @@ fn requested_help(args: &[String]) -> Option<Option<&str>> {
         .iter()
         .position(|arg| arg == "--")
         .unwrap_or(args.len());
-    if !args[..boundary]
-        .iter()
-        .any(|arg| arg == "--help" || arg == "-h")
-    {
-        return None;
-    }
-    let mut skip_value = false;
-    for arg in &args[..boundary] {
-        if skip_value {
-            skip_value = false;
-        } else if arg == "--config" {
-            skip_value = true;
-        } else if !arg.starts_with('-') {
-            return Some(Some(arg));
+    let mut command = None;
+    let mut index = 0;
+    while index < boundary {
+        let arg = &args[index];
+        if arg == "--help" || arg == "-h" {
+            return Some(command);
+        }
+        if !arg.starts_with('-') && command.is_none() {
+            command = Some(arg.as_str());
+            index += 1;
+            continue;
+        }
+        // Skip option values so aliases such as `--command '--help'` and
+        // `--content '-h'` remain data rather than triggering CLI help.
+        if arg.starts_with("--")
+            && !matches!(arg.as_str(), "--compact" | "--verbose" | "--confirmed")
+        {
+            index += 2;
+        } else {
+            index += 1;
         }
     }
-    Some(None)
+    None
 }
 
 fn take_option(args: &mut Vec<String>, name: &str) -> Result<Option<String>, String> {
@@ -234,11 +250,15 @@ fn parse_request(
             "start-line",
             "line-count",
         ],
-        "search" => &["binding", "path", "query", "mode"],
-        "edit" | "write" | "delete" | "chmod" => &["binding", "path", "mode"],
+        "search" => &["binding", "path", "query", "name", "mode"],
+        "find" => &["binding", "path", "name"],
+        "edit" => &["binding", "path"],
+        "write" => &["binding", "path", "content"],
+        "delete" => &["binding", "path"],
+        "chmod" => &["binding", "path", "mode"],
         "upload" | "download" | "move" | "read-many" | "batch" => &["binding"],
         "output" => &["binding", "id", "stream", "offset", "length"],
-        "exec" => &["binding", "cwd"],
+        "exec" => &["binding", "cwd", "command"],
         _ => return Err("Unknown command; use --help".into()),
     };
     let mut remote_command = None;
@@ -264,8 +284,11 @@ fn parse_request(
             values.insert("confirmed".into(), Value::Bool(true));
             continue;
         }
-        if !flag.starts_with("--") || args.is_empty() {
+        if !flag.starts_with("--") {
             return Err(format!("Invalid option: {flag}"));
+        }
+        if args.is_empty() {
+            return Err(format!("{flag} requires a value"));
         }
         let key = &flag[2..];
         if !allowed.contains(&key) {
@@ -296,6 +319,36 @@ fn parse_request(
             Value::String(value)
         };
         values.insert(json_key.into(), value);
+    }
+    if matches!(verb.as_str(), "search" | "find") {
+        if let Some(name) = values.remove("name") {
+            if values.contains_key("query") {
+                return Err("Use either --query or --name, not both".into());
+            }
+            if let Some(mode) = values.get("mode").and_then(Value::as_str) {
+                if mode != "names" {
+                    return Err("--name requires --mode names; omit --mode to select it automatically".into());
+                }
+            }
+            values.insert("query".into(), name);
+            values.insert("mode".into(), Value::String("names".into()));
+        }
+        if verb == "find" {
+            if !values.contains_key("query") {
+                return Err("--name is required. Example: safs find --binding ID --name '*.ts'".into());
+            }
+            values.insert("mode".into(), Value::String("names".into()));
+        }
+        if !values.contains_key("query") {
+            return Err("Search query is required. Use --query for contents or --name for filenames".into());
+        }
+        if values
+            .get("mode")
+            .and_then(Value::as_str)
+            .is_some_and(|mode| !["content", "files", "count", "names"].contains(&mode))
+        {
+            return Err("--mode must be content, files, count, or names".into());
+        }
     }
     let binding = values.remove("binding");
     let require_binding = || {
@@ -376,7 +429,7 @@ fn parse_request(
                 "list" => "remote_list",
                 "read" => "remote_read",
                 "read-many" => "remote_read_many",
-                "search" => "remote_search",
+                "search" | "find" => "remote_search",
                 "edit" => "remote_edit",
                 "write" => "remote_write",
                 "delete" => "remote_delete",
@@ -396,12 +449,18 @@ fn parse_request(
                     "remote_output"
                 }
                 "exec" => {
+                    let option_command = values
+                        .remove("command")
+                        .and_then(|value| value.as_str().map(str::to_owned));
+                    if remote_command.is_some() && option_command.is_some() {
+                        return Err("Use either --command or --, not both".into());
+                    }
                     values.insert(
                         "command".into(),
                         Value::String(
-                            remote_command
+                            remote_command.or(option_command)
                                 .filter(|s| !s.trim().is_empty())
-                                .ok_or("Remote command is required")?,
+                                .ok_or("Remote command is required. Retry with `safs exec --binding ID -- 'COMMAND'` or `--command 'COMMAND'`")?,
                         ),
                     );
                     if let Some(cwd) = values.remove("cwd") {
@@ -422,7 +481,12 @@ fn parse_request(
         } else {
             fs::read_to_string(path).map_err(|_| "Cannot read UTF-8 --file")?
         };
-        values.insert("content".into(), Value::String(content));
+        if values.insert("content".into(), Value::String(content)).is_some() {
+            return Err("Use either --content or --file, not both".into());
+        }
+    }
+    if tool == "remote_write" && !values.contains_key("content") {
+        return Err("Write content is required. Retry with `--content TEXT` or pipe UTF-8 data to `--file -`".into());
     }
     Ok((tool.into(), Value::Object(values)))
 }
@@ -653,6 +717,14 @@ mod tests {
             Some(Some("upload"))
         );
         assert_eq!(requested_help(&strings(&["exec", "--", "--help"])), None);
+        assert_eq!(
+            requested_help(&strings(&["exec", "--command", "--help"])),
+            None
+        );
+        assert_eq!(
+            requested_help(&strings(&["write", "--content", "-h"])),
+            None
+        );
         for command in [
             "bind",
             "workspaces",
@@ -662,6 +734,7 @@ mod tests {
             "read",
             "read-many",
             "search",
+            "find",
             "edit",
             "write",
             "delete",
@@ -693,10 +766,23 @@ mod tests {
                 &["read-many", "--binding", "b", "--input", "{}"],
                 "remote_read_many",
             ),
-            (&["search", "--binding", "b"], "remote_search"),
+            (
+                &["search", "--binding", "b", "--query", "TODO"],
+                "remote_search",
+            ),
+            (
+                &["find", "--binding", "b", "--name", "*.ts"],
+                "remote_search",
+            ),
             (&["edit", "--binding", "b", "--input", "{}"], "remote_edit"),
             (
-                &["write", "--binding", "b", "--input", "{}"],
+                &[
+                    "write",
+                    "--binding",
+                    "b",
+                    "--input",
+                    r#"{"content":"x"}"#,
+                ],
                 "remote_write",
             ),
             (&["delete", "--binding", "b"], "remote_delete"),
@@ -763,6 +849,76 @@ mod tests {
         )
         .unwrap();
         assert_eq!(args["command"], command);
+    }
+
+    #[test]
+    fn accepts_common_command_write_and_filename_aliases() {
+        let (_, command) = request(
+            strings(&["exec", "--binding", "id", "--command", "pwd"]),
+            "/cwd".into(),
+        )
+        .unwrap();
+        assert_eq!(command["command"], "pwd");
+
+        let (_, write) = request(
+            strings(&[
+                "write",
+                "--binding",
+                "id",
+                "--path",
+                "note.txt",
+                "--content",
+                "hello",
+            ]),
+            "/cwd".into(),
+        )
+        .unwrap();
+        assert_eq!(write["content"], "hello");
+
+        for arguments in [
+            strings(&["search", "--binding", "id", "--name", "*.ts"]),
+            strings(&["find", "--binding", "id", "--name", "*.ts"]),
+        ] {
+            let (name, search) = request(arguments, "/cwd".into()).unwrap();
+            assert_eq!(name, "remote_search");
+            assert_eq!(search["query"], "*.ts");
+            assert_eq!(search["mode"], "names");
+        }
+    }
+
+    #[test]
+    fn alias_conflicts_return_actionable_usage() {
+        let command = request(
+            strings(&[
+                "exec",
+                "--binding",
+                "id",
+                "--command",
+                "pwd",
+                "--",
+                "whoami",
+            ]),
+            "/cwd".into(),
+        )
+        .unwrap_err();
+        assert!(command.contains("Use either --command or --, not both"));
+        assert!(command.contains("Usage: safs exec"));
+
+        let search = request(
+            strings(&[
+                "search",
+                "--binding",
+                "id",
+                "--query",
+                "TODO",
+                "--name",
+                "*.ts",
+            ]),
+            "/cwd".into(),
+        )
+        .unwrap_err();
+        assert!(search.contains("Use either --query or --name, not both"));
+        assert!(search.contains("files returns paths of files whose CONTENT matches"));
     }
     #[test]
     fn never_accepts_binding_override_or_unconfirmed_switch() {

@@ -2670,7 +2670,7 @@ async function remoteSearch(input: RemoteSearchOptions & {
     captureForMcp: input.captureForMcp,
     command: search.command
   });
-  return { ...searchResult(result), mode: search.mode, excludeDirs: search.excludeDirs };
+  return { ...searchResult(result, search.mode), mode: search.mode, excludeDirs: search.excludeDirs };
 }
 
 // ---- Tree View ----
@@ -4248,7 +4248,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     'safs_writeRemoteFile', async (input) =>
       remoteWrite({ ...input, mountName: await forwardedMountName(input.mountName) }), true
   );
-  tool<{ mountName?: string; query: string; path?: string }>(
+  tool<RemoteSearchOptions & { mountName?: string }>(
     'safs_searchRemoteFiles', async (input) =>
       remoteSearch({ ...input, mountName: await forwardedMountName(input.mountName) })
   );

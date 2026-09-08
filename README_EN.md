@@ -94,11 +94,19 @@ stdin to avoid quoting long values in the shell:
 ```sh
 binding_id='binding-id-from-safs-bind'
 safs read --binding "$binding_id" --path README.md
+safs find --binding "$binding_id" --name '*.ts'
+safs search --binding "$binding_id" --query TODO --mode files # content matches, not filenames
 printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
   | safs edit --binding "$binding_id" --path README.md --input -
 printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
+safs write --binding "$binding_id" --path short.txt --content 'short text'
+safs exec --binding "$binding_id" --command 'pwd'
 safs switch --workspace 'workspace-id-from-safs-workspaces' --confirmed
 ```
+
+`search --mode files` returns paths of files whose contents match. To search by
+filename, use `find --name`, `search --name`, or `search --mode names`. `--name`
+accepts shell globs such as `*.ts`.
 
 CLI syntax and argument errors include the relevant command Usage automatically,
 so calling `safs <command> -h` first is unnecessary. Connection, permission, and

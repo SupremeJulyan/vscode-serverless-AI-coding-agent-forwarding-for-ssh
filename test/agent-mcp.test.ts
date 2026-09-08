@@ -145,6 +145,13 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       }
     });
     assert.equal(JSON.parse((moved.content as any[])[0].text).moved, true);
+    const names = await client.callTool({
+      name: 'remote_search', arguments: { query: '*.ts', mode: 'names', ignoreCase: true }
+    });
+    assert.deepEqual(JSON.parse((names.content as any[])[0].text), {
+      query: '*.ts', mode: 'names', ignoreCase: true, agentName: 'codex',
+      agentPlatform: 'wsl', stdout: 'src/index.ts:1:hello'
+    });
     const rejected = await client.callTool({
       name: 'remote_list', arguments: { path: 'forbidden' }
     });
@@ -156,7 +163,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     assert.deepEqual(audited.map((entry) => entry.toolName), [
       'current_remote_file', 'safs_get_remote_workspace', 'remote_list',
       'remote_read', 'remote_edit', 'remote_download', 'remote_upload', 'remote_delete',
-      'remote_chmod', 'remote_move', 'remote_list'
+      'remote_chmod', 'remote_move', 'remote_search', 'remote_list'
     ]);
     assert.ok(audited.every((entry) => entry.agentName === 'codex'));
     const large = await client.callTool({ name: 'run_remote_command', arguments: { command: 'large' } });

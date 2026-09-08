@@ -412,7 +412,7 @@
         "displayName": "Search Remote Files",
         "toolReferenceName": "safsSearch",
         "canBeReferencedInPrompt": true,
-        "modelDescription": "Searches file contents on a configured remote SSH host.",
+        "modelDescription": "Searches contents or file basenames on a configured remote SSH host. mode=files returns files whose contents match; mode=names matches basename globs.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -424,6 +424,31 @@
             },
             "path": {
               "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["content", "files", "count", "names"]
+            },
+            "fixedStrings": {
+              "type": "boolean"
+            },
+            "ignoreCase": {
+              "type": "boolean"
+            },
+            "contextLines": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "include": {
+              "type": "array",
+              "items": { "type": "string" },
+              "maxItems": 20
+            },
+            "excludeDirs": {
+              "type": "array",
+              "items": { "type": "string" },
+              "maxItems": 40
             }
           },
           "required": [

@@ -93,11 +93,18 @@ SAFS 默认检测 `codex`、`claude`、`pi` 和 `dsh`。其他 Agent 可运行 `
 ```sh
 binding_id='binding-id-from-safs-bind'
 safs read --binding "$binding_id" --path README.md
+safs find --binding "$binding_id" --name '*.ts'
+safs search --binding "$binding_id" --query TODO --mode files # 内容匹配文件，不是文件名
 printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
   | safs edit --binding "$binding_id" --path README.md --input -
 printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
+safs write --binding "$binding_id" --path short.txt --content 'short text'
+safs exec --binding "$binding_id" --command 'pwd'
 safs switch --workspace 'workspace-id-from-safs-workspaces' --confirmed
 ```
+
+`search --mode files` 返回“内容匹配的文件路径”；按文件名查找请使用 `find --name`、
+`search --name` 或 `search --mode names`。`--name` 使用 Shell glob，例如 `*.ts`。
 
 CLI 语法或参数错误会直接附带当前子命令的正确 Usage，不需要预先调用 `safs <命令> -h`；
 连接、权限和远程执行等运行期错误保持简短。`-h`/`--help` 仍可用于主动查询。

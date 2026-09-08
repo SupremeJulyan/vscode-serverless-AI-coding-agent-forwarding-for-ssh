@@ -19,6 +19,12 @@ test('search distinguishes failure from no matches and counts only complete capt
   assert.equal(searchResult({ exitCode: 2, stdout: '', stderr: 'invalid regex' }).status, 'error');
   assert.equal(searchResult({ exitCode: 0, stdout: 'a\nb', truncated: true }).returnedLineCount, 1);
   assert.equal(searchResult({ exitCode: 0, stdout: 'a\nb', truncated: false }).returnedLineCount, 2);
+  assert.deepEqual(
+    (({ status, exitCode }) => ({ status, exitCode }))(
+      searchResult({ exitCode: 0, stdout: '' }, 'names')
+    ),
+    { status: 'no_matches', exitCode: 1 }
+  );
 });
 
 test('directory batches share the entry limit and retain resumable item cursors', async () => {

@@ -28,11 +28,14 @@ export function pageDirectory<T extends { name: string; type: string }>(
   };
 }
 
-export function searchResult(result: Record<string, unknown>) {
+export function searchResult(result: Record<string, unknown>, mode?: string) {
   const stdout = typeof result.stdout === 'string' ? result.stdout : '';
-  const status = result.exitCode === 0 ? 'matches' : result.exitCode === 1 ? 'no_matches' : 'error';
+  // POSIX find exits 0 for an empty result, unlike grep. Keep one status/exit
+  // contract across content and filename searches.
+  const exitCode = mode === 'names' && result.exitCode === 0 && !stdout ? 1 : result.exitCode;
+  const status = exitCode === 0 ? 'matches' : exitCode === 1 ? 'no_matches' : 'error';
   return {
-    ...result, status,
+    ...result, exitCode, status,
     // A truncated final line is not a complete match. This is a returned count, not a total.
     returnedLineCount: stdout.split('\n').length - 1 +
       (stdout && !stdout.endsWith('\n') && !result.truncated ? 1 : 0)
