@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { CommandPlan } from './platform';
+import { CommandOutputMarkerStripper } from './command-output-marker';
 
 const execFileAsync = promisify(execFile);
 
@@ -187,6 +188,9 @@ export async function executeCaptured(
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const stdoutStripper = plan.stdoutMarker
+      ? new CommandOutputMarkerStripper(plan.stdoutMarker)
+      : undefined;
     let capturedBytes = 0;
     let truncated = false;
     const capture = (target: Buffer[], chunk: Buffer) => {
@@ -199,8 +203,11 @@ export async function executeCaptured(
       if (chunk.length > remaining) truncated = true;
     };
     child.stdout.on('data', (chunk: Buffer) => {
-      capture(stdout, chunk);
-      handlers.stdout?.(chunk.toString());
+      const parts = stdoutStripper ? stdoutStripper.push(chunk) : [chunk];
+      for (const part of parts) {
+        capture(stdout, part);
+        handlers.stdout?.(part.toString());
+      }
     });
     child.stderr.on('data', (chunk: Buffer) => {
       capture(stderr, chunk);
@@ -211,6 +218,7 @@ export async function executeCaptured(
     child.once('error', reject);
     child.once('close', (code) => {
       signal?.removeEventListener('abort', abort);
+      for (const part of stdoutStripper?.finish() ?? []) capture(stdout, part);
       resolve({
         exitCode: code ?? (signal?.aborted ? 130 : 1),
         stdout: Buffer.concat(stdout).toString(),

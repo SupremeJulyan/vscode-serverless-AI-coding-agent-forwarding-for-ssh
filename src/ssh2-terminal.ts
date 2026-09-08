@@ -14,6 +14,7 @@ import {
 import {
   ssh2RemoteCommand
 } from './ssh-command';
+import { CommandOutputMarkerStripper } from './command-output-marker';
 
 async function connectConfig(
   host: HostConfig, password?: string
@@ -137,7 +138,8 @@ export function closeSsh2ExecSessions(): void {
 
 export async function executeSsh2Command(
   host: HostConfig, password: string | undefined,
-  remoteCwd: string, command: string, signal?: AbortSignal, maxOutputBytes = 1024 * 1024
+  remoteCwd: string, command: string, signal?: AbortSignal, maxOutputBytes = 1024 * 1024,
+  outputMarker?: string
 ): Promise<Ssh2CommandResult> {
   const session = await getExecSession(host, password);
   await session.ready;
@@ -170,7 +172,7 @@ export async function executeSsh2Command(
     }
     signal?.addEventListener('abort', abort, { once: true });
     session.client.on('error', onClientError);
-    session.client.exec(ssh2RemoteCommand(remoteCwd, command), (error, execStream) => {
+    session.client.exec(ssh2RemoteCommand(remoteCwd, command, outputMarker), (error, execStream) => {
       if (error) {
         finishError(error);
         return;
@@ -178,6 +180,9 @@ export async function executeSsh2Command(
       stream = execStream;
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
+      const stdoutStripper = outputMarker
+        ? new CommandOutputMarkerStripper(outputMarker)
+        : undefined;
       let capturedBytes = 0;
       let truncated = false;
       const capture = (target: Buffer[], chunk: Buffer) => {
@@ -188,13 +193,18 @@ export async function executeSsh2Command(
         }
         if (chunk.length > remaining) truncated = true;
       };
-      execStream.on('data', (chunk: Buffer) => capture(stdout, chunk));
+      execStream.on('data', (chunk: Buffer) => {
+        for (const part of stdoutStripper ? stdoutStripper.push(chunk) : [chunk]) {
+          capture(stdout, part);
+        }
+      });
       execStream.stderr.on('data', (chunk: Buffer) => capture(stderr, chunk));
       execStream.once('close', (code: number | undefined) => {
         if (settled) return;
         settled = true;
         signal?.removeEventListener('abort', abort);
         session.client.removeListener('error', onClientError);
+        for (const part of stdoutStripper?.finish() ?? []) capture(stdout, part);
         resolve({
           exitCode: code ?? 1,
           stdout: Buffer.concat(stdout).toString(),

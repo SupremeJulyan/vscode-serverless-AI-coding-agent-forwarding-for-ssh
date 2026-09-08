@@ -17,6 +17,8 @@ export interface CommandPlan {
   cwd?: string;
   env?: Record<string, string>;
   stdin?: string;
+  /** Remove SSH/login-shell output preceding this marker from stdout. */
+  stdoutMarker?: string;
 }
 
 export interface ConnectionOptions {
@@ -31,6 +33,8 @@ export interface ConnectionOptions {
    * 对该文件做 OpenSSH 原生校验兜底（见 system-ssh-host-key.ts）。
    */
   userKnownHostsFile?: string;
+  /** Marker printed immediately before the requested remote command starts. */
+  outputMarker?: string;
 }
 
 /**
@@ -138,8 +142,11 @@ function remoteLoginCommand(remoteCwd: string): string {
   return `cd -- ${shellQuote(remoteCwd)} && exec "\${SHELL:-/bin/sh}" -l`;
 }
 
-function remoteExecCommand(remoteCwd: string, command: string): string {
-  return `cd -- ${shellQuote(remoteCwd)} && exec "\${SHELL:-/bin/sh}" -lc ${shellQuote(command)}`;
+function remoteExecCommand(remoteCwd: string, command: string, outputMarker?: string): string {
+  const markedCommand = outputMarker
+    ? `command printf '%s\\n' ${shellQuote(outputMarker)}; ${command}`
+    : command;
+  return `cd -- ${shellQuote(remoteCwd)} && exec "\${SHELL:-/bin/sh}" -lc ${shellQuote(markedCommand)}`;
 }
 
 class UnixAdapter implements PlatformAdapter {
@@ -151,8 +158,8 @@ class UnixAdapter implements PlatformAdapter {
 
   exec(host: HostConfig, remoteCwd: string, command: string, options?: ConnectionOptions): CommandPlan {
     const args = sshArgs(this.kind, host, undefined, options);
-    args.push(remoteExecCommand(remoteCwd, command));
-    return { command: 'ssh', args };
+    args.push(remoteExecCommand(remoteCwd, command, options?.outputMarker));
+    return { command: 'ssh', args, stdoutMarker: options?.outputMarker };
   }
 }
 
@@ -185,7 +192,8 @@ class WslAdapter implements PlatformAdapter {
   exec(host: HostConfig, remoteCwd: string, command: string, options?: ConnectionOptions): CommandPlan {
     return {
       command: sshBridgePath(),
-      args: [host.name, remoteExecCommand(remoteCwd, command)],
+      args: [host.name, remoteExecCommand(remoteCwd, command, options?.outputMarker)],
+      stdoutMarker: options?.outputMarker,
       env: {
         WSL_VPN_SSH_CONNECTION_REUSE: options?.reuseSshConnection === false ? '0' : '1',
         WSL_VPN_STRICT_HOST_KEY: hostKeyStrictValue(options?.hostKeyPolicy),
@@ -209,8 +217,8 @@ class WindowsAdapter implements PlatformAdapter {
 
   exec(host: HostConfig, remoteCwd: string, command: string, options?: ConnectionOptions): CommandPlan {
     const args = sshArgs('windows', host, undefined, options);
-    args.push(remoteExecCommand(remoteCwd, command));
-    return { command: 'ssh', args };
+    args.push(remoteExecCommand(remoteCwd, command, options?.outputMarker));
+    return { command: 'ssh', args, stdoutMarker: options?.outputMarker };
   }
 }
 

@@ -39,6 +39,12 @@ test('builds a non-interactive ssh2 command with safely quoted cwd and command',
   );
 });
 
+test('builds an ssh2 command with an output boundary before user output', () => {
+  const command = ssh2RemoteCommand('/srv/project', 'pwd', '__SAFS_OUTPUT_test__');
+  assert.match(command, /__SAFS_OUTPUT_test__/);
+  assert.match(command, /; pwd/);
+});
+
 test('builds a file-descriptor-only Bash integration login', () => {
   const command = remoteIntegratedLoginCommand(
     '/bin/bash', `/srv/O'Brien`, scripts, sessionId

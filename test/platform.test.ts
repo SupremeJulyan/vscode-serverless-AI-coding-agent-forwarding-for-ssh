@@ -48,6 +48,18 @@ test('native remote execution supports OpenSSH connection reuse', () => {
   assert.match(plan.args.at(-1) ?? '', /npm test/);
 });
 
+test('remote execution prints and tracks an output marker before the requested command', () => {
+  const marker = '__SAFS_COMMAND_OUTPUT_test__';
+  for (const kind of ['linux', 'macos', 'windows', 'wsl'] as const) {
+    const plan = createPlatformAdapter(kind).exec(host, '/srv/project', 'printf result', {
+      outputMarker: marker
+    });
+    assert.equal(plan.stdoutMarker, marker);
+    assert.match(plan.args.at(-1) ?? '', /__SAFS_COMMAND_OUTPUT_test__/);
+    assert.match(plan.args.at(-1) ?? '', /printf result/);
+  }
+});
+
 test('native SSH pins the probed destination and known_hosts identity', () => {
   const plan = createPlatformAdapter('linux').exec(host, '/srv/project', 'pwd');
   assert.ok(plan.args.includes(`HostName=${host.ip}`));

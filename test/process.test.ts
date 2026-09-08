@@ -26,6 +26,24 @@ test('passes stdin and waits for the command to finish', async () => {
   assert.equal(stdout, 'hello');
 });
 
+test('executeCaptured excludes stdout before a command marker from output and handlers', async () => {
+  const marker = '__SAFS_COMMAND_OUTPUT_process__';
+  let streamed = '';
+  const result = await executeCaptured(
+    {
+      command: process.execPath,
+      args: ['-e', `process.stdout.write('MOTD\\n${marker}\\nresult\\n')`],
+      stdoutMarker: marker
+    },
+    undefined,
+    1024,
+    { stdout: (chunk) => { streamed += chunk; } }
+  );
+  assert.equal(result.stdout, 'result\n');
+  assert.equal(streamed, 'result\n');
+  assert.equal(result.truncated, false);
+});
+
 test('reports the command error without replacing it with an outer timeout', async () => {
   await assert.rejects(
     executeWithStdin(

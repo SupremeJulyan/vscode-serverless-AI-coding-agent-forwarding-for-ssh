@@ -2550,6 +2550,7 @@ async function executeRemoteCommand(
     );
   }
   const resolved = resolveMount(await readConfig(), mount);
+  const outputMarker = `__SAFS_COMMAND_OUTPUT_${randomBytes(16).toString('hex')}__`;
   let credentials: AskpassCredentials | undefined;
   try {
     if (resolved.hostConfig.password) {
@@ -2580,7 +2581,7 @@ async function executeRemoteCommand(
         try {
           result = await executeSsh2Command(
             resolved.hostConfig, resolved.hostConfig.password,
-            remoteCwd, input.command, controller.signal, maxOutputBytes
+            remoteCwd, input.command, controller.signal, maxOutputBytes, outputMarker
           );
           bridgeOutput?.appendLine(
             `[Agent MCP] [${result.exitCode === 0 ? '完成' : `失败: exit ${result.exitCode}`}] ${redactSensitiveText(input.command)}`
@@ -2611,6 +2612,7 @@ async function executeRemoteCommand(
           reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
           bridgeConfigPath: configPath(),
           hostKeyPolicy,
+          outputMarker,
           ...(hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
         });
         plan.env = {
