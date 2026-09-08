@@ -40,6 +40,46 @@ export function unwrapCliToolResult(value: any, allowNull = false): Record<strin
   return { ok: value?.isError !== true, result: result as Record<string, unknown> };
 }
 
+/** Convert MCP-oriented routing instructions into shell CLI guidance. */
+export function adaptCliToolResult(
+  envelope: Record<string, unknown>, toolName: string
+): Record<string, unknown> {
+  const result = envelope.result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return envelope;
+  const value = result as Record<string, unknown>;
+  if (value.code === 'WORKSPACE_SELECTION_REQUIRED') {
+    const candidates = Array.isArray(value.candidates) ? value.candidates.map((candidate) => {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate;
+      const item = candidate as Record<string, unknown>;
+      return typeof item.workspaceId === 'string' ? {
+        ...item,
+        switchCommand: `safs switch --workspace ${item.workspaceId} --confirmed true`
+      } : item;
+    }) : [];
+    return { ...envelope, result: {
+      ...value,
+      candidates,
+      status: 'needs_user_input',
+      action: 'select_workspace',
+      requiresUserInput: true,
+      mustStopNow: true,
+      nextCommandAfterUserReply: 'safs switch --workspace <workspaceId> --confirmed true',
+      message: 'Ask the user to choose a listed workspace, then stop. Do not run a switch command in this turn. After the user replies, run the candidate switchCommand.'
+    } };
+  }
+  if (toolName === 'safs_switch_remote_workspace'
+      && typeof value.bindingId === 'string' && value.previousTaskCancelled === true) {
+    return { ...envelope, result: {
+      ...value,
+      status: 'switched',
+      mustStopNow: true,
+      message: 'Workspace switched and the previous task was cancelled. Stop now and wait for a new user request.',
+      bindingArgument: `--binding ${value.bindingId}`
+    } };
+  }
+  return envelope;
+}
+
 /** 为共用 MCP 地址附加可观测的 Agent 来源标签（不作为身份认证）。 */
 export type AgentPlatformLabel = 'wsl' | 'mac' | 'linux' | 'win';
 
@@ -447,12 +487,12 @@ export class AgentHttpRouter {
           response.json({ ok: true, result: { results } });
           return;
         }
-        response.json(unwrapCliToolResult(
+        response.json(adaptCliToolResult(unwrapCliToolResult(
           await this.callTool(
             name, input as Record<string, unknown>, 'safs-cli', agentPlatform
           ),
           name === 'current_remote_file'
-        ));
+        ), name));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         response.status(500).json({ ok: false, error: message });

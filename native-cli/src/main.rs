@@ -243,6 +243,12 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
         values.insert(json_key.into(), value);
     }
     let binding = values.remove("binding");
+    let require_binding = || {
+        format!(
+            "--binding is required. Use the bindingId returned by `safs bind` or `safs switch`.\n\n{}",
+            command_help(&verb).unwrap_or(HELP).trim_end()
+        )
+    };
     let tool = match verb.as_str() {
         "bind" => {
             let agent_cwd = values.remove("cwd").unwrap_or(Value::String(cwd));
@@ -262,7 +268,7 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
             "safs_switch_remote_workspace"
         }
         "batch" => {
-            let binding = binding.ok_or("--binding is required")?;
+            let binding = binding.ok_or_else(&require_binding)?;
             let operations = values
                 .remove("operations")
                 .and_then(|value| value.as_array().cloned())
@@ -312,7 +318,7 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
             "safs_cli_batch"
         }
         _ => {
-            values.insert("bindingId".into(), binding.ok_or("--binding is required")?);
+            values.insert("bindingId".into(), binding.ok_or_else(&require_binding)?);
             match verb.as_str() {
                 "current-file" => "current_remote_file",
                 "list" => "remote_list",
@@ -710,6 +716,13 @@ mod tests {
             "/cwd".into()
         )
         .is_err());
+    }
+    #[test]
+    fn missing_binding_includes_actionable_command_help() {
+        let error = request(strings(&["current-file"]), "/cwd".into()).unwrap_err();
+        assert!(error.contains("--binding is required"));
+        assert!(error.contains("bindingId returned by `safs bind` or `safs switch`"));
+        assert!(error.contains("Usage: safs current-file --binding ID"));
     }
     #[test]
     fn accepts_inline_json_input() {

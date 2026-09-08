@@ -4,10 +4,37 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
-  AgentHttpRouter, agentTaggedMcpUrl, canonicalAgentCwd
+  AgentHttpRouter, adaptCliToolResult, agentTaggedMcpUrl, canonicalAgentCwd
 } from '../src/agent-http-router';
 import { AgentMcpServer } from '../src/agent-mcp';
 import { DiscoveredAgentWorkspace } from '../src/agent-discovery';
+
+test('CLI workspace guidance uses shell commands and enforces a new user turn', () => {
+  const adapted = adaptCliToolResult({ ok: false, result: {
+    code: 'WORKSPACE_SELECTION_REQUIRED',
+    message: 'call safs_switch_remote_workspace',
+    candidates: [{ workspaceId: 'workspace-a', host: 'dev', workspaceRoot: '/project' }]
+  } }, 'safs_get_remote_workspace');
+  const result = adapted.result as any;
+  assert.equal(result.status, 'needs_user_input');
+  assert.equal(result.requiresUserInput, true);
+  assert.equal(result.mustStopNow, true);
+  assert.equal(result.message.includes('safs_switch_remote_workspace'), false);
+  assert.equal(
+    result.candidates[0].switchCommand,
+    'safs switch --workspace workspace-a --confirmed true'
+  );
+});
+
+test('CLI switch success carries stop and reusable binding guidance', () => {
+  const adapted = adaptCliToolResult({ ok: true, result: {
+    bindingId: 'binding-a', previousTaskCancelled: true, mustWaitForNewUserRequest: true
+  } }, 'safs_switch_remote_workspace');
+  const result = adapted.result as any;
+  assert.equal(result.status, 'switched');
+  assert.equal(result.mustStopNow, true);
+  assert.equal(result.bindingArgument, '--binding binding-a');
+});
 
 function callbacks(label: string) {
   return {
