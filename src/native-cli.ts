@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import type { CommandPlan } from './platform';
 
 export type NativeCliPlatform =
   | 'linux-x64' | 'linux-arm64' | 'darwin-x64' | 'darwin-arm64'
@@ -28,6 +29,28 @@ export function globalNativeCli(home: string, platform: NativeCliPlatform): stri
 
 export function nativeCliConnectionPath(executable: string): string {
   return path.join(path.dirname(executable), '.safs-connection.json');
+}
+
+/**
+ * Build the PowerShell invocation that adds the installed CLI directory to the
+ * user's PATH. Windows PowerShell treats arguments following `-Command` as
+ * more command text in some invocation modes, so pass the directory through
+ * the child environment instead of appending it after the script.
+ */
+export function windowsUserPathUpdatePlan(binDirectory: string): CommandPlan {
+  const variable = 'SAFS_CLI_BIN_DIRECTORY';
+  const script = [
+    `$dir=$env:${variable}`,
+    "if([string]::IsNullOrWhiteSpace($dir)){throw 'Missing SAFS CLI bin directory'}",
+    "$value=[Environment]::GetEnvironmentVariable('Path','User')",
+    "$parts=if($value){$value -split ';'}else{@()}",
+    "if($parts -notcontains $dir){[Environment]::SetEnvironmentVariable('Path',(($parts+$dir)-join ';'),'User')}"
+  ].join(';');
+  return {
+    command: 'powershell.exe',
+    args: ['-NoProfile', '-NonInteractive', '-Command', script],
+    env: { [variable]: binDirectory }
+  };
 }
 
 /** Copy out of the immutable extension bundle and return a stable absolute path. */

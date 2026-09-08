@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
-  nativeCliConnectionPath, nativeCliPlatform
+  nativeCliConnectionPath, nativeCliPlatform, windowsUserPathUpdatePlan
 } from '../src/native-cli';
 
 test('selects native binaries for desktop platforms and WSL', () => {
@@ -17,6 +17,17 @@ test('selects native binaries for desktop platforms and WSL', () => {
   assert.equal(globalNativeCli('/home/me', 'linux-x64'), '/home/me/.local/bin/safs');
   assert.equal(nativeCliConnectionPath('/home/me/.local/bin/safs'), '/home/me/.local/bin/.safs-connection.json');
   assert.throws(() => nativeCliPlatform('linux', 'ia32'));
+});
+
+test('passes the Windows user PATH directory through the environment', () => {
+  const directory = String.raw`C:\Users\Test User\AppData\Local\SAFS\bin`;
+  const plan = windowsUserPathUpdatePlan(directory);
+  assert.equal(plan.command, 'powershell.exe');
+  assert.deepEqual(plan.args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
+  assert.equal(plan.args.length, 4);
+  assert.equal(plan.env?.SAFS_CLI_BIN_DIRECTORY, directory);
+  assert.ok(!plan.args.some(argument => argument === directory));
+  assert.match(plan.args[3], /\$env:SAFS_CLI_BIN_DIRECTORY/);
 });
 
 test('installs an executable copy under extension storage', async () => {

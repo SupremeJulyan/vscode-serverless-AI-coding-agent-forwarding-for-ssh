@@ -1,6 +1,7 @@
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
-  ensureUnixCliPath, installNativeCli, nativeCliConnectionPath, nativeCliPlatform
+  ensureUnixCliPath, installNativeCli, nativeCliConnectionPath, nativeCliPlatform,
+  windowsUserPathUpdatePlan
 } from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
@@ -3371,16 +3372,7 @@ async function installGlobalCli(
   );
   const binDirectory = path.dirname(executable);
   if (nativePlatform.startsWith('win32-')) {
-    const script = [
-      '$dir=$args[0]',
-      "$value=[Environment]::GetEnvironmentVariable('Path','User')",
-      "$parts=if($value){$value -split ';'}else{@()}",
-      "if($parts -notcontains $dir){[Environment]::SetEnvironmentVariable('Path',(($parts+$dir)-join ';'),'User')}"
-    ].join(';');
-    const result = await executeCaptured({
-      command: 'powershell.exe',
-      args: ['-NoProfile', '-NonInteractive', '-Command', script, binDirectory]
-    });
+    const result = await executeCaptured(windowsUserPathUpdatePlan(binDirectory));
     if (result.exitCode !== 0) throw new Error('无法更新用户级 PATH：' + result.stderr.trim());
   } else {
     await ensureUnixCliPath(agentPlatform.home);

@@ -650,6 +650,7 @@
     ]
   },
   "scripts": {
+    "vscode:uninstall": "node ./scripts/uninstall.js",
     "build:native-cli": "node build/build-native-cli.js",
     "test:native-cli": "cargo test --locked --manifest-path native-cli/Cargo.toml",
     "verify:native-cli": "node build/verify-native-cli.js",

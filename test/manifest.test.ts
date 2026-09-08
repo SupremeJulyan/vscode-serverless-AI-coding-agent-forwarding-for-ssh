@@ -265,6 +265,13 @@ test('declares both the install and uninstall forwarding commands', async () => 
   assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
 });
 
+test('runs CLI cleanup after the extension is completely uninstalled', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  );
+  assert.equal(manifest.scripts?.['vscode:uninstall'], 'node ./scripts/uninstall.js');
+});
+
 test('declares host key change action setting', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')

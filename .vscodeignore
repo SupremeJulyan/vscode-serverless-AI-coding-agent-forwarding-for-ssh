@@ -10,3 +10,4 @@ node_modules/**
 !images/icon.png
 build/**
 native-cli/**
+scripts/*.test.js
