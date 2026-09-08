@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import type { CommandPlan } from './platform';
 
 export type NativeCliPlatform =
@@ -53,6 +53,23 @@ export function windowsUserPathUpdatePlan(binDirectory: string): CommandPlan {
   };
 }
 
+export function windowsUserPathRemovePlan(binDirectory: string): CommandPlan {
+  const variable = 'SAFS_CLI_BIN_DIRECTORY';
+  const script = [
+    `$dir=$env:${variable}`,
+    "$value=[Environment]::GetEnvironmentVariable('Path','User')",
+    "$target=$dir.TrimEnd('\\')",
+    "$parts=if($value){@($value -split ';' | Where-Object { $_ -and $_.Trim().TrimEnd('\\') -ine $target })}else{@()}",
+    "$next=$parts -join ';'",
+    "if($next -ne $value){[Environment]::SetEnvironmentVariable('Path',$next,'User')}"
+  ].join(';');
+  return {
+    command: 'powershell.exe',
+    args: ['-NoProfile', '-NonInteractive', '-Command', script],
+    env: { [variable]: binDirectory }
+  };
+}
+
 /** Copy out of the immutable extension bundle and return a stable absolute path. */
 export async function installNativeCli(
   extensionRoot: string, home: string, platform: NativeCliPlatform,
@@ -91,10 +108,45 @@ async function ensureUnixProfilePath(profile: string): Promise<void> {
   if (next !== previous) await writeFile(profile, next, { mode: 0o600 });
 }
 
+export function withoutSafsPathBlock(content: string): string {
+  const pattern = new RegExp(
+    `(?:^|\\n)${pathBegin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\r?\\n`
+    + `[\\s\\S]*?\\r?\\n${pathEnd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\r?\\n|$)`,
+    'g'
+  );
+  return content.replace(pattern, (match) => match.startsWith('\n') ? '\n' : '');
+}
+
+async function removeUnixProfilePath(profile: string): Promise<void> {
+  let previous = '';
+  try { previous = await readFile(profile, 'utf8'); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const next = withoutSafsPathBlock(previous);
+  if (next !== previous) await writeFile(profile, next, { mode: 0o600 });
+}
+
 export async function ensureUnixCliPath(home: string): Promise<void> {
   // POSIX login shells read .profile, while macOS and many Linux zsh setups
   // read .zprofile instead. Keep both entry points consistent so a newly
   // opened terminal can resolve the user-level global command.
   await ensureUnixProfilePath(path.join(home, '.profile'));
   await ensureUnixProfilePath(path.join(home, '.zprofile'));
+}
+
+/** Remove the global CLI files and Unix login-shell PATH entries. */
+export async function removeNativeCli(
+  home: string, platform: NativeCliPlatform
+): Promise<string> {
+  const executable = globalNativeCli(home, platform);
+  await Promise.all([
+    rm(executable, { force: true }),
+    rm(nativeCliConnectionPath(executable), { force: true }),
+    ...(!platform.startsWith('win32-') ? [
+      removeUnixProfilePath(path.join(home, '.profile')),
+      removeUnixProfilePath(path.join(home, '.zprofile'))
+    ] : [])
+  ]);
+  return executable;
 }

@@ -272,6 +272,8 @@ test('declares both the install and uninstall forwarding commands', async () => 
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
   assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
+  assert.ok(extensionSource.includes('复制 MCP 安装提示词'));
+  assert.ok(extensionSource.includes('复制 MCP 卸载提示词'));
 });
 
 test('runs CLI cleanup after the extension is completely uninstalled', async () => {

@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
-  nativeCliConnectionPath, nativeCliPlatform, windowsUserPathUpdatePlan
+  nativeCliConnectionPath, nativeCliPlatform, removeNativeCli, withoutSafsPathBlock,
+  windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/native-cli';
 
 test('selects native binaries for desktop platforms and WSL', () => {
@@ -28,6 +29,15 @@ test('passes the Windows user PATH directory through the environment', () => {
   assert.equal(plan.env?.SAFS_CLI_BIN_DIRECTORY, directory);
   assert.ok(!plan.args.some(argument => argument === directory));
   assert.match(plan.args[3], /\$env:SAFS_CLI_BIN_DIRECTORY/);
+});
+
+test('builds a Windows user PATH removal without embedding the directory', () => {
+  const directory = String.raw`C:\Users\Test User\AppData\Local\SAFS\bin`;
+  const plan = windowsUserPathRemovePlan(directory);
+  assert.equal(plan.command, 'powershell.exe');
+  assert.equal(plan.env?.SAFS_CLI_BIN_DIRECTORY, directory);
+  assert.ok(!plan.args.some(argument => argument === directory));
+  assert.match(plan.args[3], /SetEnvironmentVariable\('Path'/);
 });
 
 test('installs an executable copy under extension storage', async () => {
@@ -60,5 +70,23 @@ test('adds the user CLI directory to the Unix login PATH idempotently', async ()
     assert.equal(await readFile(join(home, '.zprofile'), 'utf8'), firstZsh);
     assert.match(first, /export PATH="\$HOME\/\.local\/bin:\$PATH"/);
     assert.match(firstZsh, /export PATH="\$HOME\/\.local\/bin:\$PATH"/);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test('removes CLI files and managed Unix PATH entries', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'safs-native-remove-'));
+  try {
+    const executable = globalNativeCli(home, 'linux-x64');
+    await import('node:fs/promises').then(fs => fs.mkdir(join(home, '.local', 'bin'), { recursive: true }));
+    await writeFile(executable, 'native');
+    await writeFile(nativeCliConnectionPath(executable), '{}');
+    await writeFile(join(home, '.profile'), 'before\n# SAFS CLI PATH BEGIN\nmanaged\n# SAFS CLI PATH END\nafter\n');
+    await writeFile(join(home, '.zprofile'), '# SAFS CLI PATH BEGIN\nmanaged\n# SAFS CLI PATH END\nkeep\n');
+    await removeNativeCli(home, 'linux-x64');
+    await assert.rejects(readFile(executable), { code: 'ENOENT' });
+    await assert.rejects(readFile(nativeCliConnectionPath(executable)), { code: 'ENOENT' });
+    assert.equal(await readFile(join(home, '.profile'), 'utf8'), 'before\nafter\n');
+    assert.equal(await readFile(join(home, '.zprofile'), 'utf8'), 'keep\n');
+    assert.equal(withoutSafsPathBlock('plain\n'), 'plain\n');
   } finally { await rm(home, { recursive: true, force: true }); }
 });
