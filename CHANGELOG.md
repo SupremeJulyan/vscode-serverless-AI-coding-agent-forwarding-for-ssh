@@ -2,6 +2,22 @@
 
 ## 1.7.7
 
+- CLI 与 MCP 两种转发入口改为互斥并支持双向切换：切换到 CLI 时自动安装/更新
+  用户级全局 `safs` 命令并探测卸载旧 MCP 注册；切回 MCP 时自动卸载用户级
+  `safs`（移除 bin、连接配置、Unix 登录 shell 的 PATH 条目或用 PowerShell 清理
+  Windows 用户 Path）并重新为检测到的 Agent 配置 MCP。切换后弹窗可一键复制
+  MCP 卸载/安装提示词，交给不受检测覆盖的手工配置 Agent 执行。
+- 已安装的用户级 `safs` 仅在平台或安装路径变化、全局可执行文件丢失、或扩展
+  升级时才重新复制 bin；重载窗口或切换工作区不再每次激活都重复复制。
+- CLI 新增文件名搜索模式（`find` 别名，查询为 basename glob，带 find/prune
+  语义），与内容搜索共用同一状态/退出约定；`write` 新增 `--content`、
+  `exec` 新增 `--command` 作为 `--file -`/`--` 的替代；`requested_help` 跳过
+  选项值，避免把 `--command --help` 之类的数据误判为帮助请求。
+- 远程命令输出在命令运行前打印随机标记，并丢弃其前的传输与 shell 启动文本，
+  Agent 命令输出不再混入登录/MOTD 噪音。
+- 导出的 Bash `PROMPT_COMMAND` 被调度器、attach 等没有 SAFS shell 函数的进程
+  继承时保持静默且不改退出状态的无操作：hooks 存入会话局部变量、状态显式传递，
+  真实退出码在子 shell 中得以保留。
 - CLI 将 `--confirmed true` 简化为布尔开关 `--confirmed`，`--input -` 和
   `--file -` 支持 stdin；语法错误会自动附带对应子命令 Usage。
 
