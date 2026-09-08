@@ -1,7 +1,7 @@
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
-  ensureUnixCliPath, installNativeCli, nativeCliConnectionPath, nativeCliPlatform,
-  windowsUserPathUpdatePlan
+  ensureUnixCliPath, globalNativeCli, installNativeCli, nativeCliConnectionPath,
+  nativeCliPlatform, windowsUserPathUpdatePlan
 } from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
@@ -110,6 +110,8 @@ const agentMcpTokenSecret = platformStateKey('agentMcpToken');
 const agentSetupCompletedKey = platformStateKey('agentSetupCompleted');
 const aiForwardMountsKey = platformStateKey('aiForwardMounts');
 const directoryHistoryKey = platformStateKey('directoryHistory');
+/** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
+const cliInstallKey = platformStateKey('cliInstall');
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
 const addSshConfigAction = 'Add SSH Config';
@@ -3361,12 +3363,27 @@ async function installGlobalCli(
     settings().get<string>('agentPlatform', 'auto')
   );
   const nativePlatform = nativeCliPlatform(process.platform, process.arch, agentPlatform.wsl);
-  const executable = await installNativeCli(
-    context.extensionPath, agentPlatform.home, nativePlatform
-  );
-  bridgeOutput?.appendLine(
-    `[Agent CLI] 已刷新 ${nativePlatform} bin 文件：${executable}`
-  );
+  const executable = globalNativeCli(agentPlatform.home, nativePlatform);
+  const extensionVersion = String(context.extension.packageJSON?.version ?? '');
+  // 仅在以下情况刷新（复制）bin，避免每次切换工作区/重载扩展都重复复制：
+  // 平台或安装路径变化、目标文件丢失、或扩展已升级（version 变化，打包的 bin
+  // 随构建流水线更新）。沿用已装全局命令前需保证其与当前扩展版本匹配。
+  const previous = context.globalState.get<{
+    platform: string; installPath: string; version: string;
+  }>(cliInstallKey);
+  const alreadyInstalled = previous?.platform === nativePlatform
+    && previous.installPath === executable
+    && previous.version === extensionVersion
+    && await (access(executable).then(() => true, () => false));
+  if (!alreadyInstalled) {
+    await installNativeCli(context.extensionPath, agentPlatform.home, nativePlatform);
+    bridgeOutput?.appendLine(
+      `[Agent CLI] 已刷新 ${nativePlatform} bin 文件：${executable}`
+    );
+    await context.globalState.update(cliInstallKey, {
+      platform: nativePlatform, installPath: executable, version: extensionVersion
+    });
+  }
   const forwardingTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
   const cliTimeoutMs = forwardingTimeoutMs > 0 ? forwardingTimeoutMs + 5_000 : 0;
   await writeCliConnectionFile(
