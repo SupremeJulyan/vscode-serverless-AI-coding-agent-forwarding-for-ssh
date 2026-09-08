@@ -104,9 +104,6 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     const structuredCalls: string[][] = [
       ['read-many', '--input', JSON.stringify({ requests: [{ path: 'a.txt' }] })],
       ['search', '--query', 'TODO'],
-      ['edit', '--path', 'a.txt', '--input', JSON.stringify({
-        edits: [{ oldText: 'a', newText: 'b' }]
-      })],
       ['delete', '--path', 'a.txt'],
       ['chmod', '--path', 'a.txt', '--mode', '644'],
       ['move', '--input', JSON.stringify({ sourcePath: 'a', targetPath: 'b' })],
@@ -118,22 +115,33 @@ test('native CLI binds and executes through the existing SAFS router', async () 
       })]
     ];
     await writeFile(join(temporary, 'upload.txt'), 'upload');
+    const edit = await executeCaptured({
+      command: executable,
+      args: [
+        '--config', config, 'edit', '--binding', bindingId,
+        '--path', 'a.txt', '--input', '-'
+      ],
+      stdin: JSON.stringify({ edits: [{ oldText: 'a', newText: 'b' }] })
+    });
+    assert.equal(edit.exitCode, 0, edit.stderr);
     for (const call of structuredCalls) {
       const result = await executeCaptured({ command: executable, args: [
         '--config', config, call[0], '--binding', bindingId, ...call.slice(1)
       ] });
       assert.equal(result.exitCode, 0, `${call[0]}: ${result.stderr}`);
     }
-    const writeSource = join(temporary, 'write.txt');
-    await writeFile(writeSource, 'replacement');
-    const write = await executeCaptured({ command: executable, args: [
-      '--config', config, 'write', '--binding', bindingId,
-      '--path', 'write.txt', '--file', writeSource
-    ] });
+    const write = await executeCaptured({
+      command: executable,
+      args: [
+        '--config', config, 'write', '--binding', bindingId,
+        '--path', 'write.txt', '--file', '-'
+      ],
+      stdin: 'replacement'
+    });
     assert.equal(write.exitCode, 0, write.stderr);
     assert.deepEqual(
       [...new Set(operations)],
-      ['read', 'search', 'edit', 'delete', 'chmod', 'move', 'upload', 'download', 'write']
+      ['edit', 'read', 'search', 'delete', 'chmod', 'move', 'upload', 'download', 'write']
     );
     const batch = await executeCaptured({ command: executable, args: [
       '--config', config, '--compact', 'batch', '--binding', bindingId, '--input',
@@ -153,6 +161,13 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     assert.equal(conciseError.exitCode, 1);
     assert.match(conciseError.stderr, /REMOTE_TOOL_ERROR: denied detail/);
     assert.equal(conciseError.stderr.includes('{"code"'), false);
+    const syntaxError = await executeCaptured({ command: executable, args: [
+      '--config', config, 'read', '--binding', bindingId, '--unknown', 'value'
+    ] });
+    assert.equal(syntaxError.exitCode, 1);
+    assert.match(syntaxError.stderr, /Invalid option for read: --unknown/);
+    assert.match(syntaxError.stderr, /Usage: safs read/);
+    assert.equal(syntaxError.stderr.includes('Usage: safs upload'), false);
   } finally {
     await router.stop();
     await backend.stop();

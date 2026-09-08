@@ -22,7 +22,7 @@ test('CLI workspace guidance uses shell commands and enforces a new user turn', 
   assert.equal(result.message.includes('safs_switch_remote_workspace'), false);
   assert.equal(
     result.candidates[0].switchCommand,
-    'safs switch --workspace workspace-a --confirmed true'
+    'safs switch --workspace workspace-a --confirmed'
   );
 });
 

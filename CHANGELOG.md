@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.7
+
+- CLI 将 `--confirmed true` 简化为布尔开关 `--confirmed`，`--input -` 和
+  `--file -` 支持 stdin；语法错误会自动附带对应子命令 Usage。
+
 ## 1.7.6
 
 - CLI 新增 `current-file`，可读取绑定 VS Code 窗口当前打开的远程文件路径、相对路径、大小和未保存状态。

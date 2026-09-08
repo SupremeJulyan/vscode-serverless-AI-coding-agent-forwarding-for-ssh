@@ -84,7 +84,23 @@ SAFS 默认检测 `codex`、`claude`、`pi` 和 `dsh`。其他 Agent 可运行 `
 
 #### CLI 模式
 
-将 `safs.agentInterface` 设为 `cli` 后，扩展会安装全局 `safs` 命令。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。此模式要求 VSIX 包含 Agent 所在平台的原生程序；一般保持默认的 `mcp` 即可，但如果有极致token少量消耗需求，还是手动在设置里切换为cil，因为此模式不安装mcp 工具，理论token消耗更少。
+将 `safs.agentInterface` 设为 `cli` 后，扩展会安装全局 `safs` 命令。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。此模式要求 VSIX 包含 Agent 所在平台的原生程序；一般保持默认的 `mcp` 即可。如果需要尽量减少 Token 消耗，可以手动切换为 CLI，因为此模式不安装 MCP 工具。
+
+`safs bind` 或 `safs switch` 返回的 `bindingId` 通过 `--binding` 显式传给后续命令，
+确保固定 CLI 入口后的每次操作仍指向用户选定的 VS Code 窗口。结构化 JSON 和写入内容
+支持从 stdin 读取，避免长内容的 Shell 转义：
+
+```sh
+binding_id='binding-id-from-safs-bind'
+safs read --binding "$binding_id" --path README.md
+printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
+  | safs edit --binding "$binding_id" --path README.md --input -
+printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
+safs switch --workspace 'workspace-id-from-safs-workspaces' --confirmed
+```
+
+CLI 语法或参数错误会直接附带当前子命令的正确 Usage，不需要预先调用 `safs <命令> -h`；
+连接、权限和远程执行等运行期错误保持简短。`-h`/`--help` 仍可用于主动查询。
 
 ## 文件传输与本地同步
 

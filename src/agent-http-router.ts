@@ -53,7 +53,7 @@ export function adaptCliToolResult(
       const item = candidate as Record<string, unknown>;
       return typeof item.workspaceId === 'string' ? {
         ...item,
-        switchCommand: `safs switch --workspace ${item.workspaceId} --confirmed true`
+        switchCommand: `safs switch --workspace ${item.workspaceId} --confirmed`
       } : item;
     }) : [];
     return { ...envelope, result: {
@@ -63,7 +63,7 @@ export function adaptCliToolResult(
       action: 'select_workspace',
       requiresUserInput: true,
       mustStopNow: true,
-      nextCommandAfterUserReply: 'safs switch --workspace <workspaceId> --confirmed true',
+      nextCommandAfterUserReply: 'safs switch --workspace <workspaceId> --confirmed',
       message: 'Ask the user to choose a listed workspace, then stop. Do not run a switch command in this turn. After the user replies, run the candidate switchCommand.'
     } };
   }

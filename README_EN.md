@@ -84,7 +84,26 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-Set `safs.agentInterface` to `cli` to install the global `safs` command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. This mode requires the VSIX to include a native binary for the Agent's platform. The default `mcp` mode is recommended for most users. If minimizing token usage is critical, you can switch to CLI manually because it does not install MCP tools and may therefore use fewer tokens in theory.
+Set `safs.agentInterface` to `cli` to install the global `safs` command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. This mode requires the VSIX to include a native binary for the Agent's platform. The default `mcp` mode is recommended for most users. To minimize token usage, switch to CLI manually; this mode does not install MCP tools.
+
+Pass the `bindingId` returned by `safs bind` or `safs switch` explicitly through
+`--binding`, ensuring every operation behind the fixed CLI endpoint still targets
+the selected VS Code window. Structured JSON and write content can be read from
+stdin to avoid quoting long values in the shell:
+
+```sh
+binding_id='binding-id-from-safs-bind'
+safs read --binding "$binding_id" --path README.md
+printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
+  | safs edit --binding "$binding_id" --path README.md --input -
+printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
+safs switch --workspace 'workspace-id-from-safs-workspaces' --confirmed
+```
+
+CLI syntax and argument errors include the relevant command Usage automatically,
+so calling `safs <command> -h` first is unnecessary. Connection, permission, and
+remote execution failures remain concise. `-h`/`--help` remains available for
+proactive discovery.
 
 ## File transfer and local sync
 

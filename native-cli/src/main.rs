@@ -1,5 +1,10 @@
 use serde_json::{json, Map, Value};
-use std::{env, fs, process, time::Duration};
+use std::{
+    env, fs,
+    io::{self, Read},
+    process,
+    time::Duration,
+};
 use url::Url;
 
 const HELP: &str = r#"Usage: safs COMMAND [options]
@@ -27,7 +32,7 @@ Lists all active SAFS workspaces and their workspaceId values.
 "#,
         ),
         "switch" => Some(
-            r#"Usage: safs switch --workspace ID --confirmed true
+            r#"Usage: safs switch --workspace ID --confirmed
 Call only after the user explicitly chooses a workspace. Returns a new bindingId.
 "#,
         ),
@@ -48,7 +53,7 @@ Selection: --offset N [--length N] | --head N | --tail N |
 "#,
         ),
         "read-many" => Some(
-            r#"Usage: safs read-many --binding ID --input JSON
+            r#"Usage: safs read-many --binding ID --input JSON|-
 Example: --input '{"requests":[{"path":"a.txt"},{"path":"b.txt","head":20}],"maxBytes":16384}'
 "#,
         ),
@@ -59,12 +64,12 @@ and excludeDirs.
 "#,
         ),
         "edit" => Some(
-            r#"Usage: safs edit --binding ID --path PATH --input JSON
+            r#"Usage: safs edit --binding ID --path PATH --input JSON|-
 Example: --input '{"edits":[{"oldText":"old","newText":"new"}],"expectedHash":"SHA256"}'
 "#,
         ),
         "write" => Some(
-            r#"Usage: safs write --binding ID --path PATH --file LOCAL_UTF8_FILE
+            r#"Usage: safs write --binding ID --path PATH --file LOCAL_UTF8_FILE|-
 Creates or replaces a remote UTF-8 file with the local file content.
 "#,
         ),
@@ -79,17 +84,17 @@ MODE is exactly three octal digits, for example 644 or 755.
 "#,
         ),
         "move" => Some(
-            r#"Usage: safs move --binding ID --input JSON
+            r#"Usage: safs move --binding ID --input JSON|-
 Example: --input '{"sourcePath":"old","targetPath":"new","overwrite":false}'
 "#,
         ),
         "upload" => Some(
-            r#"Usage: safs upload --binding ID --input JSON
+            r#"Usage: safs upload --binding ID --input JSON|-
 Example: --input '{"localPaths":["/absolute/local/path"],"remoteDirectory":"."}'
 "#,
         ),
         "download" => Some(
-            r#"Usage: safs download --binding ID --input JSON
+            r#"Usage: safs download --binding ID --input JSON|-
 Example: --input '{"remotePath":"file","localPath":"/absolute/local/target"}'
 "#,
         ),
@@ -104,7 +109,7 @@ Continues a retained, truncated command stream without rerunning the command.
 "#,
         ),
         "batch" => Some(
-            r#"Usage: safs batch --binding ID --input JSON
+            r#"Usage: safs batch --binding ID --input JSON|-
 Example: --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
 Runs 1 to 50 operations sequentially in one local HTTP request.
 "#,
@@ -157,13 +162,51 @@ fn parse_u64(value: &str, name: &str) -> Result<Value, String> {
         .map_err(|_| format!("Invalid {name}"))
 }
 
-fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String> {
+fn usage_error(command: Option<&str>, error: String) -> String {
+    format!(
+        "{error}\n\n{}",
+        command.and_then(command_help).unwrap_or(HELP).trim_end()
+    )
+}
+
+#[cfg(test)]
+fn request(args: Vec<String>, cwd: String) -> Result<(String, Value), String> {
+    request_with_context(args, cwd, None)
+}
+
+fn request_with_context(
+    args: Vec<String>,
+    cwd: String,
+    stdin_content: Option<String>,
+) -> Result<(String, Value), String> {
+    let command = args.first().cloned();
+    parse_request(args, cwd, stdin_content)
+        .map_err(|error| usage_error(command.as_deref(), error))
+}
+
+fn parse_request(
+    mut args: Vec<String>,
+    cwd: String,
+    stdin_content: Option<String>,
+) -> Result<(String, Value), String> {
     if args.is_empty() {
         return Err("Missing command; use --help".into());
     }
     let verb = args.remove(0);
     let input_json = take_option(&mut args, "--input")?;
     let content_path = take_option(&mut args, "--file")?;
+    if input_json.as_deref() == Some("-") && content_path.as_deref() == Some("-") {
+        return Err("--input - and --file - cannot read the same stdin".into());
+    }
+    let input_json = input_json
+        .map(|value| {
+            if value == "-" {
+                stdin_content.clone().ok_or("Cannot read UTF-8 stdin")
+            } else {
+                Ok(value)
+            }
+        })
+        .transpose()?;
     let mut values = Map::new();
     if let Some(json) = input_json {
         let input: Value = serde_json::from_str(&json).map_err(|_| "Invalid --input JSON")?;
@@ -209,6 +252,18 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
             break;
         }
         let flag = args.remove(0);
+        if verb == "switch" && flag == "--confirmed" {
+            if values.contains_key("confirmed") {
+                return Err("Duplicate input field: confirmed".into());
+            }
+            if args.first().is_some_and(|value| value == "true") {
+                args.remove(0);
+            } else if args.first().is_some_and(|value| value == "false") {
+                return Err("--confirmed cannot be false".into());
+            }
+            values.insert("confirmed".into(), Value::Bool(true));
+            continue;
+        }
         if !flag.starts_with("--") || args.is_empty() {
             return Err(format!("Invalid option: {flag}"));
         }
@@ -244,10 +299,7 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
     }
     let binding = values.remove("binding");
     let require_binding = || {
-        format!(
-            "--binding is required. Use the bindingId returned by `safs bind` or `safs switch`.\n\n{}",
-            command_help(&verb).unwrap_or(HELP).trim_end()
-        )
+        "--binding is required. Use the bindingId returned by `safs bind` or `safs switch`.".to_string()
     };
     let tool = match verb.as_str() {
         "bind" => {
@@ -260,8 +312,8 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
             let workspace = values
                 .remove("workspace")
                 .ok_or("--workspace is required")?;
-            if values.remove("confirmed") != Some(Value::String("true".into())) {
-                return Err("--confirmed true is required after user confirmation".into());
+            if values.remove("confirmed") != Some(Value::Bool(true)) {
+                return Err("--confirmed is required after user confirmation".into());
             }
             values.insert("workspaceId".into(), workspace);
             values.insert("userConfirmed".into(), Value::Bool(true));
@@ -365,10 +417,12 @@ fn request(mut args: Vec<String>, cwd: String) -> Result<(String, Value), String
         if tool != "remote_write" {
             return Err("--file is only valid for write".into());
         }
-        values.insert(
-            "content".into(),
-            Value::String(fs::read_to_string(path).map_err(|_| "Cannot read UTF-8 --file")?),
-        );
+        let content = if path == "-" {
+            stdin_content.ok_or("Cannot read UTF-8 stdin")?
+        } else {
+            fs::read_to_string(path).map_err(|_| "Cannot read UTF-8 --file")?
+        };
+        values.insert("content".into(), Value::String(content));
     }
     Ok((tool.into(), Value::Object(values)))
 }
@@ -519,12 +573,25 @@ fn run() -> Result<i32, String> {
             })
         })
         .ok_or("Cannot locate the SAFS connection file")?;
-    let (name, arguments) = request(
+    let reads_stdin = args.windows(2).any(|pair| {
+        matches!(pair, [flag, value] if (flag == "--input" || flag == "--file") && value == "-")
+    });
+    let stdin_content = if reads_stdin {
+        let mut value = String::new();
+        io::stdin()
+            .read_to_string(&mut value)
+            .map_err(|_| "Cannot read UTF-8 stdin")?;
+        Some(value)
+    } else {
+        None
+    };
+    let (name, arguments) = request_with_context(
         args,
         env::current_dir()
             .map_err(|_| "Cannot determine current directory")?
             .to_string_lossy()
             .into(),
+        stdin_content,
     )?;
     let mut result = invoke(&config, name.clone(), arguments)?;
     let code = result_exit_code(&result);
@@ -616,7 +683,7 @@ mod tests {
             (&["bind"], "safs_get_remote_workspace"),
             (&["workspaces"], "cli_list_workspaces"),
             (
-                &["switch", "--workspace", "w", "--confirmed", "true"],
+                &["switch", "--workspace", "w", "--confirmed"],
                 "safs_switch_remote_workspace",
             ),
             (&["current-file", "--binding", "b"], "current_remote_file"),
@@ -716,6 +783,16 @@ mod tests {
             "/cwd".into()
         )
         .is_err());
+        assert!(request(
+            strings(&["switch", "--workspace", "id", "--confirmed", "false"]),
+            "/cwd".into()
+        )
+        .is_err());
+        assert!(request(
+            strings(&["switch", "--workspace", "id", "--confirmed", "true"]),
+            "/cwd".into()
+        )
+        .is_ok());
     }
     #[test]
     fn missing_binding_includes_actionable_command_help() {
@@ -723,6 +800,39 @@ mod tests {
         assert!(error.contains("--binding is required"));
         assert!(error.contains("bindingId returned by `safs bind` or `safs switch`"));
         assert!(error.contains("Usage: safs current-file --binding ID"));
+    }
+    #[test]
+    fn reads_structured_input_and_write_content_from_stdin() {
+        let (_, edit) = request_with_context(
+            strings(&["edit", "--binding", "id", "--path", "a", "--input", "-"]),
+            "/cwd".into(),
+            Some(r#"{"edits":[{"oldText":"a","newText":"b"}]}"#.into()),
+        )
+        .unwrap();
+        assert_eq!(edit["edits"][0]["newText"], "b");
+
+        let (_, write) = request_with_context(
+            strings(&["write", "--binding", "id", "--path", "a", "--file", "-"]),
+            "/cwd".into(),
+            Some("replacement\n".into()),
+        )
+        .unwrap();
+        assert_eq!(write["content"], "replacement\n");
+    }
+    #[test]
+    fn syntax_errors_include_only_the_relevant_command_usage() {
+        let switch = request(strings(&["switch"]), "/cwd".into()).unwrap_err();
+        assert!(switch.contains("--workspace is required"));
+        assert!(switch.contains("Usage: safs switch"));
+        assert!(!switch.contains("Usage: safs read "));
+
+        let read = request(
+            strings(&["read", "--binding", "id", "--input", "not-json"]),
+            "/cwd".into(),
+        )
+        .unwrap_err();
+        assert!(read.contains("Invalid --input JSON"));
+        assert!(read.contains("Usage: safs read "));
     }
     #[test]
     fn accepts_inline_json_input() {
