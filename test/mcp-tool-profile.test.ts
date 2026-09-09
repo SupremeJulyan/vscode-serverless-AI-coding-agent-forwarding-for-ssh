@@ -17,7 +17,7 @@ test('core profile keeps typed editing and output continuation but omits extende
     const names = tools.map(t => t.name);
     assert.ok(names.includes('remote_edit'));
     assert.ok(names.includes('remote_output'));
-    assert.ok(names.includes('safs_switch_remote_workspace'));
+    assert.ok(names.includes('switch_remote_workspace'));
     assert.ok(!names.includes('remote_upload'));
     assert.ok(!names.includes('remote_delete'));
     const result = await client.callTool({ name: 'remote_output', arguments: { bindingId: 'x', outputId: 'invalid' } });

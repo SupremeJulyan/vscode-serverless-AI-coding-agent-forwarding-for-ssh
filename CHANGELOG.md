@@ -2,6 +2,9 @@
 
 ## 1.7.8
 
+- MCP 工作区工具移除自身重复的 `safs_` 前缀，注册名改为
+  `get_remote_workspace` 和 `switch_remote_workspace`；客户端显示名称由
+  `safs_safs_*` 恢复为 `safs_*`。CLI 路由保留旧名称兼容，避免已安装 CLI 失效。
 - 六个平台的原生 CLI 不再打入 VSIX；仅在切换到 CLI 模式时，从项目 GitHub
   仓库的 `bin` 目录按当前 Agent 平台下载并安装对应可执行文件。
 - MCP 切换到 CLI 时，若尚未安装 CLI 会先询问确认；确认后下载或更新 CLI、

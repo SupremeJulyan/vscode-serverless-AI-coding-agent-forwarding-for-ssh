@@ -12,14 +12,14 @@ import { DiscoveredAgentWorkspace } from '../src/agent-discovery';
 test('CLI workspace guidance uses shell commands and enforces a new user turn', () => {
   const adapted = adaptCliToolResult({ ok: false, result: {
     code: 'WORKSPACE_SELECTION_REQUIRED',
-    message: 'call safs_switch_remote_workspace',
+    message: 'call switch_remote_workspace',
     candidates: [{ workspaceId: 'workspace-a', host: 'dev', workspaceRoot: '/project' }]
-  } }, 'safs_get_remote_workspace');
+  } }, 'get_remote_workspace');
   const result = adapted.result as any;
   assert.equal(result.status, 'needs_user_input');
   assert.equal(result.requiresUserInput, true);
   assert.equal(result.mustStopNow, true);
-  assert.equal(result.message.includes('safs_switch_remote_workspace'), false);
+  assert.equal(result.message.includes('switch_remote_workspace'), false);
   assert.equal(
     result.candidates[0].switchCommand,
     'safs switch --workspace workspace-a --confirmed'
@@ -29,7 +29,7 @@ test('CLI workspace guidance uses shell commands and enforces a new user turn', 
 test('CLI switch success carries stop and reusable binding guidance', () => {
   const adapted = adaptCliToolResult({ ok: true, result: {
     bindingId: 'binding-a', previousTaskCancelled: true, mustWaitForNewUserRequest: true
-  } }, 'safs_switch_remote_workspace');
+  } }, 'switch_remote_workspace');
   const result = adapted.result as any;
   assert.equal(result.status, 'switched');
   assert.equal(result.mustStopNow, true);
@@ -134,7 +134,7 @@ test('exact cwd wins, expired binding stays invalid, and a new get may use focus
     await router.start();
     await client.connect(new StreamableHTTPClientTransport(new URL(router.url)));
     const selected = await client.callTool({
-      name: 'safs_get_remote_workspace',
+      name: 'get_remote_workspace',
       arguments: { agentCwd: '/mnt/c/local/agent-cwd/a/project' }
     });
     const value = JSON.parse((selected.content as any[])[0].text);
@@ -148,7 +148,7 @@ test('exact cwd wins, expired binding stays invalid, and a new get may use focus
     assert.equal(expired.isError, true);
     assert.equal(JSON.parse((expired.content as any[])[0].text).code, 'WORKSPACE_BINDING_EXPIRED');
     const rebound = await client.callTool({
-      name: 'safs_get_remote_workspace',
+      name: 'get_remote_workspace',
       arguments: { agentCwd: '/mnt/c/local/agent-cwd/a/project' }
     });
     const reboundValue = JSON.parse((rebound.content as any[])[0].text);
@@ -182,7 +182,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
 
     workspaces = [record('old-a', first.url, { agentCwd: '/local/old-a' })];
     const route = await client.callTool({
-      name: 'safs_get_remote_workspace', arguments: { agentCwd: '/local/old-a' }
+      name: 'get_remote_workspace', arguments: { agentCwd: '/local/old-a' }
     });
     const routeValue = JSON.parse((route.content as any[])[0].text);
     const bindingId = routeValue.bindingId as string;
@@ -191,7 +191,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
       workspaceRoot: '/srv/a', host: 'dev'
     });
     assert.equal(routeValue.selectedAutomatically, true);
-    assert.deepEqual(routerAudits, ['safs_get_remote_workspace']);
+    assert.deepEqual(routerAudits, ['get_remote_workspace']);
 
     const connected = await client.callTool({
       name: 'remote_list', arguments: { bindingId, path: 'README.md' }
@@ -241,7 +241,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
 
     workspaces = [record('new-a', second.url, { agentCwd: '/local/new-a' })];
     const rebound = await client.callTool({
-      name: 'safs_get_remote_workspace', arguments: { agentCwd: '/local/new-a' }
+      name: 'get_remote_workspace', arguments: { agentCwd: '/local/new-a' }
     });
     const reboundId = JSON.parse((rebound.content as any[])[0].text).bindingId;
     const reconnected = await client.callTool({
@@ -274,7 +274,7 @@ test('unmatched cwd automatically binds the uniquely focused SAFS window', async
     await router.start();
     await client.connect(new StreamableHTTPClientTransport(new URL(router.url)));
     const selected = await client.callTool({
-      name: 'safs_get_remote_workspace', arguments: { agentCwd: '/home/agent/project' }
+      name: 'get_remote_workspace', arguments: { agentCwd: '/home/agent/project' }
     });
     const value = JSON.parse((selected.content as any[])[0].text);
     assert.equal(selected.isError, undefined);
@@ -321,7 +321,7 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
     }
 
     const unresolved = await client.callTool({
-      name: 'safs_get_remote_workspace', arguments: { agentCwd: '/home/agent' }
+      name: 'get_remote_workspace', arguments: { agentCwd: '/home/agent' }
     });
     assert.equal(unresolved.isError, true);
     const unresolvedValue = JSON.parse((unresolved.content as any[])[0].text);
@@ -331,7 +331,7 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
       { workspaceId: 'other', workspaceRoot: '/srv/b', host: 'host-b' }
     ]);
     const switchCandidates = await client.callTool({
-      name: 'safs_switch_remote_workspace', arguments: {}
+      name: 'switch_remote_workspace', arguments: {}
     });
     assert.equal(switchCandidates.isError, true);
     const switchCandidatesValue = JSON.parse((switchCandidates.content as any[])[0].text);
@@ -341,7 +341,7 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
       { workspaceId: 'other', workspaceRoot: '/srv/b', host: 'host-b' }
     ]);
     const selected = await client.callTool({
-      name: 'safs_switch_remote_workspace', arguments: { workspaceId: 'other' }
+      name: 'switch_remote_workspace', arguments: { workspaceId: 'other' }
     });
     assert.equal(selected.isError, true);
     assert.equal(
@@ -349,7 +349,7 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
       'WORKSPACE_SELECTION_NOT_CONFIRMED'
     );
     const confirmed = await client.callTool({
-      name: 'safs_switch_remote_workspace',
+      name: 'switch_remote_workspace',
       arguments: { workspaceId: 'other', userConfirmed: true }
     });
     const selectedValue = JSON.parse((confirmed.content as any[])[0].text);
@@ -366,7 +366,7 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
     assert.equal(JSON.parse((bound.content as any[])[0].text).label, 'second');
 
     const stale = await client.callTool({
-      name: 'safs_switch_remote_workspace',
+      name: 'switch_remote_workspace',
       arguments: { workspaceId: 'missing', userConfirmed: true }
     });
     assert.equal(stale.isError, true);
@@ -380,7 +380,7 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
     assert.equal(JSON.parse((stillBound.content as any[])[0].text).label, 'second');
 
     const switchedSelection = await client.callTool({
-      name: 'safs_switch_remote_workspace',
+      name: 'switch_remote_workspace',
       arguments: { workspaceId: 'focused', userConfirmed: true }
     });
     const switchedId = JSON.parse((switchedSelection.content as any[])[0].text).bindingId;
@@ -442,7 +442,7 @@ test('router refuses to forward to its own port (loop protection)', async () => 
     await router.start();
     await client.connect(new StreamableHTTPClientTransport(new URL(router.url)));
     const selected = await client.callTool({
-      name: 'safs_switch_remote_workspace',
+      name: 'switch_remote_workspace',
       arguments: { workspaceId: 'self', userConfirmed: true }
     });
     const bindingId = JSON.parse((selected.content as any[])[0].text).bindingId;
@@ -471,7 +471,7 @@ test('router rejects requests marked as forwarded by another router', async () =
       },
       body: JSON.stringify({
         jsonrpc: '2.0', id: 1, method: 'tools/call',
-        params: { name: 'safs_get_remote_workspace', arguments: {} }
+        params: { name: 'get_remote_workspace', arguments: {} }
       })
     });
     assert.equal(response.status, 403);

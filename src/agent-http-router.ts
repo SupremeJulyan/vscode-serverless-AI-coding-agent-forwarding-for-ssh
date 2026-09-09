@@ -12,7 +12,9 @@ import {
 
 const routerIdentity = 'safs-http-router-v1';
 const cliToolNames = new Set([
-  'safs_get_remote_workspace', 'cli_list_workspaces', 'safs_switch_remote_workspace',
+  'get_remote_workspace', 'cli_list_workspaces', 'switch_remote_workspace',
+  // Keep already-installed 1.7.8 CLIs working; these aliases are not exposed as MCP tools.
+  'safs_get_remote_workspace', 'safs_switch_remote_workspace',
   'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many', 'remote_search',
   'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move',
   'remote_upload', 'remote_download', 'remote_output', 'run_remote_command',
@@ -20,10 +22,17 @@ const cliToolNames = new Set([
 ]);
 const cliBatchToolNames = new Set([...cliToolNames].filter((name) =>
   ![
-    'safs_get_remote_workspace', 'cli_list_workspaces',
+    'get_remote_workspace', 'cli_list_workspaces',
+    'switch_remote_workspace', 'safs_get_remote_workspace',
     'safs_switch_remote_workspace', 'safs_cli_batch'
   ].includes(name)
 ));
+
+function currentCliToolName(name: string): string {
+  if (name === 'safs_get_remote_workspace') return 'get_remote_workspace';
+  if (name === 'safs_switch_remote_workspace') return 'switch_remote_workspace';
+  return name;
+}
 
 export function unwrapCliToolResult(value: any, allowNull = false): Record<string, unknown> {
   const text = Array.isArray(value?.content)
@@ -67,7 +76,7 @@ export function adaptCliToolResult(
       message: 'Ask the user to choose a listed workspace, then stop. Do not run a switch command in this turn. After the user replies, run the candidate switchCommand.'
     } };
   }
-  if (toolName === 'safs_switch_remote_workspace'
+  if (toolName === 'switch_remote_workspace'
       && typeof value.bindingId === 'string' && value.previousTaskCancelled === true) {
     return { ...envelope, result: {
       ...value,
@@ -273,7 +282,7 @@ export class AgentHttpRouter {
         }) }]
       };
     }
-    if (name === 'safs_get_remote_workspace' || name === 'safs_switch_remote_workspace') {
+    if (name === 'get_remote_workspace' || name === 'switch_remote_workspace') {
       const workspaces = this.workspaces();
       if (!workspaces.length) {
         return this.toolError(
@@ -281,7 +290,7 @@ export class AgentHttpRouter {
           'No active Agent-forwarded Serverless Remote window was found.'
         );
       }
-      const switching = name === 'safs_switch_remote_workspace';
+      const switching = name === 'switch_remote_workspace';
       const workspaceId = typeof input.workspaceId === 'string'
         ? input.workspaceId.trim()
         : '';
@@ -330,7 +339,7 @@ export class AgentHttpRouter {
             'WORKSPACE_SELECTION_REQUIRED',
             closest.length > 1
               ? 'The Agent cwd matches multiple active SAFS windows. Ask the user to choose one candidate in the Agent conversation, then call this tool again with its workspaceId.'
-              : 'The Agent cwd does not match an active SAFS placeholder and there is no unique focused SAFS window. Ask the user to choose one candidate in the Agent conversation, then call safs_switch_remote_workspace with its workspaceId.',
+              : 'The Agent cwd does not match an active SAFS placeholder and there is no unique focused SAFS window. Ask the user to choose one candidate in the Agent conversation, then call switch_remote_workspace with its workspaceId.',
             {
               agentCwd,
               candidates: workspaces.map((candidate) => this.selectableWorkspace(candidate))
@@ -365,7 +374,7 @@ export class AgentHttpRouter {
     if (!bindingId) {
       return this.toolError(
         'WORKSPACE_BINDING_REQUIRED',
-        'Call safs_get_remote_workspace first with the Agent current working directory in agentCwd, then pass the returned bindingId.'
+        'Call get_remote_workspace first with the Agent current working directory in agentCwd, then pass the returned bindingId.'
       );
     }
     const binding = this.bindings.get(bindingId);
@@ -457,6 +466,7 @@ export class AgentHttpRouter {
         && ['wsl', 'mac', 'linux', 'win'].includes(platformValue)
         ? platformValue as AgentPlatformLabel
         : undefined;
+      const currentName = currentCliToolName(name);
       try {
         if (name === 'safs_cli_batch') {
           const operations = (input as { operations?: unknown }).operations;
@@ -489,10 +499,10 @@ export class AgentHttpRouter {
         }
         response.json(adaptCliToolResult(unwrapCliToolResult(
           await this.callTool(
-            name, input as Record<string, unknown>, 'safs-cli', agentPlatform
+            currentName, input as Record<string, unknown>, 'safs-cli', agentPlatform
           ),
-          name === 'current_remote_file'
-        ), name));
+          currentName === 'current_remote_file'
+        ), currentName));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         response.status(500).json({ ok: false, error: message });
@@ -532,7 +542,7 @@ export class AgentHttpRouter {
       );
       // 绑定工具由固定路由器本地完成；其它工具只在实际执行窗口记录，避免双份日志。
       if (method === 'tools/call' && typeof tool === 'string'
-        && ['safs_get_remote_workspace', 'safs_switch_remote_workspace'].includes(tool)) {
+        && ['get_remote_workspace', 'switch_remote_workspace'].includes(tool)) {
         const input = request.body?.params?.arguments;
         this.options.audit?.({
           toolName: tool,

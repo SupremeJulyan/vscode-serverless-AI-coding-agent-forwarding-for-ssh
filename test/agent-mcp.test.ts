@@ -61,6 +61,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
       'current_remote_file',
+      'get_remote_workspace',
       'remote_chmod',
       'remote_delete',
       'remote_download',
@@ -73,8 +74,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       'remote_search',
       'remote_upload',
       'remote_write',
-      'run_remote_command',
-      'safs_get_remote_workspace'
+      'run_remote_command'
     ]);
     const currentFile = await client.callTool({
       name: 'current_remote_file', arguments: {}
@@ -82,7 +82,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     const currentFileText = (currentFile.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
     assert.equal(JSON.parse(currentFileText).path, '/srv/project/README.md');
     const route = await client.callTool({
-      name: 'safs_get_remote_workspace', arguments: {}
+      name: 'get_remote_workspace', arguments: {}
     });
     const routeText = (route.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
     assert.deepEqual(JSON.parse(routeText), {
@@ -161,7 +161,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       code: 'REMOTE_TOOL_ERROR', message: '路径越界'
     });
     assert.deepEqual(audited.map((entry) => entry.toolName), [
-      'current_remote_file', 'safs_get_remote_workspace', 'remote_list',
+      'current_remote_file', 'get_remote_workspace', 'remote_list',
       'remote_read', 'remote_edit', 'remote_download', 'remote_upload', 'remote_delete',
       'remote_chmod', 'remote_move', 'remote_search', 'remote_list'
     ]);

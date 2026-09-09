@@ -13,12 +13,12 @@ const workspaceInstructions = [
 ].join(' ');
 
 export const directAgentMcpInstructions = workspaceInstructions +
-  ' Call safs_get_remote_workspace once to identify this window workspace.';
+  ' Call get_remote_workspace once to identify this window workspace.';
 
 export const routedAgentMcpInstructions = workspaceInstructions + ' ' + [
-  'Bind once with safs_get_remote_workspace(agentCwd=actual cwd). Exact placeholder cwd or one uniquely focused window binds automatically.',
-  'If candidates are returned, ask the user to choose; Never select in the same turn as asking; only after their reply call safs_switch_remote_workspace(workspaceId, userConfirmed=true). Never infer consent from a single candidate.',
-  'For listing or switching workspaces use safs_switch_remote_workspace. A successful switch cancels the old task: stop and wait for a new request.',
+  'Bind once with get_remote_workspace(agentCwd=actual cwd). Exact placeholder cwd or one uniquely focused window binds automatically.',
+  'If candidates are returned, ask the user to choose; Never select in the same turn as asking; only after their reply call switch_remote_workspace(workspaceId, userConfirmed=true). Never infer consent from a single candidate.',
+  'For listing or switching workspaces use switch_remote_workspace. A successful switch cancels the old task: stop and wait for a new request.',
   'Pass bindingId to subsequent tools. It is pinned to the window instance; on expiry stop and report, never silently rebind or switch.'
 ].join(' ');
 
@@ -27,8 +27,8 @@ const extendedTools = new Set(['current_remote_file', 'remote_delete', 'remote_c
   'remote_move', 'remote_upload', 'remote_download']);
 
 export type AgentMcpToolName =
-  | 'safs_get_remote_workspace'
-  | 'safs_switch_remote_workspace'
+  | 'get_remote_workspace'
+  | 'switch_remote_workspace'
   | 'current_remote_file'
   | 'remote_list'
   | 'remote_read'
@@ -70,10 +70,10 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
     : {};
   const definitions: AgentMcpToolDefinition[] = [
     {
-      name: 'safs_get_remote_workspace',
+      name: 'get_remote_workspace',
       title: routed ? 'Bind a SAFS remote workspace' : 'Bind this SAFS remote workspace',
       description: routed
-        ? 'Gets and initially binds the SAFS workspace matching the Agent actual current working directory in agentCwd, or the uniquely focused SAFS window when cwd does not match. This tool never switches workspaces. If neither is unique, ask the user to choose a returned candidate and use safs_switch_remote_workspace. The returned bindingId stays pinned to that window instance.'
+        ? 'Gets and initially binds the SAFS workspace matching the Agent actual current working directory in agentCwd, or the uniquely focused SAFS window when cwd does not match. This tool never switches workspaces. If neither is unique, ask the user to choose a returned candidate and use switch_remote_workspace. The returned bindingId stays pinned to that window instance.'
         : 'Returns the SAFS workspace served by this exact VS Code window for later remote tool calls.',
       inputSchema: routed ? {
         agentCwd: z.string().min(1)
@@ -233,7 +233,7 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
   ];
   if (routed) {
     definitions.splice(1, 0, {
-      name: 'safs_switch_remote_workspace',
+      name: 'switch_remote_workspace',
       title: 'Switch SAFS remote workspace',
       description: 'Lists active SAFS workspaces when called without workspaceId. Ask the user to choose a candidate, then call again with workspaceId and userConfirmed=true. A successful switch returns a new bindingId and cancels the previous task. No VS Code Quick Pick or focused-window fallback is used.',
       inputSchema: {

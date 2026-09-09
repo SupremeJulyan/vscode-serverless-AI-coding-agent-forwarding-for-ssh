@@ -358,7 +358,7 @@ fn parse_request(
         "bind" => {
             let agent_cwd = values.remove("cwd").unwrap_or(Value::String(cwd));
             values.insert("agentCwd".into(), agent_cwd);
-            "safs_get_remote_workspace"
+            "get_remote_workspace"
         }
         "workspaces" => "cli_list_workspaces",
         "switch" => {
@@ -370,7 +370,7 @@ fn parse_request(
             }
             values.insert("workspaceId".into(), workspace);
             values.insert("userConfirmed".into(), Value::Bool(true));
-            "safs_switch_remote_workspace"
+            "switch_remote_workspace"
         }
         "batch" => {
             let binding = binding.ok_or_else(&require_binding)?;
@@ -753,11 +753,11 @@ mod tests {
     #[test]
     fn maps_every_cli_command_to_its_router_operation() {
         let cases: &[(&[&str], &str)] = &[
-            (&["bind"], "safs_get_remote_workspace"),
+            (&["bind"], "get_remote_workspace"),
             (&["workspaces"], "cli_list_workspaces"),
             (
                 &["switch", "--workspace", "w", "--confirmed"],
-                "safs_switch_remote_workspace",
+                "switch_remote_workspace",
             ),
             (&["current-file", "--binding", "b"], "current_remote_file"),
             (&["list", "--binding", "b"], "remote_list"),

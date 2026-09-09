@@ -133,7 +133,7 @@ export class AgentMcpServer {
       profile: this.callbacks.toolProfile?.(),
       invoke: (name, input) => {
         switch (name) {
-          case 'safs_get_remote_workspace':
+          case 'get_remote_workspace':
             return invoke(async () => {
               const current = await this.callbacks.currentWorkspace();
               return current ? {
@@ -142,7 +142,7 @@ export class AgentMcpServer {
                 localShellAllowed: false
               } : { workspace: null };
             });
-          case 'safs_switch_remote_workspace':
+          case 'switch_remote_workspace':
             return invoke(async () => {
               throw new Error('Workspace switching is only available through the SAFS router');
             });
