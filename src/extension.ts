@@ -109,6 +109,7 @@ const terminalIdentityEnv = 'SERVERLESS_REMOTE_TERMINAL_ID';
 const masterPasswordSecret = 'safs.masterPassword';
 const agentMcpTokenSecret = platformStateKey('agentMcpToken');
 const agentSetupCompletedKey = platformStateKey('agentSetupCompleted');
+const observedAgentSourcesKey = platformStateKey('observedAgentSources');
 const aiForwardMountsKey = platformStateKey('aiForwardMounts');
 const directoryHistoryKey = platformStateKey('directoryHistory');
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
@@ -131,6 +132,7 @@ const terminalAutoReconnectStableMs = 60_000;
 const agentProbeCacheTtlMs = 60_000;
 const agentProbeTimeoutMs = 15_000;
 const agentProbeCache = new Map<string, { status: CapturedProcessResult; at: number }>();
+let skipNextAgentInterfaceChange = false;
 
 let output: vscode.OutputChannel;
 let bridgeOutput: vscode.LogOutputChannel | undefined;
@@ -166,6 +168,22 @@ const managedRemoteTerminals = new Map<vscode.Terminal, {
 }>();
 /** 自动重连计数（key：mount\0remoteCwd），防止异常退出时无限自动重连。 */
 const autoReconnectFails = new Map<string, number>();
+
+interface ObservedAgentSource {
+  name: string;
+  platform: string;
+  lastSeen: number;
+}
+
+async function recordObservedAgentSource(
+  context: vscode.ExtensionContext, name?: string, platform?: string
+): Promise<void> {
+  if (!name || name === 'safs-cli') return;
+  const previous = context.globalState.get<ObservedAgentSource[]>(observedAgentSourcesKey, []);
+  const sources = previous.filter((item) => item.name !== name || item.platform !== platform);
+  sources.unshift({ name, platform: platform ?? 'unknown', lastSeen: Date.now() });
+  await context.globalState.update(observedAgentSourcesKey, sources.slice(0, 50));
+}
 
 interface SafsTerminalLink extends vscode.TerminalLink {
   mountName: string;
@@ -3193,6 +3211,9 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
         }),
         request: (agentName, agentPlatform) => {
           updateSafsStatusBar(vscode.window.state.focused, agentName, agentPlatform);
+          void recordObservedAgentSource(context, agentName, agentPlatform).catch((error) =>
+            logAsyncFailure('Agent 来源记录失败', error)
+          );
         },
         audit: auditMcpTool,
         log: (message) => logMcpMessage('Agent MCP', message)
@@ -3367,8 +3388,8 @@ async function installGlobalCli(
   const executable = globalNativeCli(agentPlatform.home, nativePlatform);
   const extensionVersion = String(context.extension.packageJSON?.version ?? '');
   // 仅在以下情况刷新（复制）bin，避免每次切换工作区/重载扩展都重复复制：
-  // 平台或安装路径变化、目标文件丢失、或扩展已升级（version 变化，打包的 bin
-  // 随构建流水线更新）。沿用已装全局命令前需保证其与当前扩展版本匹配。
+  // 平台或安装路径变化、目标文件丢失、或扩展已升级时，按版本下载对应 release
+  // asset。沿用已装全局命令前需保证其与当前扩展版本匹配。
   const previous = context.globalState.get<{
     platform: string; installPath: string; version: string; home?: string;
   }>(cliInstallKey);
@@ -3377,9 +3398,9 @@ async function installGlobalCli(
     && previous.version === extensionVersion
     && await (access(executable).then(() => true, () => false));
   if (!alreadyInstalled) {
-    await installNativeCli(context.extensionPath, agentPlatform.home, nativePlatform);
+    await installNativeCli(agentPlatform.home, nativePlatform);
     bridgeOutput?.appendLine(
-      `[Agent CLI] 已刷新 ${nativePlatform} bin 文件：${executable}`
+      `[Agent CLI] 已下载并刷新 ${nativePlatform} bin 文件：${executable}`
     );
     await context.globalState.update(cliInstallKey, {
       platform: nativePlatform, installPath: executable, version: extensionVersion,
@@ -3416,6 +3437,27 @@ async function installGlobalCli(
     context.environmentVariableCollection.prepend('PATH', `${binDirectory}${path.delimiter}`);
   }
   return executable;
+}
+
+async function globalCliInstallState(context: vscode.ExtensionContext): Promise<{
+  exists: boolean; current: boolean; executable: string;
+}> {
+  const agentPlatform = await resolveAgentPlatform(
+    settings().get<string>('agentPlatform', 'auto')
+  );
+  const platform = nativeCliPlatform(process.platform, process.arch, agentPlatform.wsl);
+  const executable = globalNativeCli(agentPlatform.home, platform);
+  const exists = await access(executable).then(() => true, () => false);
+  const previous = context.globalState.get<{
+    platform: string; installPath: string; version: string;
+  }>(cliInstallKey);
+  const version = String(context.extension.packageJSON?.version ?? '');
+  return {
+    exists,
+    current: exists && previous?.platform === platform
+      && previous.installPath === executable && previous.version === version,
+    executable
+  };
 }
 
 async function uninstallGlobalCli(context: vscode.ExtensionContext): Promise<void> {
@@ -3460,7 +3502,10 @@ async function configureDetectedAgents(
     if (!succeeded) {
       void vscode.window.showWarningMessage('SAFS CLI 已就绪，但部分旧 MCP 注册未能清理。请查看 SAFS 日志并在对应 Agent 中移除 safs MCP 后重启，否则工具定义仍可能加载。');
     }
-    return { succeeded, registeredAgents: ['SAFS CLI'], cliExecutable: executable };
+    return {
+      succeeded, registeredAgents: ['SAFS CLI'], cliExecutable: executable,
+      removedAgents: removed.removedAgents, manualAgents: removed.manualAgents
+    };
   }
   const saved = context.globalState.get<unknown>(agentSetupCompletedKey);
   const configured = new Set(Array.isArray(saved) ? saved.filter(
@@ -3469,6 +3514,10 @@ async function configureDetectedAgents(
   const forwardingAgents = settings().get<string[]>(
     'agentForwardingAgents', defaultForwardingAgents
   );
+  const observedSources = context.globalState.get<ObservedAgentSource[]>(
+    observedAgentSourcesKey, []
+  );
+  const observedAgentNames = new Set(observedSources.map((source) => source.name));
   const agentPlatform = await resolveAgentPlatform(
     settings().get<string>('agentPlatform', 'auto')
   );
@@ -3480,9 +3529,12 @@ async function configureDetectedAgents(
   // 卸载路径的探测集合 = 当前设置 ∪ 曾成功配置的记录（`<cliName>:safs`），
   // 两者皆空时兜底内置默认集合——保证设置被清空/Agent 被移出列表后，
   // 残留的固定 MCP 仍能被探测并移除（而非静默跳过）。
-  const agentNames = shouldRegister || !includeHistoricalOnUnload
+  const configuredUnloadNames = shouldRegister || !includeHistoricalOnUnload
     ? forwardingAgents
     : resolveUnloadAgentNames(forwardingAgents, [...configured]);
+  const agentNames = shouldRegister
+    ? configuredUnloadNames
+    : [...new Set([...configuredUnloadNames, ...observedAgentNames])];
   const definitions = resolveAgentDefinitions(agentNames, {
     agentHome: agentPlatform.home
   });
@@ -3625,6 +3677,22 @@ async function configureDetectedAgents(
       .filter((state) => shouldRegister && state.enabled && state.fixedConfigured)
       .map((state) => state.def.displayName)
   );
+  const removedAgents = new Set<string>();
+  const manualAgents = new Set<string>();
+  if (!shouldRegister) {
+    for (const state of states) {
+      const previouslyConfigured = configured.has(`${state.def.cliName}:safs`);
+      // 实际通过 SAFS 发过请求，说明该 Agent 曾持有 MCP URL。先保守列为
+      // 手工候选；只有自动 remove 成功后才从候选中删除。
+      if (observedAgentNames.has(state.def.cliName)) {
+        manualAgents.add(state.def.displayName);
+      }
+      if ((state.enabled || previouslyConfigured || observedAgentNames.has(state.def.cliName))
+        && (!state.command || !state.supportsMcp)) {
+        manualAgents.add(state.def.displayName);
+      }
+    }
+  }
   // 启用路径：清理不再匹配的记录（Agent 未启用或已不是当前 URL）；
   // 卸载路径不在此处删除记录——删除只发生在 remove 成功之后，保证
   // 探测不到的 Agent 记录保留、下次可重试。
@@ -3636,7 +3704,10 @@ async function configureDetectedAgents(
   }
   if (needsSetup.length === 0 && needsDisable.length === 0) {
     await context.globalState.update(agentSetupCompletedKey, [...configured]);
-    return { succeeded: true, registeredAgents: [...registeredAgents] };
+    return {
+      succeeded: true, registeredAgents: [...registeredAgents],
+      removedAgents: [...removedAgents], manualAgents: [...manualAgents]
+    };
   }
   bridgeOutput?.appendLine([
     shouldRegister
@@ -3657,6 +3728,8 @@ async function configureDetectedAgents(
     if (signal.aborted) {
       failures.push(`${state.def.displayName} MCP remove 超时`);
     } else if (result.exitCode === 0) {
+      removedAgents.add(state.def.displayName);
+      manualAgents.delete(state.def.displayName);
       configured.delete(`${state.def.cliName}:safs`);
       agentProbeCache.set(`${state.def.cliName}\0${state.mcpUrl ?? ''}`, {
         status: { exitCode: 1, stdout: '', stderr: '', truncated: false }, at: Date.now()
@@ -3666,6 +3739,7 @@ async function configureDetectedAgents(
       );
     } else {
       failures.push(`${state.def.displayName} MCP remove: ${result.stderr || result.stdout}`);
+      manualAgents.add(state.def.displayName);
     }
   }
   for (const state of needsSetup) {
@@ -3724,12 +3798,18 @@ async function configureDetectedAgents(
           .join('\n')
       );
     }
-    return { succeeded: false, registeredAgents: [...registeredAgents] };
+    return {
+      succeeded: false, registeredAgents: [...registeredAgents],
+      removedAgents: [...removedAgents], manualAgents: [...manualAgents]
+    };
   }
   bridgeOutput?.appendLine(
     '[Agent MCP] Agent 集成已自动配置；已检测的 Agent 使用统一固定 HTTP MCP 路由。'
   );
-  return { succeeded: true, registeredAgents: [...registeredAgents] };
+  return {
+    succeeded: true, registeredAgents: [...registeredAgents],
+    removedAgents: [...removedAgents], manualAgents: [...manualAgents]
+  };
 }
 
 async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): Promise<void> {
@@ -4341,14 +4421,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration('safs.agentInterface')
       && !event.affectsConfiguration('safs.agentPlatform')) return;
+    if (event.affectsConfiguration('safs.agentInterface') && skipNextAgentInterfaceChange) {
+      skipNextAgentInterfaceChange = false;
+      return;
+    }
     void guard(async () => {
       startAgentHttpRouterLeadership(context);
       if (cliMode()) {
+        const before = await globalCliInstallState(context);
+        if (event.affectsConfiguration('safs.agentInterface') && !before.exists) {
+          // machine-scoped setting changes are broadcast to every VS Code
+          // window/Extension Host. Only the window where the user made the
+          // change may present the modal; background windows must stay quiet.
+          if (!vscode.window.state.focused) return;
+          const installAction = '安装并切换';
+          const choice = await vscode.window.showInformationMessage(
+            '是否下载并安装 SAFS CLI，同时卸载已检测 Agent 中的 safs MCP？',
+            { modal: true }, installAction
+          );
+          if (choice !== installAction) {
+            skipNextAgentInterfaceChange = true;
+            await settings().update('agentInterface', 'mcp', vscode.ConfigurationTarget.Global);
+            return;
+          }
+        }
         const result = await configureDetectedAgents(context, true);
+        const removed = result.removedAgents ?? [];
+        const manual = result.manualAgents ?? [];
+        const cliStatus = before.exists
+          ? before.current ? 'SAFS CLI 已是最新版本' : 'SAFS CLI 已成功更新'
+          : 'SAFS CLI 已成功安装';
+        const removedText = removed.length > 0
+          ? `${removed.map((name) => `${name} 的 safs MCP`).join('、')}已卸载`
+          : '未发现可自动卸载的 safs MCP';
+        const manualText = manual.length > 0
+          ? `${manual.join('、')} 未卸载，需手动卸载`
+          : '';
         const manualAction = '复制 MCP 卸载提示词';
         const choice = await vscode.window.showInformationMessage(
-          `已切换到 CLI：SAFS 已将全局 safs 命令安装或更新到 ${result.cliExecutable ?? '用户级全局命令目录'}，并自动卸载已检测 Agent 的旧 MCP 注册。若曾手工安装 MCP，请复制卸载提示词交给对应 Agent 执行。完成后请重启 VS Code 和 Agent。`,
-          { modal: true }, manualAction
+          `${cliStatus}；${removedText}${manualText ? `；${manualText}` : ''}。请重启 Agent。`,
+          ...(manual.length > 0 ? [manualAction] : [])
         );
         if (choice === manualAction) {
           await vscode.commands.executeCommand(`${commandPrefix}.uninstallAgentForwarding`);
@@ -4357,11 +4469,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await uninstallGlobalCli(context);
         const result = await configureDetectedAgents(context, true);
         const configured = result.registeredAgents.join('、') || '已检测的 Agent';
-        const manualAction = '复制 MCP 安装提示词';
-        const choice = await vscode.window.showInformationMessage(
-          `已切换到 MCP：SAFS 已清理 CLI 的 bin、连接文件和 PATH，并自动为${configured}配置 MCP。若目标 Agent 未被自动检测，请复制安装提示词交给该 Agent 执行。完成后请重启 Agent。`,
-          { modal: true }, manualAction
+        const registered = new Set(
+          result.registeredAgents.map((name) => name.trim().toLowerCase())
         );
+        const manual = [...new Set(
+          context.globalState.get<ObservedAgentSource[]>(observedAgentSourcesKey, [])
+            .map((source) => {
+              const name = source.name.trim();
+              const displayName = resolveAgentDefinitions([name])[0]?.displayName ?? name;
+              return { name, displayName };
+            })
+            .filter(({ name, displayName }) => name && name !== 'safs-cli'
+              && !registered.has(name.toLowerCase())
+              && !registered.has(displayName.toLowerCase()))
+            .map(({ displayName }) => displayName)
+        )];
+        const manualAction = '复制 MCP 安装提示词';
+        const message = `SAFS CLI 已卸载；已重新为${configured}安装 safs MCP${
+          manual.length > 0 ? `；${manual.join('、')} 需手动安装 safs MCP` : ''
+        }。请重启 Agent。`;
+        const choice = manual.length > 0
+          ? await vscode.window.showInformationMessage(message, manualAction)
+          : await vscode.window.showInformationMessage(message);
         if (choice === manualAction) {
           await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
         }

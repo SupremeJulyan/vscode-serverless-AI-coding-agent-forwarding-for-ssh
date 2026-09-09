@@ -1,5 +1,6 @@
 import * as path from 'node:path';
-import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import type { CommandPlan } from './platform';
 
 export type NativeCliPlatform =
@@ -19,6 +20,35 @@ export function nativeCliPlatform(
 
 export function bundledNativeCli(extensionRoot: string, platform: NativeCliPlatform): string {
   return path.join(extensionRoot, 'bin', platform, platform.startsWith('win32-') ? 'safs.exe' : 'safs');
+}
+
+const nativeCliRawBase =
+  'https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main/bin';
+
+export function nativeCliDownloadUrl(platform: NativeCliPlatform): string {
+  const executable = platform.startsWith('win32-') ? 'safs.exe' : 'safs';
+  return `${nativeCliRawBase}/${platform}/${executable}`;
+}
+
+export type NativeCliDownloader = (url: string) => Promise<Uint8Array>;
+
+async function downloadNativeCli(url: string): Promise<Uint8Array> {
+  const response = await fetch(url, { redirect: 'follow' });
+  if (!response.ok) {
+    throw new Error(`下载 SAFS CLI 失败：HTTP ${response.status} ${response.statusText}`);
+  }
+  const content = new Uint8Array(await response.arrayBuffer());
+  return content;
+}
+
+function validateNativeCli(content: Uint8Array, platform: NativeCliPlatform): void {
+  if (content.byteLength < 100 * 1024 || content.byteLength > 10 * 1024 * 1024) {
+    throw new Error(`下载的 SAFS CLI 大小异常：${content.byteLength} 字节`);
+  }
+  const expected = platform.startsWith('win32-') ? '4d5a'
+    : platform.startsWith('darwin-') ? 'cffaedfe' : '7f454c46';
+  const actual = Buffer.from(content.subarray(0, expected.length / 2)).toString('hex');
+  if (actual !== expected) throw new Error(`下载的 SAFS CLI 文件格式与 ${platform} 不符`);
 }
 
 export function globalNativeCli(home: string, platform: NativeCliPlatform): string {
@@ -70,16 +100,31 @@ export function windowsUserPathRemovePlan(binDirectory: string): CommandPlan {
   };
 }
 
-/** Copy out of the immutable extension bundle and return a stable absolute path. */
+/** Download the current platform CLI from the repository's bin directory. */
 export async function installNativeCli(
-  extensionRoot: string, home: string, platform: NativeCliPlatform,
-  hostPlatform: NodeJS.Platform = process.platform
+  home: string, platform: NativeCliPlatform,
+  hostPlatform: NodeJS.Platform = process.platform,
+  downloader: NativeCliDownloader = downloadNativeCli
 ): Promise<string> {
-  const source = bundledNativeCli(extensionRoot, platform);
   const destination = globalNativeCli(home, platform);
   const destinationDirectory = path.dirname(destination);
   await mkdir(destinationDirectory, { recursive: true });
-  await copyFile(source, destination);
+  const temporary = path.join(
+    destinationDirectory, `.safs-download-${process.pid}-${randomBytes(6).toString('hex')}`
+  );
+  try {
+    const content = await downloader(nativeCliDownloadUrl(platform));
+    validateNativeCli(content, platform);
+    await writeFile(temporary, content, {
+      mode: 0o700, flag: 'wx'
+    });
+    // POSIX rename replaces atomically. Windows cannot replace an existing
+    // executable with rename, so remove the old completed download first.
+    if (hostPlatform === 'win32') await rm(destination, { force: true });
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
   // A Windows extension host installing into WSL addresses the destination via
   // UNC. Node's chmod on that path can fail even though chmod inside WSL works;
   // the caller applies the mode through wsl.exe after the copy.

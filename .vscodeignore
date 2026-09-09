@@ -7,8 +7,9 @@ esbuild.js
 node_modules/**
 *.vsix
 *.png
+images/safs-interface.png
 !images/icon.png
-!images/safs-interface.png
 build/**
 native-cli/**
+bin/**
 scripts/*.test.js

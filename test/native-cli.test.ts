@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
+  bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli, nativeCliDownloadUrl,
   nativeCliConnectionPath, nativeCliPlatform, removeNativeCli, withoutSafsPathBlock,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/native-cli';
@@ -15,6 +15,11 @@ test('selects native binaries for desktop platforms and WSL', () => {
   assert.equal(nativeCliPlatform('win32', 'x64'), 'win32-x64');
   assert.equal(nativeCliPlatform('win32', 'arm64', true), 'linux-arm64');
   assert.match(bundledNativeCli('root', 'win32-x64'), /safs\.exe$/);
+  assert.equal(
+    nativeCliDownloadUrl('linux-arm64'),
+    'https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main/bin/linux-arm64/safs'
+  );
+  assert.match(nativeCliDownloadUrl('win32-x64'), /\/win32-x64\/safs\.exe$/);
   assert.equal(globalNativeCli('/home/me', 'linux-x64'), '/home/me/.local/bin/safs');
   assert.equal(nativeCliConnectionPath('/home/me/.local/bin/safs'), '/home/me/.local/bin/.safs-connection.json');
   assert.throws(() => nativeCliPlatform('linux', 'ia32'));
@@ -40,16 +45,19 @@ test('builds a Windows user PATH removal without embedding the directory', () =>
   assert.match(plan.args[3], /SetEnvironmentVariable\('Path'/);
 });
 
-test('installs an executable copy under extension storage', async () => {
+test('downloads and installs only the selected platform executable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-native-cli-'));
   try {
-    const source = bundledNativeCli(root, 'linux-x64');
-    await import('node:fs/promises').then(fs => fs.mkdir(join(root, 'bin', 'linux-x64'), { recursive: true }));
-    await writeFile(source, 'native');
-    await chmod(source, 0o644);
     const home = join(root, 'home');
-    const installed = await installNativeCli(root, home, 'linux-x64');
-    assert.equal(await readFile(installed, 'utf8'), 'native');
+    let requested = '';
+    const binary = Buffer.alloc(100 * 1024, 0);
+    binary.set(Buffer.from('7f454c46', 'hex'));
+    const installed = await installNativeCli(
+      home, 'linux-x64', process.platform,
+      async (url) => { requested = url; return binary; }
+    );
+    assert.match(requested, /\/bin\/linux-x64\/safs$/);
+    assert.deepEqual(await readFile(installed), binary);
     assert.equal(installed, join(home, '.local', 'bin', 'safs'));
     if (process.platform !== 'win32') {
       const { stat } = await import('node:fs/promises');

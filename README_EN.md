@@ -6,7 +6,7 @@
 
 SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote terminal over SSH, without installing VS Code Server on the server. After Agent Forwarding is enabled, agents such as Copilot, Codex, and Claude Code can also read and write files, search code, and run commands in the current remote workspace.
 
-![Full SAFS interface](images/safs-interface.png)
+![Full SAFS interface](https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main/images/safs-interface.png)
 
 ## When to use SAFS
 
@@ -84,7 +84,7 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-Set `safs.agentInterface` to `cli` to install the global `safs` command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. This mode requires the VSIX to include a native binary for the Agent's platform. The default `mcp` mode is recommended for most users. To minimize token usage, switch to CLI manually; this mode does not install MCP tools.
+Set `safs.agentInterface` to `cli` to download the native executable for the Agent's platform on demand from the project's GitHub `bin` directory and install the global `safs` command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. The default `mcp` mode is recommended for most users. To minimize token usage, switch to CLI manually; this mode does not install MCP tools.
 
 Pass the `bindingId` returned by `safs bind` or `safs switch` explicitly through
 `--binding`, ensuring every operation behind the fixed CLI endpoint still targets

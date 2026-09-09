@@ -6,7 +6,7 @@
 
 SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SSH 使用远程终端；服务器无需安装 VS Code Server。启用 Agent 转发后，Copilot、Codex、Claude Code 等 Agent 也能在当前远程工作区读写文件、搜索代码和执行命令。
 
-![SAFS 完整界面](images/safs-interface.png)
+![SAFS 完整界面](https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main/images/safs-interface.png)
 
 ## 适用场景
 
@@ -84,7 +84,7 @@ SAFS 默认检测 `codex`、`claude`、`pi` 和 `dsh`。其他 Agent 可运行 `
 
 #### CLI 模式
 
-将 `safs.agentInterface` 设为 `cli` 后，扩展会安装全局 `safs` 命令。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。此模式要求 VSIX 包含 Agent 所在平台的原生程序；一般保持默认的 `mcp` 即可。如果需要尽量减少 Token 消耗，可以手动切换为 CLI，因为此模式不安装 MCP 工具。
+将 `safs.agentInterface` 设为 `cli` 后，扩展会从项目 GitHub 仓库的 `bin` 目录按需下载 Agent 所在平台的原生程序，并安装全局 `safs` 命令。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。一般保持默认的 `mcp` 即可。如果需要尽量减少 Token 消耗，可以手动切换为 CLI，因为此模式不安装 MCP 工具。
 
 `safs bind` 或 `safs switch` 返回的 `bindingId` 通过 `--binding` 显式传给后续命令，
 确保固定 CLI 入口后的每次操作仍指向用户选定的 VS Code 窗口。结构化 JSON 和写入内容

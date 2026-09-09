@@ -67,15 +67,15 @@ SAFS connection and Agent usage telemetry; the offline benchmark does not supply
 
 ## Experimental CLI Agent integration
 
-`agentInterface` defaults to `mcp`. Setting it to `cli` is experimental and requires
-a bundled native executable matching the Agent platform. In CLI mode SAFS writes a private
+`agentInterface` defaults to `mcp`. Setting it to `cli` is experimental and downloads
+the native executable matching the Agent platform from the repository `bin` directory. In CLI mode SAFS writes a private
 connection JSON file and removes detected Agent-facing MCP registrations. The
 internal HTTP/MCP backend remains shared: replacing that internal protocol would
 not remove additional model-visible schemas, since the CLI never requests them.
 `agentMcpToolProfile` controls the default MCP mode, while the CLI backend exposes
 all structured operations.
 
-The executable is selected from Windows/macOS/Linux x64/ARM64 assets and installed
+The executable is selected from Windows/macOS/Linux x64/ARM64 repository assets and installed
 as the user-level global `safs` command. Its adjacent private connection file is
 discovered automatically. SAFS writes no AGENTS.md/CLAUDE.md instructions and copies
 no Agent prompt in CLI mode. All modes

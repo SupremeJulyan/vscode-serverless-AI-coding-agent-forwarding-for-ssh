@@ -2,6 +2,8 @@ export interface AgentMcpSetupResult {
   succeeded: boolean;
   registeredAgents: string[];
   cliExecutable?: string;
+  removedAgents?: string[];
+  manualAgents?: string[];
 }
 
 export function agentForwardingInstallMessage(

@@ -532,7 +532,7 @@
           "enum": ["cli", "mcp"],
           "default": "mcp",
           "scope": "machine",
-          "description": "Agent entry point. mcp (default) uses the stable MCP integration; cli is an experimental opt-in that installs the bundled native SAFS executable as the user-level `safs` command and requires a matching Agent platform build. Use the same value across windows, reload VS Code windows and restart Agents after changing it."
+          "description": "Agent entry point. mcp (default) uses the stable MCP integration; cli is an experimental opt-in that downloads the matching native SAFS executable from the repository's bin directory and installs it as the user-level `safs` command. Use the same value across windows, reload VS Code windows and restart Agents after changing it."
         },
         "safs.agentMcpToolProfile": {
           "type": "string",

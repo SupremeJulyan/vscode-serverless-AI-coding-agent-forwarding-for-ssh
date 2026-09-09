@@ -29,7 +29,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.7.7');
+  assert.equal(manifest.version, '1.7.8');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -140,7 +140,11 @@ test('CLI mode installs a global command without copying Agent instructions', as
   assert.equal(extensionSource.includes('已复制 SAFS CLI 使用指引'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
-  assert.ok(extensionSource.includes('已刷新 ${nativePlatform} bin 文件'));
+  assert.ok(extensionSource.includes('已下载并刷新 ${nativePlatform} bin 文件'));
+  assert.ok(extensionSource.includes('recordObservedAgentSource(context, agentName, agentPlatform)'));
+  assert.ok(extensionSource.includes('...observedAgentNames'));
+  assert.ok(extensionSource.includes('if (!vscode.window.state.focused) return;'));
+  assert.ok(extensionSource.includes('? await vscode.window.showInformationMessage(message, manualAction)'));
 });
 
 test('packages session-only remote shell integration scripts', async () => {
@@ -272,7 +276,6 @@ test('declares both the install and uninstall forwarding commands', async () => 
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
   assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
-  assert.ok(extensionSource.includes('复制 MCP 安装提示词'));
   assert.ok(extensionSource.includes('复制 MCP 卸载提示词'));
 });
 

@@ -2,6 +2,18 @@
 
 ## 1.7.8
 
+- 六个平台的原生 CLI 不再打入 VSIX；仅在切换到 CLI 模式时，从项目 GitHub
+  仓库的 `bin` 目录按当前 Agent 平台下载并安装对应可执行文件。
+- MCP 切换到 CLI 时，若尚未安装 CLI 会先询问确认；确认后下载或更新 CLI、
+  自动卸载可识别的 safs MCP，并在右下角分别列出已卸载和需手工卸载的 Agent。
+  CLI 切回 MCP 时自动卸载全局 CLI 并重新安装可识别 Agent 的 safs MCP；插件在
+  CLI 模式下升级后也会按扩展版本自动刷新 CLI。
+- 持久记录实际发起过 SAFS MCP 请求的 Agent 名称与平台；通过复制提示词手工安装
+  的 OpenCode 等 Agent 也会进入 MCP→CLI 的卸载候选，无法自动删除时明确提示手工处理。
+- 全局切换到 CLI 时仅由当前聚焦的 VS Code 窗口显示安装确认，避免多个窗口的
+  Extension Host 对同一次设置变更重复弹窗。
+- CLI 切回 MCP 时会对照历史实际调用来源与本次自动注册结果；OpenCode 等未自动
+  注册的 Agent 会提示手动安装，并仅在存在此类 Agent 时显示“复制 MCP 安装提示词”。
 - SSH 认证成功后新增 15 秒 SFTP/终端通道打开超时：网关若静默丢弃
   subsystem 或 channel-open 请求，连接不再永久停留在“正在连接”，而是
   主动结束并显示原因。
