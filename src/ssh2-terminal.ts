@@ -235,6 +235,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   private readonly integrationSessionId = randomBytes(12).toString('hex');
   /** 待 shell 通道就绪后补发的输入（live-sync 的 cd 可能早于连接完成）。 */
   private pendingInput = '';
+  private shellOpenTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly host: HostConfig,
@@ -299,6 +300,8 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
         rows: this.dimensions.rows
       }
     }, (error, stream) => {
+      if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
+      this.shellOpenTimer = undefined;
       if (error) {
         this.fail(error);
         return;
@@ -329,6 +332,13 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
         this.pendingInput = '';
       }
     });
+    // readyTimeout 只覆盖 SSH 握手。网关若在认证后静默丢弃 channel-open，
+    // 必须在此结束伪终端并显示原因，不能一直停在“正在连接”。
+    this.shellOpenTimer = setTimeout(() => {
+      this.shellOpenTimer = undefined;
+      this.fail(new Error('SSH 已认证，但服务器未响应终端通道请求（15000ms 超时）'));
+    }, 15_000);
+    this.shellOpenTimer.unref?.();
   }
 
   private handleOutput(data: string): void {
@@ -388,6 +398,8 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   }
 
   close(): void {
+    if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
+    this.shellOpenTimer = undefined;
     this.password = undefined;
     this.stream?.close();
     this.client.end();
@@ -407,6 +419,8 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   private finish(code: number | undefined): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
+    this.shellOpenTimer = undefined;
     this.password = undefined;
     this.client.end();
     this.closeEmitter.fire(code);

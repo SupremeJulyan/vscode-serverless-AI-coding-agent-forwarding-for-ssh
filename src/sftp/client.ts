@@ -49,6 +49,10 @@ function abortError(): Error {
 /** 流式写单个数据块的超时：远端停止确认（网关/抖动）时避免无限挂起。 */
 const sftpWriteChunkTimeoutMs = 60_000;
 
+/** SSH 认证成功后的 SFTP 通道打开超时。ssh2 的 readyTimeout 只覆盖握手；
+ * 某些网关会静默丢弃 subsystem 请求，不设此超时会让连接进度永久等待。 */
+const sftpOpenTimeoutMs = 15_000;
+
 function callback<T>(
   invoke: (done: (error: Error | undefined | null, value: T) => void) => void,
   signal?: AbortSignal,
@@ -482,7 +486,10 @@ function attemptConnect(
   return new Promise<SftpSession>((resolve, reject) => {
     let settled = false;
     let fallbackResolved = false;
+    let sftpOpenTimer: NodeJS.Timeout | undefined;
     const cleanup = () => {
+      if (sftpOpenTimer) clearTimeout(sftpOpenTimer);
+      sftpOpenTimer = undefined;
       signal?.removeEventListener('abort', abort);
       client.removeListener('ready', ready);
       client.removeListener('error', failed);
@@ -497,7 +504,15 @@ function attemptConnect(
     const failed = (error: Error) => finishError(error);
     const abort = () => finishError(abortError());
     const ready = () => {
+      sftpOpenTimer = setTimeout(() => {
+        finishError(new Error(
+          `SSH 已认证，但服务器未响应 SFTP 子系统请求（${sftpOpenTimeoutMs}ms 超时）`
+        ));
+      }, sftpOpenTimeoutMs);
+      sftpOpenTimer.unref?.();
       client.sftp((error, sftp) => {
+        if (sftpOpenTimer) clearTimeout(sftpOpenTimer);
+        sftpOpenTimer = undefined;
         if (error) {
           // 握手失败时附上通道首字节 hex（由构建期补丁暂存在 client 上），
           // 便于识别网关 banner 的实际格式并精确匹配。
