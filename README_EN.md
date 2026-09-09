@@ -1,6 +1,6 @@
 # SAFS
 
-**S**erverless **A**gent **F**orwarding for **S**SH
+**S**erverless **A**I Coding **A**gent **F**orwarding for **S**SH
 
 [简体中文](README.md) | [English](README_EN.md)
 
