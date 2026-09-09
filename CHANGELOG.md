@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.8
+
+- SSH 认证成功后新增 15 秒 SFTP/终端通道打开超时：网关若静默丢弃
+  subsystem 或 channel-open 请求，连接不再永久停留在“正在连接”，而是
+  主动结束并显示原因。
+- 扩展名称与描述改为 “Serverless AI Coding Agent Forwarding for SSH”，
+  明确通过 MCP 或 CLI 转发 AI Coding Agent，且远程主机无需安装
+  VS Code Server 或 Agent 服务；英文 README 标题同步修正。
+
 ## 1.7.7
 
 - CLI 与 MCP 两种转发入口改为互斥并支持双向切换：切换到 CLI 时自动安装/更新
