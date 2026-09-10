@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.9
+
+- 修复 1.7.8 原生 CLI 与固定 HTTP 路由器的工作区绑定协议不匹配：CLI 使用
+  `get_remote_workspace` 和 `switch_remote_workspace`，路由器同时兼容 1.7.8
+  旧 CLI 使用的 `safs_get_remote_workspace` 和 `safs_switch_remote_workspace`。
+- 重新构建六个平台的原生 CLI，确保下载到的 CLI 与扩展路由协议一致。
+
 ## 1.7.8
 
 - MCP 工作区工具移除自身重复的 `safs_` 前缀，注册名改为
