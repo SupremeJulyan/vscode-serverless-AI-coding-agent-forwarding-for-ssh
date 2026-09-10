@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli, nativeCliDownloadUrl,
-  nativeCliConnectionPath, nativeCliPlatform, removeNativeCli, withoutSafsPathBlock,
+  nativeCliConnectionPath, nativeCliPlatform, nativeMcpBridgeInstallPrompt, removeNativeCli,
+  withoutSafsPathBlock,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/native-cli';
 
@@ -23,6 +24,21 @@ test('selects native binaries for desktop platforms and WSL', () => {
   assert.equal(globalNativeCli('/home/me', 'linux-x64'), '/home/me/.local/bin/safs');
   assert.equal(nativeCliConnectionPath('/home/me/.local/bin/safs'), '/home/me/.local/bin/.safs-connection.json');
   assert.throws(() => nativeCliPlatform('linux', 'ia32'));
+});
+
+test('builds a manual stdio MCP bridge prompt without exposing the router token', () => {
+  const prompt = nativeMcpBridgeInstallPrompt(
+    '/Users/test/.local/bin/safs', 'Codex Test', 'mac'
+  );
+  assert.match(prompt, /stdio/);
+  assert.match(prompt, /"\/Users\/test\/\.local\/bin\/safs"/);
+  assert.match(prompt, /\["mcp-bridge","--agent","Codex Test","--platform","mac"\]/);
+  assert.equal(prompt.includes('token='), false);
+  const wsl = nativeMcpBridgeInstallPrompt(
+    String.raw`\\wsl.localhost\Ubuntu\home\test\.local\bin\safs`, 'Claude', 'wsl'
+  );
+  assert.match(wsl, /command: "safs"/);
+  assert.equal(wsl.includes('wsl.localhost'), false);
 });
 
 test('passes the Windows user PATH directory through the environment', () => {

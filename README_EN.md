@@ -63,12 +63,13 @@ The remote terminal opens in the directory of the active file by default, or at 
 MCP is the default mode:
 
 1. Click **Enable Agent Forwarding** beside the connection in the SAFS view.
-2. Open the remote directory for that connection.
-3. Restart the Agent and start a new conversation. A restart is required after MCP is installed, updated, or removed.
-4. Enter `/mcp` in the Agent, or open its MCP management view, and confirm that a `safs` service is present.
-5. Tell the Agent: `Use the safs MCP to inspect the current remote project and run its tests.`
+2. Enter the Agent name and platform when prompted; the extension installs the lightweight local `safs mcp-bridge` and copies an installation prompt.
+3. Paste the prompt into the Agent so it can install the stdio-based `safs` MCP itself. SAFS does not detect or modify Agent configuration.
+4. Open the remote directory for that connection.
+5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
+6. Tell the Agent: `Use the safs MCP to inspect the current remote project and run its tests.`
 
-SAFS detects `codex`, `claude`, `pi`, and `dsh` by default. For another Agent, run `SAFS: Install Agent Forwarding for My Agent` and paste the generated prompt into the Agent. Alternatively, run `SAFS: Copy Streamable HTTP URL` and manually add a Streamable HTTP service named `safs` in the Agent's MCP management view.
+The stdio bridge connects directly to the local router without reading `ALL_PROXY`, `HTTPS_PROXY`, or `HTTP_PROXY`, preventing a proxy from turning loopback requests into HTTP 502 responses. Alternatively, run `SAFS: Copy Streamable HTTP URL` to configure HTTP directly; this advanced option requires the Agent's `NO_PROXY` to include `127.0.0.1,localhost,::1`.
 
 > The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment. If VS Code runs on Windows and the Agent runs in WSL, set `safs.agentPlatform` to `wsl`.
 
@@ -84,7 +85,7 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-Set `safs.agentInterface` to `cli` to download the native executable for the Agent's platform on demand from the project's GitHub `bin` directory and install the global `safs` command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. The default `mcp` mode is recommended for most users. To minimize token usage, switch to CLI manually; this mode does not install MCP tools.
+MCP and CLI share the native `safs` executable downloaded on demand for the Agent's platform from the project's GitHub `bin` directory. Set `safs.agentInterface` to `cli` to expose it directly to the Agent as a global command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. The default `mcp` mode is recommended for most users. To minimize token usage, switch to CLI manually; this mode does not install MCP tools. Both modes bypass HTTP proxies when connecting to the local router.
 
 Pass the `bindingId` returned by `safs bind` or `safs switch` explicitly through
 `--binding`, ensuring every operation behind the fixed CLI endpoint still targets

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.0
+
+- 移除 Codex、Claude Code、Pi 和 DSH 的自动探测、自动 MCP 注册及配置文件写入；
+  统一通过复制提示词，由 Agent 自行安装或卸载 `safs` MCP。
+- 修复 macOS 等设置了 `ALL_PROXY`、`HTTPS_PROXY` 或 `HTTP_PROXY` 的环境中，本机
+  SAFS 请求被代理截获而出现 MCP `HTTP 502` 或 CLI 超时的问题：CLI 强制直连
+  loopback；默认 MCP 安装改用同一原生程序提供的无代理 stdio 桥。
+- CLI 请求失败时保留经过 Token 脱敏的底层错误，不再把 HTTP 状态、连接失败和
+  真正超时全部折叠为同一条错误信息。
+
 ## 1.7.9
 
 - 修复 1.7.8 原生 CLI 与固定 HTTP 路由器的工作区绑定协议不匹配：CLI 使用

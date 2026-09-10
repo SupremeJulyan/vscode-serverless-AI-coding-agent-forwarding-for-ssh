@@ -63,12 +63,13 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 默认使用 MCP 模式：
 
 1. 在 SAFS 视图中点击连接项旁的 **启用 Agent 转发**。
-2. 打开该连接的远程目录。
-3. 重启 Agent 并新建对话。首次安装、更新或移除 MCP 后必须重启。
-4. 在 Agent 中输入 `/mcp` 或打开 MCP 管理界面，确认存在 `safs` 服务。
-5. 告诉 Agent：`使用 safs mcp 检查当前远程项目并运行测试`。
+2. 按提示输入 Agent 名称和所在平台；扩展会安装轻量的本机 `safs mcp-bridge` 并复制一段安装提示词。
+3. 将提示词粘贴给 Agent，由 Agent 自行安装 stdio 类型的 `safs` MCP。SAFS 不会探测或修改 Agent 配置。
+4. 打开该连接的远程目录。
+5. 重启 Agent 并新建对话，然后通过 `/mcp` 或 MCP 管理界面确认存在 `safs` 服务。
+6. 告诉 Agent：`使用 safs mcp 检查当前远程项目并运行测试`。
 
-SAFS 默认检测 `codex`、`claude`、`pi` 和 `dsh`。其他 Agent 可运行 `SAFS: 为我的Agent安装转发功能`，再把生成的提示词粘贴给 Agent；也可运行 `SAFS: 复制 Streamable HTTP URL`，在 Agent 的 MCP 管理界面手动添加名为 `safs` 的 Streamable HTTP 服务。
+stdio 桥会强制直连本机路由器，不读取 `ALL_PROXY`、`HTTPS_PROXY` 或 `HTTP_PROXY`，避免代理将 loopback 请求变成 HTTP 502。也可运行 `SAFS: 复制 Streamable HTTP URL` 直接配置 HTTP；这种高级方式需要确保 Agent 的 `NO_PROXY` 包含 `127.0.0.1,localhost,::1`。
 
 > MCP 地址只监听 `127.0.0.1`。Agent 与运行 SAFS 的 VS Code 必须位于同一操作系统环境。VS Code 在 Windows、Agent 在 WSL 时，将 `safs.agentPlatform` 设为 `wsl`。
 
@@ -84,7 +85,7 @@ SAFS 默认检测 `codex`、`claude`、`pi` 和 `dsh`。其他 Agent 可运行 `
 
 #### CLI 模式
 
-将 `safs.agentInterface` 设为 `cli` 后，扩展会从项目 GitHub 仓库的 `bin` 目录按需下载 Agent 所在平台的原生程序，并安装全局 `safs` 命令。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。一般保持默认的 `mcp` 即可。如果需要尽量减少 Token 消耗，可以手动切换为 CLI，因为此模式不安装 MCP 工具。
+MCP 与 CLI 共用从项目 GitHub 仓库 `bin` 目录按需下载的原生 `safs` 程序。将 `safs.agentInterface` 设为 `cli` 后，它会作为全局命令直接提供给 Agent。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。一般保持默认的 `mcp` 即可。如果需要尽量减少 Token 消耗，可以手动切换为 CLI，因为此模式不安装 MCP 工具。两种模式访问本机路由器时都会绕过 HTTP 代理。
 
 `safs bind` 或 `safs switch` 返回的 `bindingId` 通过 `--binding` 显式传给后续命令，
 确保固定 CLI 入口后的每次操作仍指向用户选定的 VS Code 窗口。结构化 JSON 和写入内容

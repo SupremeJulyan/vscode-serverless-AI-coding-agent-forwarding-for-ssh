@@ -61,6 +61,22 @@ export function nativeCliConnectionPath(executable: string): string {
   return path.join(path.dirname(executable), '.safs-connection.json');
 }
 
+export function nativeMcpBridgeInstallPrompt(
+  executable: string, agentName: string, platform: 'wsl' | 'mac' | 'linux' | 'win'
+): string {
+  // The WSL install lives in the WSL user's ~/.local/bin. Its Windows-visible
+  // UNC path cannot be executed by a Linux Agent, so use the PATH entry that
+  // ensureUnixCliPath installs and takes effect after the requested restart.
+  const command = platform === 'wsl' ? 'safs' : executable;
+  const args = ['mcp-bridge', '--agent', agentName, '--platform', platform];
+  return [
+    '请为自己安装名为 safs 的用户级 MCP 服务器；如果已存在同名条目，请将其替换为下面的配置。传输类型使用 stdio（不要使用 Streamable HTTP）：',
+    `command: ${JSON.stringify(command)}`,
+    `args: ${JSON.stringify(args)}`,
+    '只执行 MCP 配置安装，不要运行或探测其他 Agent。完成后提醒我重启并新建对话生效。'
+  ].join('\n');
+}
+
 /**
  * Build the PowerShell invocation that adds the installed CLI directory to the
  * user's PATH. Windows PowerShell treats arguments following `-Command` as

@@ -1,7 +1,7 @@
 use serde_json::{json, Map, Value};
 use std::{
     env, fs,
-    io::{self, Read},
+    io::{self, BufRead, BufReader, BufWriter, Read, Write},
     process,
     time::Duration,
 };
@@ -13,6 +13,7 @@ Workspace: bind, workspaces, switch, current-file
 Read:      list, read, read-many, search, find, output
 Write:     edit, write, delete, chmod, move, upload, download
 Execute:   exec, batch
+MCP:       mcp-bridge
 
 Run `safs COMMAND --help` for exact arguments and JSON examples.
 Global options: --compact, --verbose
@@ -124,6 +125,12 @@ Example: --input '{"operations":[{"command":"read","arguments":{"path":"README.m
 Runs 1 to 50 operations sequentially in one local HTTP request.
 "#,
         ),
+        "mcp-bridge" => Some(
+            r#"Usage: safs mcp-bridge --agent NAME --platform wsl|mac|linux|win
+Runs a stdio MCP bridge to the local SAFS router. The bridge always bypasses
+HTTP proxy settings so loopback traffic cannot be intercepted by a proxy.
+"#,
+        ),
         _ => None,
     }
 }
@@ -196,8 +203,7 @@ fn request_with_context(
     stdin_content: Option<String>,
 ) -> Result<(String, Value), String> {
     let command = args.first().cloned();
-    parse_request(args, cwd, stdin_content)
-        .map_err(|error| usage_error(command.as_deref(), error))
+    parse_request(args, cwd, stdin_content).map_err(|error| usage_error(command.as_deref(), error))
 }
 
 fn parse_request(
@@ -327,7 +333,10 @@ fn parse_request(
             }
             if let Some(mode) = values.get("mode").and_then(Value::as_str) {
                 if mode != "names" {
-                    return Err("--name requires --mode names; omit --mode to select it automatically".into());
+                    return Err(
+                        "--name requires --mode names; omit --mode to select it automatically"
+                            .into(),
+                    );
                 }
             }
             values.insert("query".into(), name);
@@ -335,12 +344,16 @@ fn parse_request(
         }
         if verb == "find" {
             if !values.contains_key("query") {
-                return Err("--name is required. Example: safs find --binding ID --name '*.ts'".into());
+                return Err(
+                    "--name is required. Example: safs find --binding ID --name '*.ts'".into(),
+                );
             }
             values.insert("mode".into(), Value::String("names".into()));
         }
         if !values.contains_key("query") {
-            return Err("Search query is required. Use --query for contents or --name for filenames".into());
+            return Err(
+                "Search query is required. Use --query for contents or --name for filenames".into(),
+            );
         }
         if values
             .get("mode")
@@ -352,7 +365,8 @@ fn parse_request(
     }
     let binding = values.remove("binding");
     let require_binding = || {
-        "--binding is required. Use the bindingId returned by `safs bind` or `safs switch`.".to_string()
+        "--binding is required. Use the bindingId returned by `safs bind` or `safs switch`."
+            .to_string()
     };
     let tool = match verb.as_str() {
         "bind" => {
@@ -481,7 +495,10 @@ fn parse_request(
         } else {
             fs::read_to_string(path).map_err(|_| "Cannot read UTF-8 --file")?
         };
-        if values.insert("content".into(), Value::String(content)).is_some() {
+        if values
+            .insert("content".into(), Value::String(content))
+            .is_some()
+        {
             return Err("Use either --content or --file, not both".into());
         }
     }
@@ -491,7 +508,12 @@ fn parse_request(
     Ok((tool.into(), Value::Object(values)))
 }
 
-fn invoke(config_path: &str, name: String, arguments: Value) -> Result<Value, String> {
+struct RouterConnection {
+    url: Url,
+    timeout: Option<Duration>,
+}
+
+fn router_connection(config_path: &str, endpoint: &str) -> Result<RouterConnection, String> {
     let config: Value = serde_json::from_str(
         &fs::read_to_string(config_path).map_err(|_| "Cannot read SAFS connection file")?,
     )
@@ -512,20 +534,51 @@ fn invoke(config_path: &str, name: String, arguments: Value) -> Result<Value, St
     {
         return Err("SAFS connection must be an authenticated loopback URL".into());
     }
-    url.set_path("/cli");
+    url.set_path(endpoint);
     let timeout = config
         .get("timeoutMs")
         .and_then(Value::as_u64)
         .unwrap_or(120_000);
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global((timeout > 0).then(|| Duration::from_millis(timeout)))
+    Ok(RouterConnection {
+        url,
+        timeout: (timeout > 0).then(|| Duration::from_millis(timeout)),
+    })
+}
+
+fn direct_agent(timeout: Option<Duration>) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        // Every SAFS endpoint is validated as loopback above. Inheriting ALL_PROXY,
+        // HTTPS_PROXY or HTTP_PROXY can send 127.0.0.1 traffic to a proxy, producing
+        // misleading HTTP 502 responses or timeouts on otherwise healthy machines.
+        .proxy(None)
+        .timeout_global(timeout)
         .build()
-        .into();
+        .into()
+}
+
+fn redacted_request_error(error: ureq::Error, url: &Url) -> String {
+    let mut detail = error.to_string();
+    for (key, value) in url.query_pairs() {
+        if key == "token" && !value.is_empty() {
+            detail = detail.replace(value.as_ref(), "<hidden>");
+        }
+    }
+    detail
+}
+
+fn invoke(config_path: &str, name: String, arguments: Value) -> Result<Value, String> {
+    let connection = router_connection(config_path, "/cli")?;
+    let agent = direct_agent(connection.timeout);
     let mut response = agent
-        .post(url.as_str())
+        .post(connection.url.as_str())
         .header("content-type", "application/json")
         .send_json(json!({ "name": name, "arguments": arguments }))
-        .map_err(|_| "Local SAFS router request failed or timed out")?;
+        .map_err(|error| {
+            format!(
+                "Local SAFS router request failed: {}",
+                redacted_request_error(error, &connection.url)
+            )
+        })?;
     let envelope: Value = response
         .body_mut()
         .read_json()
@@ -534,6 +587,151 @@ fn invoke(config_path: &str, name: String, arguments: Value) -> Result<Value, St
         .get("result")
         .cloned()
         .ok_or("SAFS router returned no result".into())
+}
+
+fn tagged_mcp_connection(
+    config_path: &str,
+    agent_name: &str,
+    platform: &str,
+) -> Result<RouterConnection, String> {
+    if agent_name.trim().is_empty()
+        || agent_name.len() > 100
+        || agent_name.chars().any(char::is_control)
+    {
+        return Err("--agent must contain 1 to 100 characters without control characters".into());
+    }
+    if !matches!(platform, "wsl" | "mac" | "linux" | "win") {
+        return Err("--platform must be wsl, mac, linux, or win".into());
+    }
+    let mut connection = router_connection(config_path, "/mcp")?;
+    let retained: Vec<(String, String)> = connection
+        .url
+        .query_pairs()
+        .filter(|(key, _)| key != "agent" && key != "platform")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    connection
+        .url
+        .query_pairs_mut()
+        .clear()
+        .extend_pairs(retained)
+        .append_pair("agent", agent_name.trim())
+        .append_pair("platform", platform);
+    Ok(connection)
+}
+
+fn decode_mcp_response(body: &str) -> Result<Vec<Value>, String> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Ok(value) = serde_json::from_str(body) {
+        return Ok(vec![value]);
+    }
+    let normalized = body.replace("\r\n", "\n");
+    let mut messages = Vec::new();
+    for event in normalized.split("\n\n") {
+        let data = event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !data.is_empty() {
+            messages.push(
+                serde_json::from_str(&data)
+                    .map_err(|_| "Invalid SSE JSON from SAFS router".to_string())?,
+            );
+        }
+    }
+    if messages.is_empty() {
+        return Err("Invalid response from SAFS MCP router".into());
+    }
+    Ok(messages)
+}
+
+fn mcp_error(request: &Value, message: String) -> Option<Value> {
+    request.get("id").cloned().map(|id| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32000, "message": message }
+        })
+    })
+}
+
+fn write_mcp_message(writer: &mut impl Write, message: &Value) -> Result<(), String> {
+    serde_json::to_writer(&mut *writer, message)
+        .map_err(|_| "Cannot encode MCP response".to_string())?;
+    writer
+        .write_all(b"\n")
+        .and_then(|_| writer.flush())
+        .map_err(|_| "Cannot write MCP response".to_string())
+}
+
+fn run_mcp_bridge(config_path: &str, mut args: Vec<String>, verbose: bool) -> Result<i32, String> {
+    let agent_name =
+        take_option(&mut args, "--agent")?.ok_or("mcp-bridge requires --agent NAME")?;
+    let platform = take_option(&mut args, "--platform")?
+        .ok_or("mcp-bridge requires --platform wsl|mac|linux|win")?;
+    if !args.is_empty() {
+        return Err(format!("Invalid mcp-bridge option: {}", args[0]));
+    }
+    let connection = tagged_mcp_connection(config_path, &agent_name, &platform)?;
+    let agent = direct_agent(connection.timeout);
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let reader = BufReader::new(stdin.lock());
+    let mut writer = BufWriter::new(stdout.lock());
+    for line in reader.lines() {
+        let line = line.map_err(|_| "Cannot read MCP stdin".to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => {
+                write_mcp_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": Value::Null,
+                        "error": { "code": -32700, "message": "Invalid JSON on MCP stdin" }
+                    }),
+                )?;
+                continue;
+            }
+        };
+        let result = agent
+            .post(connection.url.as_str())
+            .header("accept", "application/json, text/event-stream")
+            .header("content-type", "application/json")
+            .send_json(&request)
+            .map_err(|error| redacted_request_error(error, &connection.url))
+            .and_then(|mut response| {
+                response
+                    .body_mut()
+                    .read_to_string()
+                    .map_err(|error| format!("Cannot read SAFS MCP response: {error}"))
+            })
+            .and_then(|body| decode_mcp_response(&body));
+        match result {
+            Ok(messages) => {
+                for message in messages {
+                    write_mcp_message(&mut writer, &message)?;
+                }
+            }
+            Err(detail) => {
+                let message = format!("Local SAFS MCP router request failed: {detail}");
+                if verbose {
+                    eprintln!("SAFS MCP bridge: {message}");
+                }
+                if let Some(error) = mcp_error(&request, message) {
+                    write_mcp_message(&mut writer, &error)?;
+                }
+            }
+        }
+    }
+    Ok(0)
 }
 
 fn result_exit_code(result: &Value) -> i32 {
@@ -637,6 +835,10 @@ fn run() -> Result<i32, String> {
             })
         })
         .ok_or("Cannot locate the SAFS connection file")?;
+    if args.first().is_some_and(|value| value == "mcp-bridge") {
+        args.remove(0);
+        return run_mcp_bridge(&config, args, verbose);
+    }
     let reads_stdin = args.windows(2).any(|pair| {
         matches!(pair, [flag, value] if (flag == "--input" || flag == "--file") && value == "-")
     });
@@ -776,13 +978,7 @@ mod tests {
             ),
             (&["edit", "--binding", "b", "--input", "{}"], "remote_edit"),
             (
-                &[
-                    "write",
-                    "--binding",
-                    "b",
-                    "--input",
-                    r#"{"content":"x"}"#,
-                ],
+                &["write", "--binding", "b", "--input", r#"{"content":"x"}"#],
                 "remote_write",
             ),
             (&["delete", "--binding", "b"], "remote_delete"),
@@ -1076,5 +1272,21 @@ mod tests {
         .unwrap();
         assert_eq!(args["operations"][0]["name"], "current_remote_file");
         assert_eq!(args["operations"][0]["arguments"]["bindingId"], "id");
+    }
+
+    #[test]
+    fn decodes_json_and_sse_mcp_responses() {
+        assert_eq!(
+            decode_mcp_response(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).unwrap(),
+            vec![json!({"jsonrpc":"2.0","id":1,"result":{}})]
+        );
+        assert_eq!(
+            decode_mcp_response(
+                "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\r\n\r\n"
+            )
+            .unwrap(),
+            vec![json!({"jsonrpc":"2.0","id":2,"result":{}})]
+        );
+        assert!(decode_mcp_response("not-json-or-sse").is_err());
     }
 }

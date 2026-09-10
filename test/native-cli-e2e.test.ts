@@ -194,10 +194,84 @@ test('native CLI applies the connection-file request timeout', async () => {
       '--config', config, 'workspaces'
     ] });
     assert.equal(result.exitCode, 1);
-    assert.match(result.stderr, /request failed or timed out/);
+    assert.match(result.stderr, /request failed:/);
     assert.ok(Date.now() - started < 2_000);
   } finally {
     await new Promise<void>((resolve) => hanging.close(() => resolve()));
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test('native CLI and stdio MCP bridge bypass proxy variables for loopback', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-native-no-proxy-'));
+  let proxyHits = 0;
+  const proxy = http.createServer((_request, response) => {
+    proxyHits += 1;
+    response.statusCode = 502;
+    response.end('loopback request was intercepted');
+  });
+  await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+  const proxyAddress = proxy.address();
+  assert.ok(proxyAddress && typeof proxyAddress !== 'string');
+  const router = new AgentHttpRouter(await freePort(), 'no-proxy-router', {
+    discover: () => []
+  });
+  await router.start();
+  const executable = bundledNativeCli(
+    process.cwd(), nativeCliPlatform(process.platform, process.arch)
+  );
+  const config = cliConfigPath(temporary);
+  const proxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
+  const proxyEnvironment = {
+    ALL_PROXY: proxyUrl,
+    all_proxy: proxyUrl,
+    HTTPS_PROXY: proxyUrl,
+    https_proxy: proxyUrl,
+    HTTP_PROXY: proxyUrl,
+    http_proxy: proxyUrl,
+    NO_PROXY: '',
+    no_proxy: ''
+  };
+  try {
+    await writeCliConnection(temporary, router.url);
+    const workspaces = await executeCaptured({
+      command: executable,
+      args: ['--config', config, 'workspaces'],
+      env: proxyEnvironment
+    });
+    assert.equal(workspaces.exitCode, 0, workspaces.stderr);
+    assert.deepEqual(JSON.parse(workspaces.stdout), { workspaces: [] });
+
+    const initialize = await executeCaptured({
+      command: executable,
+      args: [
+        '--config', config, 'mcp-bridge', '--agent', 'proxy-test', '--platform', 'mac'
+      ],
+      env: proxyEnvironment,
+      stdin: [
+        {
+          jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+            protocolVersion: '2025-03-26', capabilities: {},
+            clientInfo: { name: 'proxy-test', version: '1.0.0' }
+          }
+        },
+        { jsonrpc: '2.0', method: 'notifications/initialized', params: {} },
+        { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }
+      ].map((message) => JSON.stringify(message)).join('\n') + '\n'
+    });
+    assert.equal(initialize.exitCode, 0, initialize.stderr);
+    const responses = initialize.stdout.trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(responses.length, 2);
+    assert.equal(responses[0].id, 1);
+    assert.equal(responses[0].result.serverInfo.name, 'safs-http-router');
+    assert.equal(responses[1].id, 2);
+    assert.ok(responses[1].result.tools.some((tool: { name: string }) =>
+      tool.name === 'get_remote_workspace'
+    ));
+    assert.equal(proxyHits, 0);
+  } finally {
+    await router.stop();
+    await new Promise<void>((resolve) => proxy.close(() => resolve()));
     await rm(temporary, { recursive: true, force: true });
   }
 });

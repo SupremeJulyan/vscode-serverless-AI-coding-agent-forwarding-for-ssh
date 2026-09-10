@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code Server or an Agent server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.7.9",
+  "version": "1.8.0",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -532,7 +532,7 @@
           "enum": ["cli", "mcp"],
           "default": "mcp",
           "scope": "machine",
-          "description": "Agent entry point. mcp (default) uses the stable MCP integration; cli is an experimental opt-in that downloads the matching native SAFS executable from the repository's bin directory and installs it as the user-level `safs` command. Use the same value across windows, reload VS Code windows and restart Agents after changing it."
+          "description": "Agent entry point. mcp (default) installs a native stdio bridge that connects directly to the stable loopback router without using HTTP proxy settings; cli exposes the same native executable as the user-level `safs` command. Use the same value across windows, reload VS Code windows and restart Agents after changing it."
         },
         "safs.agentMcpToolProfile": {
           "type": "string",
@@ -548,26 +548,6 @@
           "default": 8192,
           "description": "Command/search preview byte budget (MCP previews cap at 65536). MCP retains up to 16 MiB per execution for remote_output continuation, within a 32 MiB window cache for up to 10 minutes. retentionTruncated marks incomplete capture."
         },
-        "safs.agentForwardingAgents": {
-          "type": "array",
-          "default": [
-            "codex",
-            "claude",
-            "pi",
-            "dsh"
-          ],
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "suggestions": [
-              "codex",
-              "claude",
-              "pi",
-              "dsh"
-            ]
-          },
-          "markdownDescription": "Agent CLI 名称列表，启用 Serverless Remote MCP 转发。扩展按名称从 `PATH` 查找支持 `mcp` 指令的 CLI，找不到时再从对应 VS Code Agent 扩展安装路径查找内置 CLI；**不支持的 MCP 的 CLI 会被跳过并提示。** 常见值：`codex`（OpenAI Codex）、`claude`（Anthropic Claude Code）、`pi`（pi coding agent）、`dsh`（DeepSeek Harness，写入 `$DSH_HOME/cordis.patch.yml` 注册 `@deepseek-ai/dsh-mcp-client`，HMR 热加载）等。如果使用的 Agent 不在上述四项中，请运行命令 `SAFS: 为我的Agent安装转发功能`。"
-        },
         "safs.agentPlatform": {
           "type": "string",
           "enum": [
@@ -575,7 +555,7 @@
             "wsl"
           ],
           "default": "auto",
-          "markdownDescription": "Agent 工作位置：`auto`（默认，与插件运行平台相同），`wsl`（插件运行在 Windows、Agent 在 WSL 中运行时选择——MCP 注册读写 WSL 家目录下的配置文件（如 `~/.pi/agent/mcp.json`、`$DSH_HOME/cordis.patch.yml`），Agent CLI 通过 `wsl.exe` 在 WSL 内检测与执行）。"
+          "markdownDescription": "Agent 工作位置：`auto`（默认，与插件运行平台相同），`wsl`（插件运行在 Windows、Agent 在 WSL 中运行时选择，用于生成正确平台的本地 MCP URL 与安装提示词）。"
         },
         "safs.highRiskCommandPatterns": {
           "type": "array",
