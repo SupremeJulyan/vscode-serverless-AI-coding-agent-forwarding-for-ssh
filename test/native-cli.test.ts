@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli, nativeCliDownloadUrl,
-  nativeCliConnectionPath, nativeCliPlatform, nativeMcpBridgeInstallPrompt, removeNativeCli,
-  withoutSafsPathBlock,
+  bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
+  nativeCliConnectionPath, nativeCliPlatform, nativeMcpBridgeInstallPrompt,
+  parseNativeCliVersion, removeNativeCli, withoutSafsPathBlock,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/native-cli';
+
+test('parses only the stable native CLI version output', () => {
+  assert.equal(parseNativeCliVersion('safs 1.8.0\n'), '1.8.0');
+  assert.equal(parseNativeCliVersion('safs v2.0.0-beta.1\n'), '2.0.0-beta.1');
+  assert.equal(parseNativeCliVersion('warning: version 1.8.0\n'), undefined);
+});
 
 test('selects native binaries for desktop platforms and WSL', () => {
   assert.equal(nativeCliPlatform('linux', 'x64'), 'linux-x64');
@@ -16,11 +22,6 @@ test('selects native binaries for desktop platforms and WSL', () => {
   assert.equal(nativeCliPlatform('win32', 'x64'), 'win32-x64');
   assert.equal(nativeCliPlatform('win32', 'arm64', true), 'linux-arm64');
   assert.match(bundledNativeCli('root', 'win32-x64'), /safs\.exe$/);
-  assert.equal(
-    nativeCliDownloadUrl('linux-arm64'),
-    'https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main/bin/linux-arm64/safs'
-  );
-  assert.match(nativeCliDownloadUrl('win32-x64'), /\/win32-x64\/safs\.exe$/);
   assert.equal(globalNativeCli('/home/me', 'linux-x64'), '/home/me/.local/bin/safs');
   assert.equal(nativeCliConnectionPath('/home/me/.local/bin/safs'), '/home/me/.local/bin/.safs-connection.json');
   assert.throws(() => nativeCliPlatform('linux', 'ia32'));
@@ -61,24 +62,36 @@ test('builds a Windows user PATH removal without embedding the directory', () =>
   assert.match(plan.args[3], /SetEnvironmentVariable\('Path'/);
 });
 
-test('downloads and installs only the selected platform executable', async () => {
+test('installs only the selected platform executable from the extension bundle', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-native-cli-'));
   try {
+    const extensionRoot = join(root, 'extension');
     const home = join(root, 'home');
-    let requested = '';
     const binary = Buffer.alloc(100 * 1024, 0);
     binary.set(Buffer.from('7f454c46', 'hex'));
+    const source = bundledNativeCli(extensionRoot, 'linux-x64');
+    await mkdir(join(extensionRoot, 'bin', 'linux-x64'), { recursive: true });
+    await writeFile(source, binary);
     const installed = await installNativeCli(
-      home, 'linux-x64', process.platform,
-      async (url) => { requested = url; return binary; }
+      extensionRoot, home, 'linux-x64', process.platform
     );
-    assert.match(requested, /\/bin\/linux-x64\/safs$/);
     assert.deepEqual(await readFile(installed), binary);
+    assert.deepEqual(await readFile(source), binary);
     assert.equal(installed, join(home, '.local', 'bin', 'safs'));
     if (process.platform !== 'win32') {
       const { stat } = await import('node:fs/promises');
       assert.equal((await stat(installed)).mode & 0o777, 0o755);
     }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('fails clearly when the extension bundle is missing its platform CLI', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safs-native-cli-missing-'));
+  try {
+    await assert.rejects(
+      installNativeCli(join(root, 'extension'), join(root, 'home'), 'linux-x64'),
+      /插件包内缺少 linux-x64 SAFS CLI/
+    );
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

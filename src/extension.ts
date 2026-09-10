@@ -1,7 +1,8 @@
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
   ensureUnixCliPath, globalNativeCli, installNativeCli, nativeCliConnectionPath,
-  nativeCliPlatform, nativeMcpBridgeInstallPrompt, windowsUserPathUpdatePlan
+  nativeCliPlatform, nativeMcpBridgeInstallPrompt, parseNativeCliVersion,
+  windowsUserPathUpdatePlan
 } from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
@@ -117,6 +118,8 @@ let mcp: AgentMcpServer | undefined;
 let httpRouter: AgentHttpRouter | undefined;
 let httpRouterCreation: Promise<AgentHttpRouter> | undefined;
 let httpRouterStart: Promise<AgentHttpRouter> | undefined;
+/** 每个目标 CLI 在本次 Extension Host 生命周期只做一次真实版本检查。 */
+const cliVersionChecks = new Map<string, Promise<void>>();
 let agentHttpRouterHeartbeat: NodeJS.Timeout | undefined;
 let vscodeContext: vscode.ExtensionContext;
 let pool: SftpConnectionPool;
@@ -651,8 +654,11 @@ async function openSafsTerminalRemotePath(
 async function handleSafsTerminalLink(link: SafsTerminalLink): Promise<void> {
   const currentRoot = registry.get(link.mountName)?.remoteRoot ?? link.remoteRoot;
   if (!isRemotePathInsideRoot(currentRoot, link.remotePath)) {
+    bridgeOutput?.warn(
+      `[终端链接] 路径超出挂载范围；path=${link.remotePath}；mount=${link.mountName}；root=${currentRoot}`
+    );
     const selected = await vscode.window.showWarningMessage(
-      `远程路径 ${link.remotePath} 不在挂载“${link.mountName}”的范围 ${currentRoot} 内。`,
+      'SAFS：该远程路径超出当前挂载范围。',
       addTerminalLinkMountAction,
       openTerminalLinkConfigAction
     );
@@ -684,9 +690,10 @@ async function handleSafsTerminalLink(link: SafsTerminalLink): Promise<void> {
   }
 
   const session = await pool.get(folder.hostName);
+  bridgeOutput?.debug(`[终端链接] 查找 ${link.rawPath}；root=${link.searchRoot}`);
   const { search, cancelled } = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `正在当前远程工作区查找 ${path.posix.basename(link.rawPath)}…`,
+    title: 'SAFS：正在查找远程文件',
     cancellable: true
   }, async (_progress, token) => {
     const search = await findRemotePathCandidates(
@@ -708,8 +715,11 @@ async function handleSafsTerminalLink(link: SafsTerminalLink): Promise<void> {
   if (cancelled) return;
   if (search.matches.length === 0) {
     if (search.truncated) {
+      bridgeOutput?.warn(
+        `[终端链接] 前 5000 个远程条目中未找到 ${link.rawPath}；需要完整路径`
+      );
       void vscode.window.showWarningMessage(
-        `未在前 5000 个远程条目中找到 ${link.rawPath}，请在终端输出完整路径。`
+        'SAFS：未找到终端中的文件，请输出完整路径。'
       );
       return;
     }
@@ -751,7 +761,7 @@ async function openDirectoryItem(requested: MountConfig): Promise<void> {
   }
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `正在连接 ${requested.name}…`,
+    title: 'SAFS：正在连接远程目录',
     cancellable: false
   }, async (progress) => {
     progress.report({ message: '正在验证远程目录…' });
@@ -1112,9 +1122,8 @@ async function syncToLocal(uri?: vscode.Uri): Promise<void> {
     const existingTask = manager.list().find(
       (task) => task.mountName === location.mountName && task.remotePath === remotePath
     );
-    const choice = await vscode.window.showInformationMessage(
-      `“${remotePath}”已在同步中。`, '停止同步'
-    );
+    bridgeOutput?.info(`[同步] 已在运行；mount=${location.mountName}；path=${remotePath}`);
+    const choice = await vscode.window.showInformationMessage('SAFS：该目录已在同步中。', '停止同步');
     if (choice === '停止同步') {
       await syncCoordinator?.requestStop(location.mountName, remotePath);
       if (existingTask) {
@@ -1212,15 +1221,19 @@ function formatDownloadBytes(bytes: number): string {
 /** Keep the result visible after the transient progress notification closes. */
 function showTransferCompleted(message: string): void {
   bridgeOutput?.appendLine(`[传输完成] ${message}`);
-  void vscode.window.showInformationMessage(`SAFS：${message}`);
+  const operation = message.split('：', 1)[0] || '传输完成';
+  void vscode.window.showInformationMessage(`SAFS：${operation}。`);
 }
 
 async function startRemoteSyncWithProgress(
   manager: RemoteSyncManager, task: RemoteSyncTask
 ): Promise<boolean> {
+  bridgeOutput?.info(
+    `[同步] 开始；mount=${task.mountName}；remote=${task.remotePath}；local=${task.localDir}`
+  );
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `SAFS：同步 ${path.posix.basename(task.remotePath)} 到本地`,
+    title: 'SAFS：正在同步到本地',
     cancellable: true
   }, async (progress, token) => {
     const controller = new AbortController();
@@ -1232,7 +1245,11 @@ async function startRemoteSyncWithProgress(
         signal: controller.signal,
         onProgress: (state) => {
           if (state.discovering) {
-            progress.report({ message: `已完成 ${state.completedFiles} 个 / 已发现 ${state.totalFiles} 个 · ${formatDownloadBytes(state.transferredBytes)} · ${state.currentFile ?? ''}` });
+            progress.report({
+              message: `已完成 ${state.completedFiles}/${state.totalFiles} 个 · ${
+                formatDownloadBytes(state.transferredBytes)
+              }`
+            });
             return;
           }
           if (state.phase === 'scanning') {
@@ -1246,9 +1263,8 @@ async function startRemoteSyncWithProgress(
               : 100;
           const increment = Math.max(0, percent - reportedPercent);
           reportedPercent = Math.max(reportedPercent, percent);
-          const file = state.currentFile ? path.posix.basename(state.currentFile) : '';
           progress.report({
-            message: `${file} · ${state.completedFiles}/${state.totalFiles} 个文件 · ${
+            message: `${state.completedFiles}/${state.totalFiles} 个文件 · ${
               formatDownloadBytes(state.transferredBytes)
             }/${formatDownloadBytes(state.totalBytes)}（${Math.floor(percent)}%）`,
             increment
@@ -1256,7 +1272,8 @@ async function startRemoteSyncWithProgress(
         }
       });
       if (controller.signal.aborted) {
-        void vscode.window.showInformationMessage(`已取消同步 ${task.remotePath}。`);
+        bridgeOutput?.appendLine(`[同步取消] ${task.mountName}:${task.remotePath}`);
+        void vscode.window.showInformationMessage('SAFS：同步已取消。');
         return false;
       }
       // add may schedule a retry after failure; that is not a completed sync.
@@ -1290,12 +1307,12 @@ async function visualDownload(
   const folder = registry.get(location.mountName);
   if (!folder) throw new Error(`远程挂载未连接：${location.mountName}`);
   const remotePath = remotePathForUri(folder, location.remotePath);
-  const baseName = path.posix.basename(remotePath);
+  bridgeOutput?.info(`[下载] 准备；remote=${remotePath}`);
   // 获取连接和远程类型都可能触发 SSH 握手。先显示可取消的准备通知，避免用户
   // 在连接较慢时点击后看不到任何反馈，误以为目录下载命令没有生效。
   const prepared = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `SAFS：准备下载 ${baseName}`,
+    title: 'SAFS：正在准备下载',
     cancellable: true
   }, async (progress, token) => {
     const controller = new AbortController();
@@ -1345,7 +1362,7 @@ async function downloadRemoteFile(
   if (!target) return false;
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `正在下载 ${baseName}`,
+    title: 'SAFS：正在下载文件',
     cancellable: true
   }, async (progress, token) => {
     const controller = new AbortController();
@@ -1355,9 +1372,9 @@ async function downloadRemoteFile(
       ? setTimeout(() => { timedOut = true; controller.abort(); }, transferTimeoutMs)
       : undefined;
     let cumulative = 0;
-    // 立即上报一次：通知一出现即带文件名/大小，而不是等跨过 1% 才显示。
+    // 立即上报一次：通知一出现即带大小，而不是等跨过 1% 才显示。
     progress.report({
-      message: `${baseName}：0 B / ${formatDownloadBytes(totalBytes)}（0%）`
+      message: `0 B / ${formatDownloadBytes(totalBytes)}（0%）`
     });
     try {
       const source = await session.readFileStream(remotePath, controller.signal);
@@ -1367,15 +1384,15 @@ async function downloadRemoteFile(
           const percent = totalBytes > 0 ? cumulative / totalBytes * 100 : 0;
           progress.report({
             message: totalBytes > 0
-              ? `${baseName}：${formatDownloadBytes(cumulative)} / ${formatDownloadBytes(totalBytes)}（${Math.floor(percent)}%）`
-              : `${baseName}：${formatDownloadBytes(cumulative)}`,
+              ? `${formatDownloadBytes(cumulative)} / ${formatDownloadBytes(totalBytes)}（${Math.floor(percent)}%）`
+              : formatDownloadBytes(cumulative),
             increment: totalBytes > 0 ? delta / totalBytes * 100 : undefined
           });
         },
         signal: controller.signal
       });
       progress.report({
-        message: `完成：${baseName}（${formatDownloadBytes(totalBytes)}）`,
+        message: `完成：${formatDownloadBytes(totalBytes)}`,
         increment: totalBytes > 0 ? 100 - cumulative / totalBytes * 100 : undefined
       });
       showTransferCompleted(`下载完成：${baseName} · 1 个文件，${formatDownloadBytes(cumulative)} → ${target}`);
@@ -1384,7 +1401,8 @@ async function downloadRemoteFile(
       if (controller.signal.aborted) {
         if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
         // writeStreamToFile 已删除半成品文件。
-        void vscode.window.showInformationMessage(`已取消下载 ${baseName}。`);
+        bridgeOutput?.appendLine(`[下载取消] ${remotePath}`);
+        void vscode.window.showInformationMessage('SAFS：下载已取消。');
         return false;
       }
       throw error;
@@ -1413,9 +1431,10 @@ async function downloadRemoteDirectory(
     targetRoot = path.join(picked[0].fsPath, baseName);
   }
   const selectedTargetRoot = targetRoot;
+  bridgeOutput?.info(`[目录下载] remote=${remotePath}；local=${selectedTargetRoot}`);
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `正在下载目录 ${baseName}`,
+    title: 'SAFS：正在下载目录',
     cancellable: true
   }, async (progress, token) => {
     const controller = new AbortController();
@@ -1440,15 +1459,12 @@ async function downloadRemoteDirectory(
           const now = Date.now();
           if (lastReportAt > 0 && now - lastReportAt < 100) return;
           lastReportAt = now;
-          const current = state.currentFile
-            ? ` · ${path.posix.join(baseName, state.currentFile)}`
-            : '';
           progress.report({
             message: `${state.phase === 'scanning' ? '正在发现并下载' : '正在下载'}：${
               state.completedFiles
             }/${state.discoveredFiles} 个文件 · ${
               formatDownloadBytes(state.transferredBytes)
-            }${current}`
+            }`
           });
         }
       });
@@ -1462,9 +1478,8 @@ async function downloadRemoteDirectory(
     } catch (error) {
       if (controller.signal.aborted) {
         if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
-        void vscode.window.showInformationMessage(
-          `已取消下载目录 ${baseName}（已完成的文件已保留）。`
-        );
+        bridgeOutput?.appendLine(`[目录下载取消] ${remotePath}；已完成文件保留`);
+        void vscode.window.showInformationMessage('SAFS：目录下载已取消，已完成文件已保留。');
         return false;
       }
       throw error;
@@ -1498,9 +1513,10 @@ async function visualUpload(
     ?? await promptRemoteDirectory(session, remoteRoot, remoteRoot, mount.name);
   if (!picked) return false;
   const targetDir = picked.startsWith('/') ? picked : path.posix.join(remoteRoot, picked);
+  bridgeOutput?.info(`[上传] mount=${mount.name}；target=${targetDir}`);
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `正在上传到 ${mount.name}:${targetDir}`,
+    title: 'SAFS：正在上传文件',
     cancellable: true
   }, async (progress, token) => {
     const controller = new AbortController();
@@ -1523,7 +1539,9 @@ async function visualUpload(
           if (now - lastReport < 100) return;
           lastReport = now;
           progress.report({
-            message: `已完成 ${state.completed} 个 / 已发现 ${state.discovered} 个 · ${formatDownloadBytes(state.bytes)} · ${path.posix.relative(targetDir, state.current)}`
+            message: `已完成 ${state.completed}/${state.discovered} 个 · ${
+              formatDownloadBytes(state.bytes)
+            }`
           });
         }
       });
@@ -1535,7 +1553,8 @@ async function visualUpload(
     } catch (error) {
       if (controller.signal.aborted) {
         if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
-        void vscode.window.showInformationMessage('已取消上传（已完成文件保留，未完成文件的原内容不变）。');
+        bridgeOutput?.appendLine(`[上传取消] ${mount.name}:${targetDir}；已完成文件保留`);
+        void vscode.window.showInformationMessage('SAFS：上传已取消，已完成文件已保留。');
         return false;
       }
       throw error;
@@ -1735,13 +1754,13 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
       return;
     }
     void vscode.window.showErrorMessage(
-      `远程终端“${terminal.name}”连续遇到未确认的负载节点，已停止自动重连。`
+      'SAFS：远程终端遇到未确认的负载节点，已停止重连。'
     );
     return;
   }
   if (reopen.retryWithSystemSsh) {
     void vscode.window.showInformationMessage(
-      `SAFS: 内置终端与该服务器不兼容，已改用系统 SSH 重连“${reopen.mount.name}”。`
+      'SAFS：已改用系统 SSH 重连远程终端。'
     );
     await openTerminal(vscodeContext, reopen.mount, remoteCwd, undefined, true, true);
     return;
@@ -1760,7 +1779,7 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
         '重连后的终端在 60 秒内再次退出'
       );
       void vscode.window.showErrorMessage(
-        `远程终端“${terminal.name}”重连后再次退出，已停止自动重连。`
+        'SAFS：远程终端再次退出，已停止自动重连。'
       );
       return;
     }
@@ -1775,7 +1794,7 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
     return;
   }
   const selected = await vscode.window.showInformationMessage(
-    `远程终端“${terminal.name}”已退出。`,
+    'SAFS：远程终端已退出。',
     reconnectRemoteTerminalAction,
     viewSafsLogAction
   );
@@ -1880,7 +1899,12 @@ async function openTerminal(
         { WSL_VPN_SSH_CONFIG: configPath() }
       );
       if (!verification.ok) {
-        void vscode.window.showErrorMessage(verification.reason!);
+        bridgeOutput?.error(`[主机密钥] ${verification.reason}`);
+        void vscode.window.showErrorMessage(
+          'SAFS：SSH 主机密钥验证失败。', viewSafsLogAction
+        ).then((selected) => {
+          if (selected === viewSafsLogAction) bridgeOutput?.show(true);
+        });
         return undefined;
       }
     }
@@ -2125,7 +2149,8 @@ async function addSshConfig(context: vscode.ExtensionContext): Promise<void> {
   config.mounts = deriveMounts(config.hosts);
   config.encrypt_passwords = true;
   await saveConfig(configPath(), config);
-  void vscode.window.showInformationMessage(`已保存 SFTP 配置"${normalizedName}"`);
+  bridgeOutput?.info(`[配置] 已保存 SFTP 配置 ${normalizedName}`);
+  void vscode.window.showInformationMessage('SAFS：SFTP 配置已保存。');
 }
 
 // ---- MCP / Remote Ops ----
@@ -3278,6 +3303,73 @@ function startAgentWorkspacePublishing(context: vscode.ExtensionContext): void {
   );
 }
 
+async function probeInstalledCliVersion(
+  executable: string, agentInWsl: boolean
+): Promise<string | undefined> {
+  try {
+    const plan = agentInWsl
+      ? wslBashInvocation('"$1" --version', [localPathForAgent(executable, 'wsl')])
+      : { command: executable, args: ['--version'] };
+    const result = await executeCaptured(plan, AbortSignal.timeout(5_000), 4096);
+    if (result.exitCode !== 0) return undefined;
+    return parseNativeCliVersion(`${result.stdout}\n${result.stderr}`);
+  } catch {
+    return undefined;
+  }
+}
+
+async function ensureGlobalCliVersion(
+  context: vscode.ExtensionContext, executable: string,
+  nativePlatform: ReturnType<typeof nativeCliPlatform>, agentHome: string, agentInWsl: boolean
+): Promise<void> {
+  const extensionVersion = String(context.extension.packageJSON?.version ?? '');
+  if (!extensionVersion) throw new Error('无法读取当前 SAFS 插件版本');
+  const checkKey = `${nativePlatform}\0${executable}\0${extensionVersion}`;
+  const existing = cliVersionChecks.get(checkKey);
+  if (existing) return existing;
+  const check = (async () => {
+    const fileExists = await access(executable).then(() => true, () => false);
+    const installedVersion = fileExists
+      ? await probeInstalledCliVersion(executable, agentInWsl)
+      : undefined;
+    if (installedVersion !== extensionVersion) {
+      bridgeOutput?.warn(
+        `[Agent CLI] 版本不一致，正在更新；installed=${installedVersion ?? '<unknown>'}；` +
+        `extension=${extensionVersion}；platform=${nativePlatform}`
+      );
+      await installNativeCli(context.extensionUri.fsPath, agentHome, nativePlatform);
+      if (agentInWsl) {
+        const permission = await executeCaptured(wslBashInvocation(
+          'chmod 755 "$1"', [localPathForAgent(executable, 'wsl')]
+        ));
+        if (permission.exitCode !== 0) {
+          throw new Error('无法设置 WSL SAFS CLI 权限：' + permission.stderr.trim());
+        }
+      }
+      const refreshedVersion = await probeInstalledCliVersion(executable, agentInWsl);
+      if (refreshedVersion !== extensionVersion) {
+        throw new Error(
+          `SAFS CLI 更新后版本仍不一致：期望 ${extensionVersion}，实际 ${
+            refreshedVersion ?? '无法识别'
+          }`
+        );
+      }
+      bridgeOutput?.info(`[Agent CLI] 已更新到插件版本 ${extensionVersion}：${executable}`);
+    } else {
+      bridgeOutput?.debug(`[Agent CLI] 版本检查通过：${installedVersion}；${executable}`);
+    }
+    await context.globalState.update(cliInstallKey, {
+      platform: nativePlatform, installPath: executable, version: extensionVersion,
+      home: agentHome
+    });
+  })().catch((error) => {
+    cliVersionChecks.delete(checkKey);
+    throw error;
+  });
+  cliVersionChecks.set(checkKey, check);
+  return check;
+}
+
 async function installGlobalCli(
   context: vscode.ExtensionContext, routerUrl: string
 ): Promise<string> {
@@ -3286,27 +3378,12 @@ async function installGlobalCli(
   );
   const nativePlatform = nativeCliPlatform(process.platform, process.arch, agentPlatform.wsl);
   const executable = globalNativeCli(agentPlatform.home, nativePlatform);
-  const extensionVersion = String(context.extension.packageJSON?.version ?? '');
-  // 仅在以下情况刷新（复制）bin，避免每次切换工作区/重载扩展都重复复制：
-  // 平台或安装路径变化、目标文件丢失、或扩展已升级时，按版本下载对应 release
-  // asset。沿用已装全局命令前需保证其与当前扩展版本匹配。
-  const previous = context.globalState.get<{
-    platform: string; installPath: string; version: string; home?: string;
-  }>(cliInstallKey);
-  const alreadyInstalled = previous?.platform === nativePlatform
-    && previous.installPath === executable
-    && previous.version === extensionVersion
-    && await (access(executable).then(() => true, () => false));
-  if (!alreadyInstalled) {
-    await installNativeCli(agentPlatform.home, nativePlatform);
-    bridgeOutput?.appendLine(
-      `[Agent CLI] 已下载并刷新 ${nativePlatform} bin 文件：${executable}`
-    );
-    await context.globalState.update(cliInstallKey, {
-      platform: nativePlatform, installPath: executable, version: extensionVersion,
-      home: agentPlatform.home
-    });
-  }
+  // globalState 只能说明插件曾尝试安装过，不能证明磁盘上的二进制没有被旧版本
+  // 覆盖。首次使用时执行 `safs --version`，不一致（或旧版不支持探测）就从
+  // 当前扩展包内刷新对应平台的二进制。
+  await ensureGlobalCliVersion(
+    context, executable, nativePlatform, agentPlatform.home, agentPlatform.wsl
+  );
   const forwardingTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
   const cliTimeoutMs = forwardingTimeoutMs > 0 ? forwardingTimeoutMs + 5_000 : 0;
   await writeCliConnectionFile(
@@ -3359,11 +3436,14 @@ async function configureAgentInterface(
 
 async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): Promise<void> {
   let cliExecutable: string | undefined;
+  bridgeOutput?.info(
+    `[Agent 转发] ${enabledValue ? '启用' : '关闭'} ${mount.name}`
+  );
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: enabledValue
-      ? `正在启用“${mount.name}”的 Agent 转发…`
-      : `正在关闭“${mount.name}”的 Agent 转发…`
+      ? 'SAFS：正在启用 Agent 转发'
+      : 'SAFS：正在关闭 Agent 转发'
   }, async () => {
     const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
     if (enabledValue) enabled.add(mount.name);
@@ -3395,8 +3475,9 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
   });
   if (enabledValue) {
     if (cliExecutable) {
+      bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
       void vscode.window.showInformationMessage(
-        `SAFS CLI 已安装到 ${cliExecutable}。请重启 VS Code 和 Agent 后使用。`
+        'SAFS：CLI 已安装，请重启后使用。'
       );
       return;
     }
@@ -3404,10 +3485,13 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
     return;
   }
   const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
+  bridgeOutput?.info(
+    `[Agent 转发] 已关闭 ${mount.name}；剩余=${[...enabled].join(',') || '<empty>'}`
+  );
   void vscode.window.showInformationMessage(
-    `"${mount.name}" Agent 转发已关闭。${enabled.size === 0
-      ? '所有转发均已关闭；SAFS 不会修改 Agent 配置，如需卸载请运行“为我的Agent卸载转发功能”。'
-      : '其他已启用挂载继续共用固定 MCP。'}`
+    enabled.size === 0
+      ? 'SAFS：所有 Agent 转发已关闭。'
+      : 'SAFS：Agent 转发已关闭，其他挂载不受影响。'
   );
 }
 
@@ -3419,8 +3503,10 @@ async function prepareAgentCwd(mount: MountConfig): Promise<void> {
     const detail = error instanceof Error ? error.message : String(error);
     bridgeOutput?.appendLine(`[Agent CWD] 无法为 ${mount.name} 创建本机占位目录：${detail}`);
     void vscode.window.showWarningMessage(
-      `SAFS：无法创建 Agent cwd 占位目录。Agent 可能因 ENOENT 无法启动，请查看输出。`
-    );
+      'SAFS：Agent 工作目录准备失败。', viewSafsLogAction
+    ).then((selected) => {
+      if (selected === viewSafsLogAction) bridgeOutput?.show(true);
+    });
   }
 }
 
@@ -3434,7 +3520,9 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
     logAsyncFailure('命令失败', error);
     if (error instanceof ConfigActionRequiredError) {
       const selected = await vscode.window.showErrorMessage(
-        `SAFS: ${message}`,
+        error.actions.includes(addSshConfigAction)
+          ? 'SAFS：尚未配置远程目录。'
+          : 'SAFS：配置无法读取，请打开配置检查。',
         ...error.actions
       );
       if (selected === openConfigAction) {
@@ -3447,21 +3535,22 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
     const missingCommand = missingExecutableName(error);
     if (missingCommand) {
       bridgeOutput?.appendLine(`[缺少依赖] ${message}`);
-      await vscode.window.showErrorMessage(
-        `SAFS：找不到命令"${missingCommand}"，请确保 SSH 客户端已安装。`
+      const selected = await vscode.window.showErrorMessage(
+        'SAFS：缺少必要的 SSH 客户端命令。', viewSafsLogAction
       );
+      if (selected === viewSafsLogAction) bridgeOutput?.show(true);
       return;
     }
     output.appendLine(`[错误] ${message}`);
-    const errorHint =
-      /All configured authentication methods failed/i.test(message)
-        ? '：认证失败，请检查用户名/密码是否正确（或改用私钥认证）'
-        : /Unable to start subsystem/i.test(message)
-          ? '：服务器未提供 SFTP 子系统（可能仅支持 SSH 终端/跳板，或网关策略禁止文件传输）。请在服务器 sshd_config 中启用 Subsystem sftp，或改用支持 SFTP 的目标主机；如需 SSH 终端可尝试“SAFS: 打开远程终端”'
-          : /packet length|exchange encryption keys|wrong packet|bad packet/i.test(message)
-            ? '：服务器在 SSH 握手阶段返回了无效数据（网关/NSG 可能瞬断或该端口不是 SSH 服务），已自动重试 3 次仍失败'
-            : '';
-    await vscode.window.showErrorMessage(`SAFS: ${message}${errorHint}`);
+    const summary = /All configured authentication methods failed/i.test(message)
+      ? 'SAFS：SSH 认证失败，请检查登录凭据。'
+      : /Unable to start subsystem/i.test(message)
+        ? 'SAFS：服务器未提供 SFTP 子系统。'
+        : /packet length|exchange encryption keys|wrong packet|bad packet/i.test(message)
+          ? 'SAFS：SSH 握手失败，自动重试仍未恢复。'
+          : 'SAFS：操作失败，完整原因已写入日志。';
+    const selected = await vscode.window.showErrorMessage(summary, viewSafsLogAction);
+    if (selected === viewSafsLogAction) bridgeOutput?.show(true);
   }
 }
 
@@ -3475,15 +3564,14 @@ async function ensureSystemDependencies(): Promise<void> {
   try {
     await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
-      title: `SAFS：正在安装 ${platformName} 依赖`,
+      title: 'SAFS：正在安装系统依赖',
       cancellable: false
     }, async (progress) => {
       const reporter = {
         log: (message: string) => {
           if (!message) return;
           bridgeOutput?.appendLine(message);
-          const latest = message.trim().split(/\r?\n/).at(-1);
-          if (latest) progress.report({ message: latest.slice(0, 100) });
+          progress.report({ message: '正在安装所需组件…' });
         },
         progress: (message: string, increment?: number) =>
           progress.report({ message, increment })
@@ -3498,7 +3586,7 @@ async function ensureSystemDependencies(): Promise<void> {
     const detail = error instanceof Error ? error.message : String(error);
     bridgeOutput?.appendLine(`[依赖安装失败] ${detail}`);
     const selected = await vscode.window.showErrorMessage(
-      `SAFS：${platformName} 依赖自动安装失败：${detail}`,
+      `SAFS：${platformName} 依赖安装失败。`,
       '查看输出'
     );
     if (selected === '查看输出') bridgeOutput?.show(true);
@@ -3745,15 +3833,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const url = agentTaggedMcpUrl(router.url, answer.agentName, answer.platform);
     await vscode.env.clipboard.writeText(url);
     void vscode.window.showInformationMessage(
-      `已复制 ${answer.agentName} 的 Streamable HTTP URL。直接 HTTP 模式由 Agent 发起请求，请确保其代理绕过 127.0.0.1、localhost 和 ::1。`
+      'SAFS：MCP URL 已复制；请确认 NO_PROXY。'
     );
   });
   command('installAgentForwarding', async () => {
     if (cliMode()) {
       const router = await ensureAgentHttpRouter(context);
       const executable = await installGlobalCli(context, cliRouterUrl(router.url));
+      bridgeOutput?.info(`[Agent CLI] 安装完成：${executable}`);
       void vscode.window.showInformationMessage(
-        `SAFS CLI 已安装到 ${executable}。请重启 VS Code 和 Agent；重启后在对话中输入“safs bind”即可绑定远程工作区。`
+        'SAFS：CLI 已安装，请重启后运行 safs bind。'
       );
       return;
     }
@@ -3770,7 +3859,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     await vscode.env.clipboard.writeText(promptText);
     void vscode.window.showInformationMessage(
-      `已复制 ${answer.agentName} 的安装提示词。请把提示词粘贴到 Agent 输入框里，由 Agent 自动完成 SAFS 转发配置。`
+      'SAFS：安装提示词已复制，请粘贴到 Agent。'
     );
   });
   command('uninstallAgentForwarding', async () => {
@@ -3783,7 +3872,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ].join('\n');
     await vscode.env.clipboard.writeText(promptText);
     void vscode.window.showInformationMessage(
-      `已复制 ${answer.agentName} 的卸载提示词。请把提示词粘贴到 Agent 输入框里，由 Agent 自己移除名为 safs 的 MCP 配置。`
+      'SAFS：卸载提示词已复制，请粘贴到 Agent。'
     );
   });
   command('refreshExplorer', async () => tree.refresh());
@@ -3795,8 +3884,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const syncTask = historySyncTask(item);
     if (syncTask) {
       if (!await syncCoordinator?.isReady(item.mountName, item.path, syncTask.localDir)) {
+        bridgeOutput?.info(
+          `[同步] 本地目录尚未准备完成；mount=${item.mountName}；path=${item.path}`
+        );
         void vscode.window.showInformationMessage(
-          `正在同步 ${item.path}，本地目录准备完成后再打开。`
+          'SAFS：目录仍在同步，请稍后再打开。'
         );
         return;
       }
@@ -3936,8 +4028,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       startAgentHttpRouterLeadership(context);
       if (cliMode()) {
         const result = await configureAgentInterface(context);
+        bridgeOutput?.info(`[Agent CLI] 接口切换完成：${result.cliExecutable}`);
         void vscode.window.showInformationMessage(
-          `SAFS CLI 已安装到 ${result.cliExecutable}。如 Agent 仍配置了 safs MCP，请运行卸载命令复制提示词。`
+          'SAFS：CLI 已就绪；请重启 Agent。'
         );
       } else {
         await configureAgentInterface(context);

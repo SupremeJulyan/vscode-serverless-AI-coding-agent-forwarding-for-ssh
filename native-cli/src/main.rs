@@ -17,6 +17,7 @@ MCP:       mcp-bridge
 
 Run `safs COMMAND --help` for exact arguments and JSON examples.
 Global options: --compact, --verbose
+Version: safs --version
 "#;
 
 fn command_help(command: &str) -> Option<&'static str> {
@@ -815,6 +816,10 @@ fn concise_error(result: &Value) -> String {
 
 fn run() -> Result<i32, String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if matches!(args.as_slice(), [value] if value == "--version" || value == "-V") {
+        println!("safs {}", env!("CARGO_PKG_VERSION"));
+        return Ok(0);
+    }
     if let Some(command) = requested_help(&args) {
         print!("{}", command.and_then(command_help).unwrap_or(HELP));
         return Ok(0);
@@ -950,6 +955,11 @@ mod tests {
         ] {
             assert!(command_help(command).unwrap().starts_with("Usage: safs "));
         }
+    }
+
+    #[test]
+    fn package_version_matches_the_extension_release() {
+        assert_eq!(env!("CARGO_PKG_VERSION"), "1.8.0");
     }
 
     #[test]

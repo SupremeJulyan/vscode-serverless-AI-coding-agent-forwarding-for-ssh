@@ -85,7 +85,7 @@ stdio 桥会强制直连本机路由器，不读取 `ALL_PROXY`、`HTTPS_PROXY` 
 
 #### CLI 模式
 
-MCP 与 CLI 共用从项目 GitHub 仓库 `bin` 目录按需下载的原生 `safs` 程序。将 `safs.agentInterface` 设为 `cli` 后，它会作为全局命令直接提供给 Agent。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。一般保持默认的 `mcp` 即可。如果需要尽量减少 Token 消耗，可以手动切换为 CLI，因为此模式不安装 MCP 工具。两种模式访问本机路由器时都会绕过 HTTP 代理。
+MCP 与 CLI 共用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。扩展每次启动后首次准备该程序时会读取其真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。将 `safs.agentInterface` 设为 `cli` 后，它会作为全局命令直接提供给 Agent。重载 VS Code、重启 Agent，然后在 Agent 输入 `run safs bind`。一般保持默认的 `mcp` 即可。如果需要尽量减少 Token 消耗，可以手动切换为 CLI，因为此模式不安装 MCP 工具。两种模式访问本机路由器时都会绕过 HTTP 代理。
 
 `safs bind` 或 `safs switch` 返回的 `bindingId` 通过 `--binding` 显式传给后续命令，
 确保固定 CLI 入口后的每次操作仍指向用户选定的 VS Code 窗口。结构化 JSON 和写入内容

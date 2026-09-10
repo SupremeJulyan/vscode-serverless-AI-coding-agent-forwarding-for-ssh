@@ -77,7 +77,8 @@ export async function installWslDependencies(reporter: InstallReporter): Promise
 
   const wsl = '/mnt/c/Windows/System32/wsl.exe';
   const distro = process.env.WSL_DISTRO_NAME;
-  reporter.progress(`正在为 ${distribution.name} 安装 util-linux…`, 20);
+  reporter.log(`正在为 ${distribution.name} 安装 util-linux`);
+  reporter.progress('正在安装 util-linux…', 20);
   await run(wsl, [
     ...(distro ? ['-d', distro] : []),
     '-u', 'root', '--', 'sh', '-lc', installCommand

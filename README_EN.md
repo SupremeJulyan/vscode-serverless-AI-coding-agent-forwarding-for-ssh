@@ -85,7 +85,7 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-MCP and CLI share the native `safs` executable downloaded on demand for the Agent's platform from the project's GitHub `bin` directory. Set `safs.agentInterface` to `cli` to expose it directly to the Agent as a global command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. The default `mcp` mode is recommended for most users. To minimize token usage, switch to CLI manually; this mode does not install MCP tools. Both modes bypass HTTP proxies when connecting to the local router.
+MCP and CLI share the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. Set `safs.agentInterface` to `cli` to expose it directly to the Agent as a global command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. The default `mcp` mode is recommended for most users. To minimize token usage, switch to CLI manually; this mode does not install MCP tools. Both modes bypass HTTP proxies when connecting to the local router.
 
 Pass the `bindingId` returned by `safs bind` or `safs switch` explicitly through
 `--binding`, ensuring every operation behind the fixed CLI endpoint still targets

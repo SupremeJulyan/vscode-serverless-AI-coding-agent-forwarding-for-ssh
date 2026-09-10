@@ -127,8 +127,16 @@ test('shows separate Agent forwarding actions for enabled and disabled mounts', 
 test('packages Agent integration without the legacy JS stdio router or Codex plugin', async () => {
   await access(new URL('../src/agent-http-router.ts', import.meta.url));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  const vscodeIgnore = await readFile(new URL('../.vscodeignore', import.meta.url), 'utf8');
   assert.equal(extensionSource.includes('mcp-router.cjs'), false);
   assert.equal(extensionSource.includes("'--', 'node'"), false);
+  assert.equal(/^bin\/\*\*$/m.test(vscodeIgnore), false);
+  for (const executable of [
+    'linux-x64/safs', 'linux-arm64/safs', 'darwin-x64/safs', 'darwin-arm64/safs',
+    'win32-x64/safs.exe', 'win32-arm64/safs.exe'
+  ]) {
+    await access(new URL(`../bin/${executable}`, import.meta.url));
+  }
   await assert.rejects(access(new URL(
     '../plugins/safs/.codex-plugin/plugin.json', import.meta.url
   )));
@@ -136,11 +144,12 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
 
 test('Agent integration never probes or modifies Agent installations', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extensionSource.includes('在对话中输入“safs bind”'));
+  assert.ok(extensionSource.includes('重启后运行 safs bind'));
   assert.equal(extensionSource.includes('已复制 SAFS CLI 使用指引'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
-  assert.ok(extensionSource.includes('已下载并刷新 ${nativePlatform} bin 文件'));
+  assert.ok(extensionSource.includes("args: ['--version']"));
+  assert.ok(extensionSource.includes('installedVersion !== extensionVersion'));
   assert.equal(extensionSource.includes('configureDetectedAgents'), false);
   assert.equal(extensionSource.includes('recordObservedAgentSource'), false);
   assert.equal(extensionSource.includes('runAgentMcpOperation'), false);

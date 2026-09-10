@@ -40,7 +40,9 @@ jobs:
           SAFS_CLI_PLATFORM: ${{ matrix.platform }}
       - name: Smoke test native CLI
         shell: bash
-        run: bin/${{ matrix.platform }}/safs${{ startsWith(matrix.platform, 'win32-') && '.exe' || '' }} --help
+        run: |
+          bin/${{ matrix.platform }}/safs${{ startsWith(matrix.platform, 'win32-') && '.exe' || '' }} --help
+          bin/${{ matrix.platform }}/safs${{ startsWith(matrix.platform, 'win32-') && '.exe' || '' }} --version
       - uses: actions/upload-artifact@v4
         with:
           name: safs-${{ matrix.platform }}

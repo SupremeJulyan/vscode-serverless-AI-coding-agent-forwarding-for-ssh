@@ -11,5 +11,4 @@ images/safs-interface.png
 !images/icon.png
 build/**
 native-cli/**
-bin/**
 scripts/*.test.js
