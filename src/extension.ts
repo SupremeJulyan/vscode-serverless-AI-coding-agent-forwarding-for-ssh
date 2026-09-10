@@ -1,7 +1,7 @@
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
   ensureUnixCliPath, globalNativeCli, installNativeCli, nativeCliConnectionPath,
-  nativeCliPlatform, nativeMcpBridgeInstallPrompt, parseNativeCliVersion,
+  nativeCliPlatform, nativeCliUsagePrompt, nativeMcpBridgeInstallPrompt, parseNativeCliVersion,
   windowsUserPathUpdatePlan
 } from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
@@ -28,9 +28,13 @@ import { closeSsh2ExecSessions, executeSsh2Command, Ssh2Terminal } from './ssh2-
 import {
   passwordValueOffset
 } from './authentication';
-import { AgentMcpServer } from './agent-mcp';import {
+import { AgentMcpServer } from './agent-mcp';
+import {
   AgentHttpRouter, AgentPlatformLabel, agentTaggedMcpUrl
 } from './agent-http-router';
+import { AgentActivityStore } from './agent-activity';
+import { AgentActivityViewProvider, agentActivityViewId } from './agent-activity-view';
+import { readCliAgentIdentity, updateCliAgentIdentity } from './cli-agent-identity';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent-discovery';
 import { resolveAgentPlatform, wslBashInvocation } from './agent-platform';
 import {
@@ -98,6 +102,7 @@ const aiForwardMountsKey = platformStateKey('aiForwardMounts');
 const directoryHistoryKey = platformStateKey('directoryHistory');
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
+const cliAgentIdentityKey = platformStateKey('cliAgentIdentity');
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
 const addSshConfigAction = 'Add SSH Config';
@@ -125,6 +130,8 @@ let vscodeContext: vscode.ExtensionContext;
 let pool: SftpConnectionPool;
 let registry: RemoteFolderRegistry;
 let provider: SftpFileSystemProvider;
+let agentActivityStore: AgentActivityStore;
+let agentActivityView: AgentActivityViewProvider;
 const agentWorkspacePublisher = new AgentWorkspacePublisher(randomBytes(12).toString('hex'));
 let agentWorkspaceHeartbeat: NodeJS.Timeout | undefined;
 let lastAgentDiscoveryState = '';
@@ -523,11 +530,34 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
 
 function cliMode(): boolean { return settings().get<string>('agentInterface', 'mcp') === 'cli'; }
 
-function cliRouterUrl(url: string): string {
-  const platform: AgentPlatformLabel = settings().get<string>('agentPlatform', 'auto') === 'wsl'
+function cliPlatformLabel(): AgentPlatformLabel {
+  return settings().get<string>('agentPlatform', 'auto') === 'wsl'
     || platformAdapter.kind === 'wsl' ? 'wsl' : platformAdapter.kind === 'windows' ? 'win'
       : platformAdapter.kind === 'macos' ? 'mac' : 'linux';
-  return agentTaggedMcpUrl(url, 'safs-cli', platform);
+}
+
+function cliAgentIdentity(
+  context: vscode.ExtensionContext, platform = cliPlatformLabel()
+): string | undefined {
+  return readCliAgentIdentity(context.globalState.get(cliAgentIdentityKey), platform);
+}
+
+async function saveCliAgentIdentity(
+  context: vscode.ExtensionContext, platform: AgentPlatformLabel, agentName: string
+): Promise<void> {
+  const previous = context.globalState.get(cliAgentIdentityKey);
+  await context.globalState.update(
+    cliAgentIdentityKey, updateCliAgentIdentity(previous, platform, agentName)
+  );
+}
+
+function cliRouterUrl(
+  context: vscode.ExtensionContext, url: string,
+  identity?: { agentName: string; platform: AgentPlatformLabel }
+): string {
+  const platform = identity?.platform ?? cliPlatformLabel();
+  const agentName = identity?.agentName ?? cliAgentIdentity(context, platform) ?? 'safs-cli';
+  return agentTaggedMcpUrl(url, agentName, platform, 'cli');
 }
 
 async function removeLegacyCliInstructions(localRoot: string): Promise<void> {
@@ -3187,6 +3217,20 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
             localRoot: localPathForAgent(stagingRoot, input.agentPlatform)
           };
         },
+        activity: {
+          start: (entry) => {
+            const location = currentRemoteLocation();
+            const folder = registry.get(boundMountName);
+            if (!location || location.mountName !== boundMountName || !folder) return undefined;
+            return agentActivityStore.start({
+              ...entry,
+              mountName: boundMountName,
+              workspaceRoot: currentWorkspacePath(folder)
+            });
+          },
+          succeed: (id, result) => agentActivityStore.succeed(id, result),
+          fail: (id, error) => agentActivityStore.fail(id, error)
+        },
         search: async (input) => remoteSearch({
           ...input, captureForMcp: true, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
@@ -3427,7 +3471,7 @@ async function configureAgentInterface(
     );
     return { mcpBridgeExecutable: executable };
   }
-  const executable = await installGlobalCli(context, cliRouterUrl(router.url));
+  const executable = await installGlobalCli(context, cliRouterUrl(context, router.url));
   bridgeOutput?.appendLine(
     '[Agent CLI] 已安装用户级 safs 命令；SAFS 不探测或修改 Agent 配置。'
   );
@@ -3476,6 +3520,10 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
   if (enabledValue) {
     if (cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
+      if (!cliAgentIdentity(vscodeContext)) {
+        await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
+        return;
+      }
       void vscode.window.showInformationMessage(
         'SAFS：CLI 已安装，请重启后使用。'
       );
@@ -3599,7 +3647,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   vscodeContext = context;
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
-  context.subscriptions.push(output, bridgeOutput);
+  agentActivityStore = new AgentActivityStore(
+    context.workspaceState, platformStateKey('agentActivity')
+  );
+  await agentActivityStore.initialize();
+  agentActivityView = new AgentActivityViewProvider(agentActivityStore);
+  context.subscriptions.push(output, bridgeOutput, agentActivityView);
   await recoverTerminalDiagnostics(context);
   // 独立、高优先级 ID：避免长焦点文案被底栏布局整项挤掉，也不复用
   // 旧匿名 SAFS 状态项可能已被用户隐藏的可见性偏好。
@@ -3754,6 +3807,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       )
     }),
     vscode.window.registerTreeDataProvider(`${commandPrefix}.mounts`, tree),
+    vscode.window.registerWebviewViewProvider(agentActivityViewId, agentActivityView, {
+      webviewOptions: { retainContextWhenHidden: true }
+    }),
     { dispose: () => { void pool.close(); syncManager?.dispose(); } }
   );
 
@@ -3794,11 +3850,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tree.refresh();
   });
   const askAgentNameAndPlatform = async (
-    title: string
+    title: string, allowedPlatforms: AgentPlatformLabel[] = ['wsl', 'mac', 'linux', 'win']
   ): Promise<{ agentName: string; platform: AgentPlatformLabel } | undefined> => {
     const agentName = await vscode.window.showInputBox({
       title,
-      prompt: '请输入使用该 URL 的 Agent 名（仅用于日志和诊断）',
+      prompt: '请输入使用 SAFS 转发的 Agent 名（仅用于活动显示和诊断）',
       placeHolder: '例如：Codex、Claude、MyAgent',
       ignoreFocusOut: true,
       validateInput: (value) => !value.trim()
@@ -3810,14 +3866,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             : undefined
     });
     if (agentName === undefined) return undefined;
-    const platform = await vscode.window.showQuickPick<{
+    const platformOptions: Array<{
       label: string; description: string; value: AgentPlatformLabel;
-    }>([
+    }> = [
       { label: 'WSL', description: 'Agent 运行在 Windows Subsystem for Linux', value: 'wsl' },
       { label: 'mac', description: 'Agent 运行在 macOS', value: 'mac' },
       { label: 'linux', description: 'Agent 运行在 Linux', value: 'linux' },
       { label: 'win', description: 'Agent 运行在 Windows', value: 'win' }
-    ], {
+    ];
+    const platform = await vscode.window.showQuickPick<{
+      label: string; description: string; value: AgentPlatformLabel;
+    }>(platformOptions.filter((candidate) => allowedPlatforms.includes(candidate.value)), {
       title: 'SAFS：选择 Agent 所在平台',
       placeHolder: '选择 wsl、mac、linux 或 win',
       ignoreFocusOut: true
@@ -3838,11 +3897,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('installAgentForwarding', async () => {
     if (cliMode()) {
+      const currentPlatform = cliPlatformLabel();
+      const answer = await askAgentNameAndPlatform(
+        'SAFS：为我的Agent安装转发功能', [currentPlatform]
+      );
+      if (!answer) return;
+      startAgentHttpRouterLeadership(context);
       const router = await ensureAgentHttpRouter(context);
-      const executable = await installGlobalCli(context, cliRouterUrl(router.url));
+      const executable = await installGlobalCli(
+        context, cliRouterUrl(context, router.url, answer)
+      );
+      await saveCliAgentIdentity(context, answer.platform, answer.agentName);
       bridgeOutput?.info(`[Agent CLI] 安装完成：${executable}`);
+      await vscode.env.clipboard.writeText(
+        nativeCliUsagePrompt(answer.agentName, answer.platform)
+      );
       void vscode.window.showInformationMessage(
-        'SAFS：CLI 已安装，请重启后运行 safs bind。'
+        'SAFS：CLI 提示词已复制，请粘贴到 Agent。'
       );
       return;
     }
@@ -4029,9 +4100,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (cliMode()) {
         const result = await configureAgentInterface(context);
         bridgeOutput?.info(`[Agent CLI] 接口切换完成：${result.cliExecutable}`);
-        void vscode.window.showInformationMessage(
-          'SAFS：CLI 已就绪；请重启 Agent。'
-        );
+        if (!cliAgentIdentity(context)) {
+          await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
+        } else {
+          void vscode.window.showInformationMessage(
+            'SAFS：CLI 已就绪；请重启 Agent。'
+          );
+        }
       } else {
         await configureAgentInterface(context);
         await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
@@ -4080,6 +4155,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export async function deactivate(): Promise<void> {
   agentTrace('Deactivate', '扩展停用，清理发现记录、MCP 和连接池');
+  await agentActivityStore?.flush();
+  agentActivityStore?.dispose();
   if (agentWorkspaceHeartbeat) clearInterval(agentWorkspaceHeartbeat);
   if (agentHttpRouterHeartbeat) clearInterval(agentHttpRouterHeartbeat);
   await agentWorkspacePublisher.remove();

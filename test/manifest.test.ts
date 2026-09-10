@@ -21,6 +21,7 @@ interface ExtensionManifest {
       linux?: string;
       mac?: string;
     }>;
+    views?: Record<string, Array<{ id: string; name: string; type?: string }>>;
   };
 }
 
@@ -29,7 +30,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.8.0');
+  assert.equal(manifest.version, '1.8.1');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -142,10 +143,11 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
   )));
 });
 
-test('Agent integration never probes or modifies Agent installations', async () => {
+test('Agent integration uses copied prompts instead of probing Agent installations', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extensionSource.includes('重启后运行 safs bind'));
-  assert.equal(extensionSource.includes('已复制 SAFS CLI 使用指引'), false);
+  const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
+  assert.ok(nativeCliSource.includes('先运行 `safs bind`'));
+  assert.ok(extensionSource.includes('nativeCliUsagePrompt'));
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
   assert.ok(extensionSource.includes("args: ['--version']"));
@@ -154,6 +156,19 @@ test('Agent integration never probes or modifies Agent installations', async () 
   assert.equal(extensionSource.includes('recordObservedAgentSource'), false);
   assert.equal(extensionSource.includes('runAgentMcpOperation'), false);
   await assert.rejects(access(new URL('../src/agent-mcp-registry.ts', import.meta.url)));
+});
+
+test('contributes the Agent activity Webview in the SAFS sidebar', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  assert.ok(manifest.activationEvents?.includes('onView:safs.agentActivity'));
+  assert.deepEqual(
+    manifest.contributes?.views?.safs?.find((view) => view.id === 'safs.agentActivity'),
+    { id: 'safs.agentActivity', name: 'Agent 活动', type: 'webview' }
+  );
+  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  assert.ok(extensionSource.includes('registerWebviewViewProvider(agentActivityViewId'));
 });
 
 test('packages session-only remote shell integration scripts', async () => {

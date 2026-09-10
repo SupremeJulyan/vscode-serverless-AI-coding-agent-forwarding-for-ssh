@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code Server or an Agent server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -40,6 +40,7 @@
     "onFileSystem:safs",
     "onStartupFinished",
     "onView:safs.mounts",
+    "onView:safs.agentActivity",
     "onCommand:safs.openFolder",
     "onCommand:safs.switchRemoteDirectory",
     "onCommand:safs.openTerminal",
@@ -196,6 +197,11 @@
         {
           "id": "safs.mounts",
           "name": "远程目录"
+        },
+        {
+          "id": "safs.agentActivity",
+          "name": "Agent 活动",
+          "type": "webview"
         }
       ]
     },

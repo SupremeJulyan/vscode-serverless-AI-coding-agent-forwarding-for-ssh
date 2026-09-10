@@ -19,6 +19,10 @@ async function freePort(): Promise<number> {
 test('serves direct SFTP file and SSH command tools through MCP', async () => {
   const port = await freePort();
   const audited: Array<{ toolName: string; agentName?: string }> = [];
+  const activity: Array<{
+    phase: 'start' | 'success' | 'error'; toolName?: string;
+    source?: string; agentName?: string;
+  }> = [];
   const server = new AgentMcpServer(port, 'test-token', {
     listFolders: async () => [{
       name: 'project',
@@ -47,7 +51,19 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     download: async (input) => ({ ...input, completed: true }),
     search: async (input) => ({ ...input, stdout: 'src/index.ts:1:hello' }),
     run: async (input) => ({ ...input, exitCode: 0, stdout: input.command === 'large' ? 'x'.repeat(20000) : 'ok' }),
-    audit: (entry) => audited.push(entry)
+    audit: (entry) => audited.push(entry),
+    activity: {
+      start: (entry) => {
+        const id = `activity-${activity.length}`;
+        activity.push({
+          phase: 'start', toolName: entry.toolName,
+          source: entry.source, agentName: entry.agentName
+        });
+        return id;
+      },
+      succeed: () => activity.push({ phase: 'success' }),
+      fail: () => activity.push({ phase: 'error' })
+    }
   });
   await server.start();
   const client = new Client({ name: 'agent-mcp-test', version: '1.0.0' });
@@ -173,6 +189,12 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       outputId: preview.outputId, stream: 'stdout', offset: preview.stdoutNextOffset, length: 20000
     } });
     assert.equal(JSON.parse((remainder.content as any)[0].text).content.length, 11808);
+    const starts = activity.filter((entry) => entry.phase === 'start');
+    assert.ok(starts.length > 0);
+    assert.ok(starts.every((entry) =>
+      entry.source === 'mcp' && entry.agentName === 'codex'
+    ));
+    assert.ok(activity.some((entry) => entry.phase === 'error'));
 
   } finally {
     await client.close();

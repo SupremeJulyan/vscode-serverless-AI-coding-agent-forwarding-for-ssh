@@ -11,6 +11,7 @@ import {
   configureAgentMcpResources, directAgentMcpInstructions,
   registerAgentMcpTools
 } from './agent-mcp-tools';
+import { AgentActivitySource } from './agent-activity';
 
 export interface RemoteFolderInfo {
   name: string;
@@ -58,6 +59,14 @@ export interface AgentMcpCallbacks {
     toolName: string; input: Record<string, unknown>;
     agentName?: string; agentPlatform?: string;
   }): void;
+  activity?: {
+    start(entry: {
+      source: AgentActivitySource; toolName: string; input: Record<string, unknown>;
+      agentName?: string; agentPlatform?: string;
+    }): string | undefined;
+    succeed(id: string, result: unknown): void;
+    fail(id: string, error: unknown): void;
+  };
   log?(message: string): void;
 }
 
@@ -86,7 +95,9 @@ export class AgentMcpServer {
     return this._portUnavailable;
   }
 
-  private createProtocolServer(agentName?: string, agentPlatform?: string): McpServer {
+  private createProtocolServer(
+    agentName?: string, agentPlatform?: string, source: AgentActivitySource = 'mcp'
+  ): McpServer {
     const server = new McpServer(
       { name: 'safs', version: '1.0.0' },
       { instructions: directAgentMcpInstructions }
@@ -105,10 +116,46 @@ export class AgentMcpServer {
         message: error instanceof Error ? error.message : String(error)
       }) }]
     });
-    const invoke = async (callback: () => Promise<unknown>) => {
+    const trackedTools = new Set([
+      'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many',
+      'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move',
+      'remote_upload', 'remote_download', 'remote_output', 'remote_search', 'run_remote_command'
+    ]);
+    const invoke = async (
+      toolName: string, input: Record<string, unknown>, callback: () => Promise<unknown>
+    ) => {
+      let activityId: string | undefined;
+      if (trackedTools.has(toolName)) {
+        try {
+          activityId = this.callbacks.activity?.start({
+            source, toolName, input, agentName, agentPlatform
+          });
+        } catch (error) {
+          this.callbacks.log?.(
+            `Agent 活动开始记录失败：${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
       try {
-        return result(await callback());
+        const value = await callback();
+        if (activityId) {
+          try { this.callbacks.activity?.succeed(activityId, value); }
+          catch (error) {
+            this.callbacks.log?.(
+              `Agent 活动完成记录失败：${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+        return result(value);
       } catch (error) {
+        if (activityId) {
+          try { this.callbacks.activity?.fail(activityId, error); }
+          catch (activityError) {
+            this.callbacks.log?.(
+              `Agent 活动失败记录失败：${activityError instanceof Error ? activityError.message : String(activityError)}`
+            );
+          }
+        }
         return toolError(error);
       }
     };
@@ -134,7 +181,7 @@ export class AgentMcpServer {
       invoke: (name, input) => {
         switch (name) {
           case 'get_remote_workspace':
-            return invoke(async () => {
+            return invoke(name, input, async () => {
               const current = await this.callbacks.currentWorkspace();
               return current ? {
                 workspace: publicFolder(current),
@@ -143,13 +190,13 @@ export class AgentMcpServer {
               } : { workspace: null };
             });
           case 'switch_remote_workspace':
-            return invoke(async () => {
+            return invoke(name, input, async () => {
               throw new Error('Workspace switching is only available through the SAFS router');
             });
           case 'current_remote_file':
-            return invoke(() => this.callbacks.currentFile(input));
+            return invoke(name, input, () => this.callbacks.currentFile(input));
           case 'remote_list':
-            return invoke(() => {
+            return invoke(name, input, () => {
               if (!input.paths) return this.callbacks.list(input);
               if (input.path !== undefined || input.cursor !== undefined) {
                 throw new Error('Choose paths for a batch or path/cursor for a single directory.');
@@ -158,55 +205,55 @@ export class AgentMcpServer {
                 request => this.callbacks.list(request));
             });
           case 'remote_read_many':
-            return invoke(() => readTextBatch(input.requests as RemoteReadOptions[],
+            return invoke(name, input, () => readTextBatch(input.requests as RemoteReadOptions[],
               (input.maxBytes as number | undefined) ?? 16384,
               request => this.callbacks.read(request)));
           case 'remote_read':
-            return invoke(() => this.callbacks.read(input as {
+            return invoke(name, input, () => this.callbacks.read(input as {
               mountName?: string; path: string; offset?: number; length?: number;
             }));
           case 'remote_edit':
-            return invoke(() => this.callbacks.edit(input as {
+            return invoke(name, input, () => this.callbacks.edit(input as {
               mountName?: string; path: string;
               edits: Array<{ oldText: string; newText: string }>;
               expectedHash?: string;
             }));
           case 'remote_write':
-            return invoke(() => this.callbacks.write(input as {
+            return invoke(name, input, () => this.callbacks.write(input as {
               mountName?: string; path: string; content: string;
             }));
           case 'remote_delete':
-            return invoke(() => this.callbacks.delete(input as {
+            return invoke(name, input, () => this.callbacks.delete(input as {
               mountName?: string; path: string; recursive?: boolean;
             }));
           case 'remote_chmod':
-            return invoke(() => this.callbacks.chmod(input as {
+            return invoke(name, input, () => this.callbacks.chmod(input as {
               mountName?: string; path: string; mode: string;
             }));
           case 'remote_move':
-            return invoke(() => this.callbacks.move(input as {
+            return invoke(name, input, () => this.callbacks.move(input as {
               mountName?: string; sourcePath: string; targetPath: string; overwrite?: boolean;
             }));
           case 'remote_upload':
-            return invoke(() => this.callbacks.upload({
+            return invoke(name, input, () => this.callbacks.upload({
               ...input, agentPlatform
             } as Parameters<AgentMcpCallbacks['upload']>[0]));
           case 'remote_download':
-            return invoke(() => this.callbacks.download({
+            return invoke(name, input, () => this.callbacks.download({
               ...input, agentPlatform
             } as Parameters<AgentMcpCallbacks['download']>[0]));
           case 'remote_output':
-            return invoke(async () => this.outputs.read(
+            return invoke(name, input, async () => this.outputs.read(
               input.outputId as string, await outputScope(),
               input.stream as 'stdout' | 'stderr', input.offset as number | undefined,
               input.length as number | undefined
             ));
           case 'remote_search':
-            return invoke(() => capture(() => this.callbacks.search({
+            return invoke(name, input, () => capture(() => this.callbacks.search({
               ...input, agentName, agentPlatform
             } as Parameters<AgentMcpCallbacks['search']>[0])));
           case 'run_remote_command':
-            return invoke(() => capture(() => this.callbacks.run({
+            return invoke(name, input, () => capture(() => this.callbacks.run({
               ...input, agentName, agentPlatform
             } as Parameters<AgentMcpCallbacks['run']>[0])));
         }
@@ -238,6 +285,7 @@ export class AgentMcpServer {
         && ['wsl', 'mac', 'linux', 'win'].includes(platformValue)
         ? platformValue
         : undefined;
+      const source: AgentActivitySource = request.query.source === 'cli' ? 'cli' : 'mcp';
       const method = typeof request.body?.method === 'string' ? request.body.method : 'unknown';
       const tool = request.body?.params?.name;
       this.callbacks.log?.(`收到 MCP 请求：${method}${tool ? ` (${tool})` : ''}${
@@ -253,7 +301,7 @@ export class AgentMcpServer {
           agentName, agentPlatform
         });
       }
-      const protocol = this.createProtocolServer(agentName, agentPlatform);
+      const protocol = this.createProtocolServer(agentName, agentPlatform, source);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       try {
         await protocol.connect(transport);

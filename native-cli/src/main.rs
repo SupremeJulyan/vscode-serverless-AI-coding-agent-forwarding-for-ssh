@@ -514,6 +514,31 @@ struct RouterConnection {
     timeout: Option<Duration>,
 }
 
+fn validate_agent_name(value: &str, source: &str) -> Result<String, String> {
+    let normalized = value.trim();
+    if normalized.is_empty()
+        || normalized.chars().count() > 100
+        || normalized.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "{source} must contain 1 to 100 characters without control characters"
+        ));
+    }
+    Ok(normalized.to_owned())
+}
+
+fn replace_query_parameter(url: &mut Url, name: &str, value: &str) {
+    let retained: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| key != name)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.query_pairs_mut()
+        .clear()
+        .extend_pairs(retained)
+        .append_pair(name, value);
+}
+
 fn router_connection(config_path: &str, endpoint: &str) -> Result<RouterConnection, String> {
     let config: Value = serde_json::from_str(
         &fs::read_to_string(config_path).map_err(|_| "Cannot read SAFS connection file")?,
@@ -536,6 +561,16 @@ fn router_connection(config_path: &str, endpoint: &str) -> Result<RouterConnecti
         return Err("SAFS connection must be an authenticated loopback URL".into());
     }
     url.set_path(endpoint);
+    match env::var("SAFS_AGENT_NAME") {
+        Ok(value) => {
+            let agent_name = validate_agent_name(&value, "SAFS_AGENT_NAME")?;
+            replace_query_parameter(&mut url, "agent", &agent_name);
+        }
+        Err(env::VarError::NotPresent) => {}
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err("SAFS_AGENT_NAME must be valid Unicode".into())
+        }
+    }
     let timeout = config
         .get("timeoutMs")
         .and_then(Value::as_u64)
@@ -595,12 +630,7 @@ fn tagged_mcp_connection(
     agent_name: &str,
     platform: &str,
 ) -> Result<RouterConnection, String> {
-    if agent_name.trim().is_empty()
-        || agent_name.len() > 100
-        || agent_name.chars().any(char::is_control)
-    {
-        return Err("--agent must contain 1 to 100 characters without control characters".into());
-    }
+    let agent_name = validate_agent_name(agent_name, "--agent")?;
     if !matches!(platform, "wsl" | "mac" | "linux" | "win") {
         return Err("--platform must be wsl, mac, linux, or win".into());
     }
@@ -616,7 +646,7 @@ fn tagged_mcp_connection(
         .query_pairs_mut()
         .clear()
         .extend_pairs(retained)
-        .append_pair("agent", agent_name.trim())
+        .append_pair("agent", &agent_name)
         .append_pair("platform", platform);
     Ok(connection)
 }
@@ -959,7 +989,34 @@ mod tests {
 
     #[test]
     fn package_version_matches_the_extension_release() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "1.8.0");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "1.8.1");
+    }
+
+    #[test]
+    fn validates_and_replaces_cli_agent_names() {
+        assert_eq!(
+            validate_agent_name("  Codex  ", "SAFS_AGENT_NAME").unwrap(),
+            "Codex"
+        );
+        assert!(validate_agent_name("", "SAFS_AGENT_NAME").is_err());
+        assert!(validate_agent_name("bad\nname", "SAFS_AGENT_NAME").is_err());
+        assert!(validate_agent_name(&"x".repeat(101), "SAFS_AGENT_NAME").is_err());
+
+        let mut url =
+            Url::parse("http://127.0.0.1:9848/cli?token=secret&agent=Old&platform=linux").unwrap();
+        replace_query_parameter(&mut url, "agent", "Claude");
+        assert_eq!(
+            url.query_pairs().filter(|(key, _)| key == "agent").count(),
+            1
+        );
+        assert_eq!(
+            url.query_pairs().find(|(key, _)| key == "agent").unwrap().1,
+            "Claude"
+        );
+        assert_eq!(
+            url.query_pairs().find(|(key, _)| key == "token").unwrap().1,
+            "secret"
+        );
     }
 
     #[test]

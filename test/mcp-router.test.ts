@@ -99,11 +99,12 @@ async function freePort(): Promise<number> {
 
 test('adds an encoded Agent source label without changing the router token', () => {
   const tagged = new URL(agentTaggedMcpUrl(
-    'http://127.0.0.1:9848/mcp?token=secret', '  自定义 Agent  ', 'wsl'
+    'http://127.0.0.1:9848/mcp?token=secret', '  自定义 Agent  ', 'wsl', 'cli'
   ));
   assert.equal(tagged.searchParams.get('token'), 'secret');
   assert.equal(tagged.searchParams.get('agent'), '自定义 Agent');
   assert.equal(tagged.searchParams.get('platform'), 'wsl');
+  assert.equal(tagged.searchParams.get('source'), 'cli');
 });
 
 test('normalizes Windows and WSL views of the same Agent cwd', () => {

@@ -1,6 +1,6 @@
 # SAFS
 
-**S**erverless **A**I Coding **A**gent **F**orwarding for **S**SH
+**S**erverless **A**I Coding Agent **F**orwarding for **S**SH
 
 [简体中文](README.md) | [English](README_EN.md)
 
@@ -81,11 +81,36 @@ Once enabled, the Agent can:
 - identify the remote file currently open in VS Code;
 - explicitly choose a target workspace when multiple SAFS windows are open.
 
+#### View Agent activity
+
+Open **Agent Activity** in the SAFS Activity Bar to see MCP and CLI operations that are
+actually executed by the current remote window. The status animation shows running,
+successful, and failed operations. File changes, remote commands, transfers, and errors
+appear as short live messages, while the timeline can be filtered by operation type and
+status. Consecutive reads, directory listings, and searches are grouped automatically.
+
+The view keeps the latest 200 redacted records for this window. It never stores file
+contents, diffs, stdout, or stderr; commands and errors are persisted only as short,
+redacted summaries. Pausing live messages does not stop recording, and clearing the view
+does not delete the audit logs under `~/.safs/mcp_logs`. Ordinary SSH terminals and native
+VS Code Language Model Tools are outside this view's capture scope.
+
 To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed manually through a prompt or URL, run `SAFS: Uninstall Agent Forwarding for My Agent`.
 
 #### CLI mode
 
-MCP and CLI share the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. Set `safs.agentInterface` to `cli` to expose it directly to the Agent as a global command. Reload VS Code, restart the Agent, and enter `run safs bind` in the Agent. The default `mcp` mode is recommended for most users. To minimize token usage, switch to CLI manually; this mode does not install MCP tools. Both modes bypass HTTP proxies when connecting to the local router.
+MCP and CLI share the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. After setting `safs.agentInterface` to `cli`, run `SAFS: Install Agent Forwarding for My Agent`, enter the Agent name and platform, and paste the copied usage prompt into the Agent. The prompt explains that `safs` is a global command and that all SAFS remote operations must use it. Restart the Agent, start a new conversation, and run `safs bind` first. The default `mcp` mode is recommended for most users. Switch to CLI when minimizing token usage matters, because CLI mode does not install MCP tools. Both modes bypass HTTP proxies when connecting to the local router.
+
+The Agent name entered during installation becomes the default activity label for that
+platform. When multiple Agents share the global command, set `SAFS_AGENT_NAME` before
+starting each secondary Agent process to override the default, for example:
+
+```sh
+SAFS_AGENT_NAME='Claude Code' claude
+```
+
+The label is used only for the activity view, diagnostics, and binding isolation; it is
+not part of local router authentication.
 
 Pass the `bindingId` returned by `safs bind` or `safs switch` explicitly through
 `--binding`, ensuring every operation behind the fixed CLI endpoint still targets

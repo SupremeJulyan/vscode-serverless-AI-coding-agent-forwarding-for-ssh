@@ -9,6 +9,7 @@ import {
 import {
   configureAgentMcpResources, registerAgentMcpTools, routedAgentMcpInstructions
 } from './agent-mcp-tools';
+import { AgentActivitySource } from './agent-activity';
 
 const routerIdentity = 'safs-http-router-v1';
 const cliToolNames = new Set([
@@ -93,7 +94,8 @@ export function adaptCliToolResult(
 export type AgentPlatformLabel = 'wsl' | 'mac' | 'linux' | 'win';
 
 export function agentTaggedMcpUrl(
-  routerUrl: string, agentName: string, platform?: AgentPlatformLabel
+  routerUrl: string, agentName: string, platform?: AgentPlatformLabel,
+  source?: AgentActivitySource
 ): string {
   const normalized = agentName.trim();
   if (!normalized) throw new Error('Agent name must not be empty');
@@ -104,7 +106,14 @@ export function agentTaggedMcpUrl(
   const url = new URL(routerUrl);
   url.searchParams.set('agent', normalized);
   if (platform) url.searchParams.set('platform', platform);
+  if (source) url.searchParams.set('source', source);
   return url.toString();
+}
+
+function requestAgentName(value: unknown, fallback?: string): string | undefined {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_');
+  return normalized || fallback;
 }
 
 /** Normalize native Windows and WSL views of the same local Agent cwd. */
@@ -222,7 +231,8 @@ export class AgentHttpRouter {
 
   private async forward(
     workspace: DiscoveredAgentWorkspace, name: string, args: Record<string, unknown>,
-    agentName?: string, agentPlatform?: AgentPlatformLabel
+    agentName?: string, agentPlatform?: AgentPlatformLabel,
+    source: AgentActivitySource = 'mcp'
   ): Promise<any> {
     const url = new URL(workspace.mcpUrl);
     if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) {
@@ -234,6 +244,7 @@ export class AgentHttpRouter {
     }
     if (agentName) url.searchParams.set('agent', agentName);
     if (agentPlatform) url.searchParams.set('platform', agentPlatform);
+    url.searchParams.set('source', source);
     const requestId = `http-router-${process.pid}-${Date.now()}-${randomUUID()}`;
     this.options.log?.(
       `转发工具 ${name} 到 mount=${workspace.mountName}，port=${url.port}${
@@ -273,7 +284,7 @@ export class AgentHttpRouter {
 
   private async callTool(
     name: string, input: Record<string, unknown>, agentName?: string,
-    agentPlatform?: AgentPlatformLabel
+    agentPlatform?: AgentPlatformLabel, source: AgentActivitySource = 'mcp'
   ): Promise<any> {
     if (name === 'cli_list_workspaces') {
       return {
@@ -396,7 +407,7 @@ export class AgentHttpRouter {
     const { bindingId: _bindingId, ...publicInput } = input;
     const args = { ...publicInput, mountName: workspace.mountName };
     try {
-      return await this.forward(workspace, name, args, agentName, agentPlatform);
+      return await this.forward(workspace, name, args, agentName, agentPlatform, source);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.options.log?.(`工具 ${name} 失败，mount=${workspace.mountName}：${detail}`);
@@ -419,7 +430,7 @@ export class AgentHttpRouter {
     registerAgentMcpTools(server, {
       routed: true,
       profile: this.options.toolProfile?.(),
-      invoke: (name, input) => this.callTool(name, input, agentName, agentPlatform)
+      invoke: (name, input) => this.callTool(name, input, agentName, agentPlatform, 'mcp')
     });
     return server;
   }
@@ -466,6 +477,7 @@ export class AgentHttpRouter {
         && ['wsl', 'mac', 'linux', 'win'].includes(platformValue)
         ? platformValue as AgentPlatformLabel
         : undefined;
+      const agentName = requestAgentName(request.query.agent, 'safs-cli');
       const currentName = currentCliToolName(name);
       try {
         if (name === 'safs_cli_batch') {
@@ -488,7 +500,7 @@ export class AgentHttpRouter {
             const item = unwrapCliToolResult(
               await this.callTool(
                 operation.name, operation.arguments as Record<string, unknown>,
-                'safs-cli', agentPlatform
+                agentName, agentPlatform, 'cli'
               ),
               operation.name === 'current_remote_file'
             );
@@ -499,7 +511,7 @@ export class AgentHttpRouter {
         }
         response.json(adaptCliToolResult(unwrapCliToolResult(
           await this.callTool(
-            currentName, input as Record<string, unknown>, 'safs-cli', agentPlatform
+            currentName, input as Record<string, unknown>, agentName, agentPlatform, 'cli'
           ),
           currentName === 'current_remote_file'
         ), currentName));
@@ -524,9 +536,7 @@ export class AgentHttpRouter {
         response.status(405).json({ error: 'Method not allowed' });
         return;
       }
-      const agentName = typeof request.query.agent === 'string'
-        ? request.query.agent.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_')
-        : undefined;
+      const agentName = requestAgentName(request.query.agent);
       const platformValue = request.query.platform;
       const agentPlatform = typeof platformValue === 'string'
         && ['wsl', 'mac', 'linux', 'win'].includes(platformValue)

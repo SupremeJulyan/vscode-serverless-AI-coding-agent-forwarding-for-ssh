@@ -5,15 +5,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
-  nativeCliConnectionPath, nativeCliPlatform, nativeMcpBridgeInstallPrompt,
+  nativeCliConnectionPath, nativeCliPlatform, nativeCliUsagePrompt, nativeMcpBridgeInstallPrompt,
   parseNativeCliVersion, removeNativeCli, withoutSafsPathBlock,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/native-cli';
 
 test('parses only the stable native CLI version output', () => {
-  assert.equal(parseNativeCliVersion('safs 1.8.0\n'), '1.8.0');
+  assert.equal(parseNativeCliVersion('safs 1.8.1\n'), '1.8.1');
   assert.equal(parseNativeCliVersion('safs v2.0.0-beta.1\n'), '2.0.0-beta.1');
   assert.equal(parseNativeCliVersion('warning: version 1.8.0\n'), undefined);
+});
+
+test('builds global CLI guidance for remote-only Agent operations', () => {
+  const prompt = nativeCliUsagePrompt('Codex', 'mac');
+  assert.match(prompt, /`safs` 已安装为全局命令/);
+  assert.match(prompt, /先运行 `safs bind`/);
+  assert.match(prompt, /--binding <bindingId>/);
+  assert.match(prompt, /不要使用本地文件工具或本地 shell/);
+  assert.match(prompt, /询问用户/);
+  assert.equal(prompt.includes('token='), false);
 });
 
 test('selects native binaries for desktop platforms and WSL', () => {
