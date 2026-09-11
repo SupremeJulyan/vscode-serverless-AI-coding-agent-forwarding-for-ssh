@@ -310,6 +310,8 @@ test('declares both the install and uninstall forwarding commands', async () => 
   assert.ok(extensionSource.includes('卸载提示词'));
   assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
   assert.ok(extensionSource.includes('hybridAgentInstallPrompt'));
+  assert.ok(extensionSource.includes('agentInterfaceHybridMigrationV1'));
+  assert.ok(extensionSource.includes('vscode.ConfigurationTarget.Global'));
   const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
   assert.ok(nativeCliSource.includes('用户级 Streamable HTTP MCP'));
   assert.ok(nativeCliSource.includes('代理规则模式直连'));

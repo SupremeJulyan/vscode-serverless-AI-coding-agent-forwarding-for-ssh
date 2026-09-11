@@ -80,6 +80,8 @@ If a global proxy causes HTTP 502, proxy connection errors, or timeouts, switch 
 - `cli`: no MCP installation; the Agent runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
 
 Changing modes does not automatically uninstall the other entry point, so different Agents can use MCP and CLI concurrently.
+On upgrade, an explicitly saved legacy `mcp` value is migrated to `hybrid` once; an
+explicit `cli` choice is preserved, and any mode can still be selected afterward.
 
 Once enabled, the Agent can:
 

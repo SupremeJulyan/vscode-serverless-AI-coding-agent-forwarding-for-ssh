@@ -34,6 +34,9 @@ import {
 } from './agent-http-router';
 import { AgentActivityStore } from './agent-activity';
 import { AgentActivityViewProvider, agentActivityViewId } from './agent-activity-view';
+import {
+  type AgentInterface, legacyAgentInterfaceMigrationTarget
+} from './agent-interface';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent-discovery';
 import { resolveAgentPlatform, wslBashInvocation } from './agent-platform';
 import {
@@ -101,6 +104,7 @@ const aiForwardMountsKey = platformStateKey('aiForwardMounts');
 const directoryHistoryKey = platformStateKey('directoryHistory');
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
+const agentInterfaceHybridMigrationKey = platformStateKey('agentInterfaceHybridMigrationV1');
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
 const addSshConfigAction = 'Add SSH Config';
@@ -526,8 +530,6 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
   return picked?.mount;
 }
 
-type AgentInterface = 'hybrid' | 'mcp' | 'cli';
-
 function agentInterface(): AgentInterface {
   return settings().get<AgentInterface>('agentInterface', 'hybrid');
 }
@@ -548,6 +550,22 @@ function routerMcpToolProfile(): 'full' | 'core' | 'hybrid' {
 // The window server is an internal execution backend for both public MCP and CLI.
 // Keep every operation registered here; only the stable router trims Agent-visible schemas.
 function backendMcpToolProfile(): 'full' { return 'full'; }
+
+async function migrateLegacyAgentInterface(context: vscode.ExtensionContext): Promise<void> {
+  const completed = context.globalState.get<boolean>(agentInterfaceHybridMigrationKey, false);
+  const configuration = settings();
+  const explicitValue = configuration.inspect<string>('agentInterface')?.globalValue;
+  const target = legacyAgentInterfaceMigrationTarget(explicitValue, completed);
+  if (target) {
+    await configuration.update(
+      'agentInterface', target, vscode.ConfigurationTarget.Global
+    );
+    bridgeOutput?.info('[Agent 接口] 已将旧版显式 mcp 设置一次性迁移为 hybrid。');
+  }
+  if (!completed) {
+    await context.globalState.update(agentInterfaceHybridMigrationKey, true);
+  }
+}
 
 function cliPlatformLabel(): AgentPlatformLabel {
   return settings().get<string>('agentPlatform', 'auto') === 'wsl'
@@ -3639,6 +3657,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   vscodeContext = context;
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
+  await migrateLegacyAgentInterface(context);
   agentActivityStore = new AgentActivityStore(
     context.workspaceState, platformStateKey('agentActivity')
   );

@@ -80,6 +80,8 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 - `cli`：不安装 MCP；Agent 运行 `safs bind --agent "<Agent 名称>"` 后完全通过 CLI 操作。
 
 三种模式不会在切换时自动卸载另一入口，因此不同 Agent 可以同时分别使用 MCP 和 CLI。
+从旧版升级时，用户设置中显式保存的 `mcp` 会在首次激活时一次性迁移为 `hybrid`；
+显式选择的 `cli` 不会被覆盖，之后仍可手动切换。
 
 启用后，Agent 可以：
 
