@@ -8,7 +8,7 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
-  configureAgentMcpResources, directAgentMcpInstructions,
+  type AgentToolProfile, configureAgentMcpResources, directAgentMcpInstructions,
   registerAgentMcpTools
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
@@ -21,7 +21,7 @@ export interface RemoteFolderInfo {
 }
 
 export interface AgentMcpCallbacks {
-  toolProfile?(): 'full' | 'core';
+  toolProfile?(): AgentToolProfile;
   listFolders(): Promise<RemoteFolderInfo[]>;
   currentWorkspace(): Promise<RemoteFolderInfo | null>;
   /** 当前打开的远程文件元数据（无活动远程文件时为 null）。 */

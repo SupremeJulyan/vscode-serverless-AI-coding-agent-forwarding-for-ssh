@@ -56,6 +56,13 @@ export function streamableHttpMcpInstallPrompt(
   ].join('\n');
 }
 
+export function hybridAgentInstallPrompt(url: string): string {
+  return [
+    `请安装名为 safs 的用户级 Streamable HTTP MCP：${url}`,
+    '这是 SAFS 混合模式：MCP 仅用于绑定和切换工作区，其他操作使用已安装的全局 safs CLI。完成后请重启 Agent；代理异常时让 127.0.0.1/localhost/::1 直连。'
+  ].join('\n');
+}
+
 export function nativeCliUsagePrompt(): string {
   return 'SAFS CLI 已安装。请先运行 `safs bind --agent "<你的 Agent 名称>"`，其他用法见 `safs --help`。';
 }

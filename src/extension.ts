@@ -1,8 +1,8 @@
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
-  ensureUnixCliPath, globalNativeCli, installNativeCli, nativeCliConnectionPath,
-  nativeCliPlatform, nativeCliUsagePrompt, parseNativeCliVersion, streamableHttpMcpInstallPrompt,
-  windowsUserPathUpdatePlan
+  ensureUnixCliPath, globalNativeCli, hybridAgentInstallPrompt, installNativeCli,
+  nativeCliConnectionPath, nativeCliPlatform, nativeCliUsagePrompt, parseNativeCliVersion,
+  streamableHttpMcpInstallPrompt, windowsUserPathUpdatePlan
 } from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
@@ -526,7 +526,28 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
   return picked?.mount;
 }
 
-function cliMode(): boolean { return settings().get<string>('agentInterface', 'mcp') === 'cli'; }
+type AgentInterface = 'hybrid' | 'mcp' | 'cli';
+
+function agentInterface(): AgentInterface {
+  return settings().get<AgentInterface>('agentInterface', 'hybrid');
+}
+
+function cliEnabled(): boolean { return agentInterface() !== 'mcp'; }
+
+function hybridMode(): boolean { return agentInterface() === 'hybrid'; }
+
+function selectedMcpToolProfile(): 'full' | 'core' {
+  return settings().get<'full' | 'core'>('agentMcpToolProfile', 'full');
+}
+
+function routerMcpToolProfile(): 'full' | 'core' | 'hybrid' {
+  return hybridMode() ? 'hybrid'
+    : agentInterface() === 'cli' ? 'full' : selectedMcpToolProfile();
+}
+
+// The window server is an internal execution backend for both public MCP and CLI.
+// Keep every operation registered here; only the stable router trims Agent-visible schemas.
+function backendMcpToolProfile(): 'full' { return 'full'; }
 
 function cliPlatformLabel(): AgentPlatformLabel {
   return settings().get<string>('agentPlatform', 'auto') === 'wsl'
@@ -3040,7 +3061,7 @@ async function ensureAgentHttpRouter(
             log: (message) => logMcpMessage('Agent HTTP Router', message),
             audit: auditMcpTool,
             forwardTimeoutMs: settings().get<number>('agentMcpTimeoutMs', 120_000),
-            toolProfile: () => cliMode() ? 'full' : settings().get<'full' | 'core'>('agentMcpToolProfile', 'full')
+            toolProfile: routerMcpToolProfile
           }
         );
         httpRouter = router;
@@ -3100,7 +3121,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
       settings().get<number>('agentMcpPort', 0),
       token,
       {
-        toolProfile: () => cliMode() ? 'full' : settings().get<'full' | 'core'>('agentMcpToolProfile', 'full'),
+        toolProfile: backendMcpToolProfile,
         listFolders: async () => (await forwardedFolders(context)).filter(
           (folder) => folder.name === boundMountName
         ),
@@ -3446,16 +3467,14 @@ async function configureAgentInterface(
   context: vscode.ExtensionContext
 ): Promise<{ cliExecutable?: string }> {
   const router = await ensureAgentHttpRouter(context);
-  if (!cliMode()) {
+  if (!cliEnabled()) {
     bridgeOutput?.appendLine(
       `[Agent MCP] Streamable HTTP 路由已就绪：${router.url}；SAFS 不探测或修改 Agent 配置。`
     );
     return {};
   }
   const executable = await installGlobalCli(context, cliRouterUrl(router.url));
-  bridgeOutput?.appendLine(
-    '[Agent CLI] 已安装用户级 safs 命令；SAFS 不探测或修改 Agent 配置。'
-  );
+  bridgeOutput?.appendLine(`[Agent CLI] 已安装用户级 safs 命令；接口=${agentInterface()}。`);
   return { cliExecutable: executable };
 }
 
@@ -3501,10 +3520,6 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
   if (enabledValue) {
     if (cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
-      void vscode.window.showInformationMessage(
-        'SAFS：CLI 已安装，请重启后使用。'
-      );
-      return;
     }
     await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
     return;
@@ -3873,13 +3888,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   });
   command('installAgentForwarding', async () => {
-    if (cliMode()) {
-      startAgentHttpRouterLeadership(context);
-      const router = await ensureAgentHttpRouter(context);
-      const executable = await installGlobalCli(
-        context, cliRouterUrl(router.url)
-      );
+    startAgentHttpRouterLeadership(context);
+    const router = await ensureAgentHttpRouter(context);
+    if (cliEnabled()) {
+      const executable = await installGlobalCli(context, cliRouterUrl(router.url));
       bridgeOutput?.info(`[Agent CLI] 安装完成：${executable}`);
+    }
+    if (agentInterface() === 'cli') {
       await vscode.env.clipboard.writeText(nativeCliUsagePrompt());
       void vscode.window.showInformationMessage(
         'SAFS：CLI 提示词已复制，请粘贴到 Agent。'
@@ -3889,12 +3904,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const answer =
       await askAgentNameAndPlatform('SAFS：为我的Agent安装转发功能');
     if (!answer) return;
-    startAgentHttpRouterLeadership(context);
-    const router = await ensureAgentHttpRouter(context);
     const url = agentTaggedMcpUrl(router.url, answer.agentName, answer.platform);
-    const promptText = streamableHttpMcpInstallPrompt(
-      url, answer.agentName, answer.platform
-    );
+    const promptText = hybridMode()
+      ? hybridAgentInstallPrompt(url)
+      : streamableHttpMcpInstallPrompt(url, answer.agentName, answer.platform);
     await vscode.env.clipboard.writeText(promptText);
     void vscode.window.showInformationMessage(
       'SAFS：安装提示词已复制，请粘贴到 Agent。'
@@ -4059,19 +4072,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
-  // Keep MCP and CLI mutually exclusive without inspecting Agent installations.
+  // Interface changes never uninstall the other entry point; hybrid intentionally keeps both.
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration('safs.agentInterface')) return;
     void guard(async () => {
       startAgentHttpRouterLeadership(context);
-      if (cliMode()) {
-        const result = await configureAgentInterface(context);
-        bridgeOutput?.info(`[Agent CLI] 接口切换完成：${result.cliExecutable}`);
-        await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
-      } else {
-        await configureAgentInterface(context);
-        await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
+      const result = await configureAgentInterface(context);
+      if (result.cliExecutable) {
+        bridgeOutput?.info(`[Agent CLI] 接口准备完成：${result.cliExecutable}`);
       }
+      await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
     });
   }));
   // Agent MCP: keep one in-extension fixed HTTP router alive, then start the
@@ -4083,10 +4093,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       'Activate',
       `当前远程挂载=${current?.mountName ?? '<none>'}，启用列表=${[...enabled].join(',') || '<empty>'}`
     );
-    // CLI mode is a user-level interface and must be installed even before a
+    // CLI and hybrid modes need the user-level command even before a
     // mount enables forwarding. This also repairs missing installs on reload.
-    if (cliMode()) {
-      agentTrace('Activate', 'CLI 模式已启用，安装或更新用户级全局 safs 命令');
+    if (cliEnabled()) {
+      agentTrace('Activate', `${agentInterface()} 模式已启用，安装或更新用户级全局 safs 命令`);
       startAgentHttpRouterLeadership(context);
       await configureAgentInterface(context);
     }

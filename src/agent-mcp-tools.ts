@@ -22,9 +22,19 @@ export const routedAgentMcpInstructions = workspaceInstructions + ' ' + [
   'Pass bindingId to subsequent tools. It is pinned to the window instance; on expiry stop and report, never silently rebind or switch.'
 ].join(' ');
 
-export type AgentToolProfile = 'full' | 'core';
+export const hybridAgentMcpInstructions = [
+  'Use get_remote_workspace to bind the current SAFS workspace.',
+  'Use switch_remote_workspace only when the user chooses another workspace.',
+  'After either tool returns a bindingId, run remote operations through the global safs CLI with --binding <bindingId>; use safs --help for command syntax.',
+  'A successful switch cancels the previous task, so stop and wait for a new user request.'
+].join(' ');
+
+export type AgentToolProfile = 'full' | 'core' | 'hybrid';
 const extendedTools = new Set(['current_remote_file', 'remote_delete', 'remote_chmod',
   'remote_move', 'remote_upload', 'remote_download']);
+const hybridTools = new Set<AgentMcpToolName>([
+  'get_remote_workspace', 'switch_remote_workspace'
+]);
 
 export type AgentMcpToolName =
   | 'get_remote_workspace'
@@ -265,6 +275,7 @@ export function registerAgentMcpTools(
 ): void {
   for (const definition of toolDefinitions(options.routed)) {
     if (options.profile === 'core' && extendedTools.has(definition.name)) continue;
+    if (options.profile === 'hybrid' && !hybridTools.has(definition.name)) continue;
     server.registerTool(
       definition.name,
       {

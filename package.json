@@ -537,17 +537,22 @@
         },
         "safs.agentInterface": {
           "type": "string",
-          "enum": ["cli", "mcp"],
-          "default": "mcp",
+          "enum": ["hybrid", "mcp", "cli"],
+          "enumDescriptions": [
+            "Hybrid (recommended): MCP exposes only workspace bind/switch tools; remote operations use the global SAFS CLI with the returned bindingId.",
+            "Full MCP: exposes the MCP tool profile selected below.",
+            "CLI only: exposes the global SAFS CLI without installing MCP."
+          ],
+          "default": "hybrid",
           "scope": "machine",
-          "description": "Agent entry point. mcp (default) uses the stable loopback-only Streamable HTTP router; cli exposes the native executable as the user-level `safs` command. If a global proxy intercepts loopback MCP traffic, use proxy rule mode with 127.0.0.1/localhost/::1 set to direct, or switch to cli. Use the same value across windows, reload VS Code windows and restart Agents after changing it."
+          "description": "Agent entry point. hybrid (default) combines two precise MCP workspace tools with the token-efficient global `safs` CLI; mcp exposes the selected MCP tool profile; cli uses only the CLI. MCP and CLI may coexist and switching modes never uninstalls the other entry point. If a proxy intercepts loopback MCP traffic, route 127.0.0.1/localhost/::1 directly or use cli. Reload VS Code windows and restart Agents after changing it."
         },
         "safs.agentMcpToolProfile": {
           "type": "string",
           "enum": ["full", "core"],
           "default": "full",
           "scope": "machine",
-          "description": "MCP tool profile. core exposes binding, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. Use the same setting in all windows and restart the Agent after changing it."
+          "description": "Tool profile used only in mcp mode. core exposes binding, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. hybrid always exposes only workspace bind and switch. Use the same setting in all windows and restart the Agent after changing it."
         },
         "safs.agentMcpMaxOutputBytes": {
           "type": "number",

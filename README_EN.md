@@ -60,18 +60,26 @@ The remote terminal opens in the directory of the active file by default, or at 
 
 ### 3. Let an Agent operate the remote workspace
 
-MCP is the default mode:
+Hybrid is the default mode:
 
 1. Click **Enable Agent Forwarding** beside the connection in the SAFS view.
-2. Enter the Agent name and platform when prompted; the extension copies an installation prompt containing the local Streamable HTTP URL.
-3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself. SAFS does not detect or modify Agent configuration.
+2. The extension installs or updates the current platform's global `safs` CLI. Enter the Agent name and platform when prompted, and it copies an installation prompt containing the local Streamable HTTP URL.
+3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself. MCP loads only workspace bind and switch; all other operations use CLI. SAFS does not detect or modify Agent configuration.
 4. Open the remote directory for that connection.
 5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
-6. Tell the Agent: `Use the safs MCP to inspect the current remote project and run its tests.`
+6. Tell the Agent: `Use safs to inspect the current remote project and run its tests.`
 
 If a global proxy causes HTTP 502, proxy connection errors, or timeouts, switch the proxy to rule mode and route `127.0.0.1`, `localhost`, and `::1` directly; alternatively, switch `safs.agentInterface` to `cli`.
 
 > The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment. If VS Code runs on Windows and the Agent runs in WSL, set `safs.agentPlatform` to `wsl`.
+
+`safs.agentInterface` supports three modes:
+
+- `hybrid` (default): MCP binds or switches the workspace and returns a `bindingId`; file and command operations run through the global `safs` CLI. Loading only two MCP tools reduces tool-schema context.
+- `mcp`: every operation uses the MCP tool set selected by `safs.agentMcpToolProfile`.
+- `cli`: no MCP installation; the Agent runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
+
+Changing modes does not automatically uninstall the other entry point, so different Agents can use MCP and CLI concurrently.
 
 Once enabled, the Agent can:
 
@@ -99,7 +107,7 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. After setting `safs.agentInterface` to `cli`, run `SAFS: Install Agent Forwarding for My Agent` and paste the short copied prompt into the Agent; `safs --help` provides the actual workflow. The Agent starts with `safs bind --agent "<Agent name>"`. The default `mcp` mode is recommended for most users. Switch to CLI when minimizing token usage matters, or when a global proxy cannot be configured to route loopback directly. CLI bypasses HTTP proxies when connecting to the local router.
+CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. In CLI-only mode, run `SAFS: Install Agent Forwarding for My Agent` and paste the short copied prompt into the Agent; `safs --help` provides the actual workflow. The Agent starts with `safs bind --agent "<Agent name>"`. The default hybrid mode already provides CLI's token advantage; use CLI-only mode when an Agent does not support MCP or loopback MCP cannot be routed directly. CLI bypasses HTTP proxies when connecting to the local router.
 
 CLI installation is global and Agent-independent. The Agent name is recorded only when
 `bind` creates a binding; later operations inherit it through `--binding`. The label is

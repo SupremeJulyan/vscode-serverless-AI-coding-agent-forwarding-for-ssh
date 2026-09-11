@@ -7,7 +7,8 @@ import {
   DiscoveredAgentWorkspace, agentDiscoveryDirectories, discoverAgentWorkspaces
 } from './agent-discovery';
 import {
-  configureAgentMcpResources, registerAgentMcpTools, routedAgentMcpInstructions
+  type AgentToolProfile, configureAgentMcpResources, hybridAgentMcpInstructions,
+  registerAgentMcpTools, routedAgentMcpInstructions
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
 
@@ -138,7 +139,7 @@ export interface AgentHttpRouterOptions {
   log?: (message: string) => void;
   /** 转发到窗口 MCP 的 fetch 超时（毫秒），缺省 120s。 */
   forwardTimeoutMs?: number;
-  toolProfile?: () => 'full' | 'core';
+  toolProfile?: () => AgentToolProfile;
   audit?: (entry: {
     toolName: string; input: Record<string, unknown>;
     agentName?: string; agentPlatform?: AgentPlatformLabel;
@@ -378,6 +379,7 @@ export class AgentHttpRouter {
       const selectedWorkspace = workspace!;
       const owner = this.bindingKey(bindingAgentName, agentPlatform);
       const bindingId = randomUUID().replace(/-/g, '').slice(0, 16);
+      const hybridMcp = source === 'mcp' && this.options.toolProfile?.() === 'hybrid';
       this.bindings.set(bindingId, {
         instanceId: selectedWorkspace.instanceId,
         host: selectedWorkspace.host,
@@ -391,6 +393,7 @@ export class AgentHttpRouter {
           workspace: this.publicWorkspace(selectedWorkspace),
           bindingId,
           agentName: bindingAgentName,
+          ...(hybridMcp ? { cliBindingArgument: `--binding ${bindingId}` } : {}),
           selectedAutomatically: !switching,
           ...(switching ? {
             previousTaskCancelled: true,
@@ -448,14 +451,19 @@ export class AgentHttpRouter {
   private createProtocolServer(
     agentName?: string, agentPlatform?: AgentPlatformLabel
   ): McpServer {
+    const profile = this.options.toolProfile?.();
     const server = new McpServer(
       { name: 'safs-http-router', version: '1.0.0' },
-      { instructions: routedAgentMcpInstructions }
+      {
+        instructions: profile === 'hybrid'
+          ? hybridAgentMcpInstructions
+          : routedAgentMcpInstructions
+      }
     );
     configureAgentMcpResources(server);
     registerAgentMcpTools(server, {
       routed: true,
-      profile: this.options.toolProfile?.(),
+      profile,
       invoke: (name, input) => this.callTool(name, input, agentName, agentPlatform, 'mcp')
     });
     return server;

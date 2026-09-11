@@ -117,6 +117,52 @@ test('normalizes Windows and WSL views of the same Agent cwd', () => {
   assert.equal(canonicalAgentCwd('/mnt/c/Users/Me/SAFS'), '/mnt/c/users/me/safs');
 });
 
+test('hybrid mode exposes two MCP tools and reuses their binding through CLI', async () => {
+  const backend = new AgentMcpServer(0, 'hybrid-backend', callbacks('hybrid'));
+  const router = new AgentHttpRouter(await freePort(), 'router-token', {
+    discover: () => [record('hybrid-window', backend.url, {
+      workspaceRoot: '/srv/hybrid', agentCwd: '/local/hybrid', focused: true
+    })],
+    toolProfile: () => 'hybrid'
+  });
+  const client = new Client({ name: 'hybrid-agent', version: '1.0.0' });
+  try {
+    await backend.start();
+    await router.start();
+    const mcpUrl = new URL(agentTaggedMcpUrl(router.url, 'Codex', 'linux'));
+    await client.connect(new StreamableHTTPClientTransport(mcpUrl));
+    assert.match(client.getInstructions() ?? '', /global safs CLI/);
+    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), [
+      'get_remote_workspace', 'switch_remote_workspace'
+    ]);
+    const selected = await client.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/local/hybrid/project' }
+    });
+    const selectedValue = JSON.parse((selected.content as any[])[0].text);
+    const bindingId = selectedValue.bindingId;
+    assert.equal(typeof bindingId, 'string');
+    assert.equal(selectedValue.cliBindingArgument, `--binding ${bindingId}`);
+
+    const cliUrl = new URL(router.url);
+    cliUrl.pathname = '/cli';
+    const response = await fetch(cliUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'remote_read', arguments: { bindingId, path: 'README.md' }
+      })
+    });
+    assert.equal(response.status, 200);
+    const envelope = await response.json() as any;
+    assert.equal(envelope.ok, true);
+    assert.equal(envelope.result.label, 'hybrid');
+    assert.equal(envelope.result.input.path, 'README.md');
+  } finally {
+    await client.close();
+    await Promise.allSettled([router.stop(), backend.stop()]);
+  }
+});
+
 test('exact cwd wins, expired binding stays invalid, and a new get may use focus', async () => {
   const first = new AgentMcpServer(0, 'first', callbacks('first'));
   const second = new AgentMcpServer(0, 'second', callbacks('second'));

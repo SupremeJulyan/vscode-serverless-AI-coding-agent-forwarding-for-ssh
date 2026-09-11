@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
+  bundledNativeCli, ensureUnixCliPath, globalNativeCli, hybridAgentInstallPrompt,
+  installNativeCli,
   nativeCliConnectionPath, nativeCliPlatform, nativeCliUsagePrompt,
   parseNativeCliVersion, removeNativeCli, withoutSafsPathBlock,
   streamableHttpMcpInstallPrompt,
@@ -45,6 +46,17 @@ test('builds a Streamable HTTP MCP prompt with proxy failure guidance', () => {
   assert.match(prompt, /规则模式/);
   assert.match(prompt, /127\.0\.0\.1\/localhost\/::1/);
   assert.match(prompt, /SAFS CLI 模式/);
+  assert.equal(prompt.split('\n').length, 2);
+});
+
+test('builds a compact hybrid MCP and CLI installation prompt', () => {
+  const prompt = hybridAgentInstallPrompt(
+    'http://127.0.0.1:9848/mcp?token=secret'
+  );
+  assert.match(prompt, /用户级 Streamable HTTP MCP/);
+  assert.match(prompt, /MCP 仅用于绑定和切换工作区/);
+  assert.match(prompt, /全局 safs CLI/);
+  assert.match(prompt, /127\.0\.0\.1\/localhost\/::1/);
   assert.equal(prompt.split('\n').length, 2);
 });
 

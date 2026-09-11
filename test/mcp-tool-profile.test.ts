@@ -24,3 +24,25 @@ test('core profile keeps typed editing and output continuation but omits extende
     assert.equal(result.isError, true);
   } finally { await client.close(); await server.close(); }
 });
+
+test('hybrid profile exposes only workspace binding and switching', async () => {
+  const server = new McpServer({ name: 'test', version: '1' });
+  registerAgentMcpTools(server, {
+    routed: true,
+    profile: 'hybrid',
+    invoke: async () => ({ content: [] })
+  });
+  const client = new Client({ name: 'test', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(a);
+  await client.connect(b);
+  try {
+    const { tools } = await client.listTools();
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      'get_remote_workspace', 'switch_remote_workspace'
+    ]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

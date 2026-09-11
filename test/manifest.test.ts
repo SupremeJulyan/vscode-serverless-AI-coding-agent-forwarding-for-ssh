@@ -11,7 +11,9 @@ interface ExtensionManifest {
     commands?: Array<{ command: string; title: string }>;
     menus?: Record<string, Array<{ command: string; when?: string }>>;
     configuration?: {
-      properties?: Record<string, { default?: unknown; markdownDescription?: string }>
+      properties?: Record<string, {
+        default?: unknown; enum?: unknown[]; description?: string; markdownDescription?: string;
+      }>
     };
     jsonValidation?: Array<{ fileMatch?: string[] }>;
     keybindings?: Array<{
@@ -41,7 +43,11 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
   assert.equal(
     manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.default,
-    'mcp'
+    'hybrid'
+  );
+  assert.deepEqual(
+    manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.enum,
+    ['hybrid', 'mcp', 'cli']
   );
 });
 
@@ -303,6 +309,7 @@ test('declares both the install and uninstall forwarding commands', async () => 
   assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
   assert.ok(extensionSource.includes('卸载提示词'));
   assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
+  assert.ok(extensionSource.includes('hybridAgentInstallPrompt'));
   const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
   assert.ok(nativeCliSource.includes('用户级 Streamable HTTP MCP'));
   assert.ok(nativeCliSource.includes('代理规则模式直连'));

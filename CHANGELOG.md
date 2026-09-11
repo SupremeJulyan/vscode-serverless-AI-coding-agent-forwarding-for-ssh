@@ -2,6 +2,11 @@
 
 ## 1.8.1
 
+- Agent 接口新增并默认使用 `hybrid` 混合模式：MCP 只注册工作区绑定和切换两个工具，
+  返回的 `bindingId` 由全局 `safs` CLI 承接文件与命令操作，减少工具 Schema Token，
+  同时保留精确的工作区选择。
+- `mcp`、`cli` 和 `hybrid` 三种入口可以共存，切换设置不再以卸载另一入口为前提；
+  完整 MCP 和纯 CLI 模式仍可单独选择。
 - CLI 安装不再绑定 Agent 名称；`safs bind --agent NAME`（以及创建新 binding 的
   `switch`）在 binding 中记录来源，后续操作通过 `bindingId` 沿用该名称，活动视图
   和转发状态栏不再显示 `safs-cli`。
