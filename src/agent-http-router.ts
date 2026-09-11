@@ -58,12 +58,15 @@ export function adaptCliToolResult(
   if (!result || typeof result !== 'object' || Array.isArray(result)) return envelope;
   const value = result as Record<string, unknown>;
   if (value.code === 'WORKSPACE_SELECTION_REQUIRED') {
+    const agentArgument = typeof value.agentName === 'string'
+      ? ` --agent ${JSON.stringify(value.agentName)}`
+      : '';
     const candidates = Array.isArray(value.candidates) ? value.candidates.map((candidate) => {
       if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate;
       const item = candidate as Record<string, unknown>;
       return typeof item.workspaceId === 'string' ? {
         ...item,
-        switchCommand: `safs switch --workspace ${item.workspaceId} --confirmed`
+        switchCommand: `safs switch${agentArgument} --workspace ${item.workspaceId} --confirmed`
       } : item;
     }) : [];
     return { ...envelope, result: {
@@ -73,7 +76,7 @@ export function adaptCliToolResult(
       action: 'select_workspace',
       requiresUserInput: true,
       mustStopNow: true,
-      nextCommandAfterUserReply: 'safs switch --workspace <workspaceId> --confirmed',
+      nextCommandAfterUserReply: `safs switch${agentArgument} --workspace <workspaceId> --confirmed`,
       message: 'Ask the user to choose a listed workspace, then stop. Do not run a switch command in this turn. After the user replies, run the candidate switchCommand.'
     } };
   }
@@ -149,6 +152,7 @@ export class AgentHttpRouter {
   private readonly discover: () => DiscoveredAgentWorkspace[];
   private readonly bindings = new Map<string, {
     instanceId: string; host: string; workspaceRoot: string; owner: string;
+    agentName?: string; agentPlatform?: AgentPlatformLabel;
   }>();
 
   constructor(
@@ -294,6 +298,15 @@ export class AgentHttpRouter {
       };
     }
     if (name === 'get_remote_workspace' || name === 'switch_remote_workspace') {
+      const bindingAgentName = source === 'cli'
+        ? requestAgentName(input.agentName)
+        : agentName;
+      if (source === 'cli' && !bindingAgentName) {
+        return this.toolError(
+          'CLI_AGENT_NAME_REQUIRED',
+          'Run safs bind with --agent NAME so this binding can identify the Agent.'
+        );
+      }
       const workspaces = this.workspaces();
       if (!workspaces.length) {
         return this.toolError(
@@ -326,7 +339,10 @@ export class AgentHttpRouter {
         return this.toolError(
           'WORKSPACE_SELECTION_REQUIRED',
           'Active SAFS workspace candidates are listed below. Ask the user to choose one in the Agent conversation, then call this tool again with its workspaceId and userConfirmed=true.',
-          { candidates: workspaces.map((candidate) => this.selectableWorkspace(candidate)) }
+          {
+            candidates: workspaces.map((candidate) => this.selectableWorkspace(candidate)),
+            ...(source === 'cli' ? { agentName: bindingAgentName } : {})
+          }
         );
       }
       if (!switching) {
@@ -353,24 +369,28 @@ export class AgentHttpRouter {
               : 'The Agent cwd does not match an active SAFS placeholder and there is no unique focused SAFS window. Ask the user to choose one candidate in the Agent conversation, then call switch_remote_workspace with its workspaceId.',
             {
               agentCwd,
-              candidates: workspaces.map((candidate) => this.selectableWorkspace(candidate))
+              candidates: workspaces.map((candidate) => this.selectableWorkspace(candidate)),
+              ...(source === 'cli' ? { agentName: bindingAgentName } : {})
             }
           );
         }
       }
       const selectedWorkspace = workspace!;
-      const owner = this.bindingKey(agentName, agentPlatform);
+      const owner = this.bindingKey(bindingAgentName, agentPlatform);
       const bindingId = randomUUID().replace(/-/g, '').slice(0, 16);
       this.bindings.set(bindingId, {
         instanceId: selectedWorkspace.instanceId,
         host: selectedWorkspace.host,
         workspaceRoot: selectedWorkspace.workspaceRoot,
-        owner
+        owner,
+        agentName: bindingAgentName,
+        agentPlatform
       });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
           workspace: this.publicWorkspace(selectedWorkspace),
           bindingId,
+          agentName: bindingAgentName,
           selectedAutomatically: !switching,
           ...(switching ? {
             previousTaskCancelled: true,
@@ -389,7 +409,9 @@ export class AgentHttpRouter {
       );
     }
     const binding = this.bindings.get(bindingId);
-    if (!binding || binding.owner !== this.bindingKey(agentName, agentPlatform)) {
+    const cliBindingRequest = source === 'cli';
+    if (!binding || (!cliBindingRequest
+      && binding.owner !== this.bindingKey(agentName, agentPlatform))) {
       return this.toolError(
         'WORKSPACE_BINDING_INVALID',
         'The workspace binding is invalid for this Agent session. Select the workspace again.'
@@ -406,8 +428,12 @@ export class AgentHttpRouter {
     }
     const { bindingId: _bindingId, ...publicInput } = input;
     const args = { ...publicInput, mountName: workspace.mountName };
+    const effectiveAgentName = cliBindingRequest ? binding.agentName : agentName;
+    const effectiveAgentPlatform = cliBindingRequest ? binding.agentPlatform : agentPlatform;
     try {
-      return await this.forward(workspace, name, args, agentName, agentPlatform, source);
+      return await this.forward(
+        workspace, name, args, effectiveAgentName, effectiveAgentPlatform, source
+      );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.options.log?.(`工具 ${name} 失败，mount=${workspace.mountName}：${detail}`);
@@ -477,7 +503,7 @@ export class AgentHttpRouter {
         && ['wsl', 'mac', 'linux', 'win'].includes(platformValue)
         ? platformValue as AgentPlatformLabel
         : undefined;
-      const agentName = requestAgentName(request.query.agent, 'safs-cli');
+      const agentName = requestAgentName(request.query.agent);
       const currentName = currentCliToolName(name);
       try {
         if (name === 'safs_cli_batch') {

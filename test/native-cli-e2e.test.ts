@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentMcpServer } from '../src/agent-mcp';
-import { AgentHttpRouter, agentTaggedMcpUrl } from '../src/agent-http-router';
+import { AgentHttpRouter } from '../src/agent-http-router';
 import { cliConfigPath, writeCliConnection } from '../src/cli-integration';
 import { bundledNativeCli, nativeCliPlatform } from '../src/native-cli';
 import { executeCaptured } from '../src/process';
@@ -79,9 +79,10 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     process.cwd(), nativeCliPlatform(process.platform, process.arch)
   );
   try {
-    await writeCliConnection(
-      temporary, agentTaggedMcpUrl(router.url, 'Recorded Agent', 'linux', 'cli')
-    );
+    const cliUrl = new URL(router.url);
+    cliUrl.searchParams.set('platform', 'linux');
+    cliUrl.searchParams.set('source', 'cli');
+    await writeCliConnection(temporary, cliUrl.toString());
     const version = await executeCaptured({ command: executable, args: ['--version'] });
     assert.equal(version.exitCode, 0, version.stderr);
     assert.equal(version.stdout.trim(), 'safs 1.8.1');
@@ -97,7 +98,7 @@ test('native CLI binds and executes through the existing SAFS router', async () 
       workspaceId: 'native-window', workspaceRoot: '/project', host: 'dev'
     }] });
     const bind = await executeCaptured({ command: executable, args: [
-      '--config', config, 'bind', '--cwd', temporary
+      '--config', config, 'bind', '--agent', 'Recorded Agent', '--cwd', temporary
     ] });
     assert.equal(bind.exitCode, 0, bind.stderr);
     const bindingId = JSON.parse(bind.stdout).bindingId;
@@ -193,38 +194,31 @@ test('native CLI binds and executes through the existing SAFS router', async () 
       (event) => event.agentName === 'Recorded Agent' && event.source === 'cli'
     ));
 
-    const isolatedBinding = await executeCaptured({
-      command: executable,
-      args: ['--config', config, 'read', '--binding', bindingId, '--path', 'wrong-owner.txt'],
-      env: { SAFS_AGENT_NAME: 'Override Agent' }
-    });
-    assert.equal(isolatedBinding.exitCode, 1);
-    assert.match(isolatedBinding.stderr, /WORKSPACE_BINDING_INVALID/);
-
     const overriddenBind = await executeCaptured({
       command: executable,
-      args: ['--config', config, 'bind', '--cwd', temporary],
-      env: { SAFS_AGENT_NAME: 'Override Agent' }
+      args: [
+        '--config', config, 'bind', '--agent', 'Override Agent', '--cwd', temporary
+      ]
     });
     assert.equal(overriddenBind.exitCode, 0, overriddenBind.stderr);
     const overriddenBindingId = JSON.parse(overriddenBind.stdout).bindingId;
     const overriddenRead = await executeCaptured({
       command: executable,
-      args: ['--config', config, 'read', '--binding', overriddenBindingId, '--path', 'override.txt'],
-      env: { SAFS_AGENT_NAME: 'Override Agent' }
+      args: [
+        '--config', config, 'read', '--binding', overriddenBindingId, '--path', 'override.txt'
+      ]
     });
     assert.equal(overriddenRead.exitCode, 0, overriddenRead.stderr);
     assert.ok(activity.some((event) =>
       event.phase === 'start' && event.agentName === 'Override Agent' && event.source === 'cli'
     ));
 
-    const invalidAgent = await executeCaptured({
+    const missingAgent = await executeCaptured({
       command: executable,
-      args: ['--config', config, 'workspaces'],
-      env: { SAFS_AGENT_NAME: 'bad\nname' }
+      args: ['--config', config, 'bind', '--cwd', temporary]
     });
-    assert.equal(invalidAgent.exitCode, 1);
-    assert.match(invalidAgent.stderr, /SAFS_AGENT_NAME must contain 1 to 100 characters/);
+    assert.equal(missingAgent.exitCode, 1);
+    assert.match(missingAgent.stderr, /--agent is required/);
   } finally {
     await router.stop();
     await backend.stop();

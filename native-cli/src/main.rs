@@ -23,9 +23,10 @@ Version: safs --version
 fn command_help(command: &str) -> Option<&'static str> {
     match command {
         "bind" => Some(
-            r#"Usage: safs bind [--cwd LOCAL_CWD]
+            r#"Usage: safs bind --agent NAME [--cwd LOCAL_CWD]
 Matches the current cwd (or --cwd) to a SAFS placeholder. If none matches,
 the uniquely focused workspace is used; otherwise candidates are returned.
+The Agent name is stored on the returned binding for activity display.
 "#,
         ),
         "workspaces" => Some(
@@ -34,7 +35,7 @@ Lists all active SAFS workspaces and their workspaceId values.
 "#,
         ),
         "switch" => Some(
-            r#"Usage: safs switch --workspace ID --confirmed
+            r#"Usage: safs switch --agent NAME --workspace ID --confirmed
 Call only after the user explicitly chooses a workspace. Returns a new bindingId.
 "#,
         ),
@@ -242,9 +243,9 @@ fn parse_request(
         values.extend(object.clone());
     }
     let allowed = match verb.as_str() {
-        "bind" => &["cwd"][..],
+        "bind" => &["agent", "cwd"][..],
         "workspaces" => &[],
-        "switch" => &["workspace", "confirmed"],
+        "switch" => &["agent", "workspace", "confirmed"],
         "current-file" => &["binding"],
         "list" => &["binding", "path", "limit", "cursor"],
         "read" => &[
@@ -371,12 +372,24 @@ fn parse_request(
     };
     let tool = match verb.as_str() {
         "bind" => {
+            let agent_name = values.remove("agent").ok_or("--agent is required")?;
+            let agent_name = validate_agent_name(
+                agent_name.as_str().ok_or("--agent must be text")?,
+                "--agent",
+            )?;
+            values.insert("agentName".into(), Value::String(agent_name));
             let agent_cwd = values.remove("cwd").unwrap_or(Value::String(cwd));
             values.insert("agentCwd".into(), agent_cwd);
             "get_remote_workspace"
         }
         "workspaces" => "cli_list_workspaces",
         "switch" => {
+            let agent_name = values.remove("agent").ok_or("--agent is required")?;
+            let agent_name = validate_agent_name(
+                agent_name.as_str().ok_or("--agent must be text")?,
+                "--agent",
+            )?;
+            values.insert("agentName".into(), Value::String(agent_name));
             let workspace = values
                 .remove("workspace")
                 .ok_or("--workspace is required")?;
@@ -527,18 +540,6 @@ fn validate_agent_name(value: &str, source: &str) -> Result<String, String> {
     Ok(normalized.to_owned())
 }
 
-fn replace_query_parameter(url: &mut Url, name: &str, value: &str) {
-    let retained: Vec<(String, String)> = url
-        .query_pairs()
-        .filter(|(key, _)| key != name)
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    url.query_pairs_mut()
-        .clear()
-        .extend_pairs(retained)
-        .append_pair(name, value);
-}
-
 fn router_connection(config_path: &str, endpoint: &str) -> Result<RouterConnection, String> {
     let config: Value = serde_json::from_str(
         &fs::read_to_string(config_path).map_err(|_| "Cannot read SAFS connection file")?,
@@ -561,16 +562,6 @@ fn router_connection(config_path: &str, endpoint: &str) -> Result<RouterConnecti
         return Err("SAFS connection must be an authenticated loopback URL".into());
     }
     url.set_path(endpoint);
-    match env::var("SAFS_AGENT_NAME") {
-        Ok(value) => {
-            let agent_name = validate_agent_name(&value, "SAFS_AGENT_NAME")?;
-            replace_query_parameter(&mut url, "agent", &agent_name);
-        }
-        Err(env::VarError::NotPresent) => {}
-        Err(env::VarError::NotUnicode(_)) => {
-            return Err("SAFS_AGENT_NAME must be valid Unicode".into())
-        }
-    }
     let timeout = config
         .get("timeoutMs")
         .and_then(Value::as_u64)
@@ -993,39 +984,49 @@ mod tests {
     }
 
     #[test]
-    fn validates_and_replaces_cli_agent_names() {
+    fn validates_cli_agent_names() {
         assert_eq!(
-            validate_agent_name("  Codex  ", "SAFS_AGENT_NAME").unwrap(),
+            validate_agent_name("  Codex  ", "--agent").unwrap(),
             "Codex"
         );
-        assert!(validate_agent_name("", "SAFS_AGENT_NAME").is_err());
-        assert!(validate_agent_name("bad\nname", "SAFS_AGENT_NAME").is_err());
-        assert!(validate_agent_name(&"x".repeat(101), "SAFS_AGENT_NAME").is_err());
+        assert!(validate_agent_name("", "--agent").is_err());
+        assert!(validate_agent_name("bad\nname", "--agent").is_err());
+        assert!(validate_agent_name(&"x".repeat(101), "--agent").is_err());
+    }
 
-        let mut url =
-            Url::parse("http://127.0.0.1:9848/cli?token=secret&agent=Old&platform=linux").unwrap();
-        replace_query_parameter(&mut url, "agent", "Claude");
-        assert_eq!(
-            url.query_pairs().filter(|(key, _)| key == "agent").count(),
-            1
-        );
-        assert_eq!(
-            url.query_pairs().find(|(key, _)| key == "agent").unwrap().1,
-            "Claude"
-        );
-        assert_eq!(
-            url.query_pairs().find(|(key, _)| key == "token").unwrap().1,
-            "secret"
-        );
+    #[test]
+    fn records_agent_name_only_when_a_binding_is_created() {
+        let (_, bind) = request(
+            strings(&["bind", "--agent", "  Codex  ", "--cwd", "/project"]),
+            "/cwd".into(),
+        )
+        .unwrap();
+        assert_eq!(bind["agentName"], "Codex");
+        assert_eq!(bind["agentCwd"], "/project");
+
+        let (_, read) = request(
+            strings(&["read", "--binding", "binding-a", "--path", "README.md"]),
+            "/cwd".into(),
+        )
+        .unwrap();
+        assert_eq!(read.get("agentName"), None);
+        assert_eq!(read["bindingId"], "binding-a");
     }
 
     #[test]
     fn maps_every_cli_command_to_its_router_operation() {
         let cases: &[(&[&str], &str)] = &[
-            (&["bind"], "get_remote_workspace"),
+            (&["bind", "--agent", "Codex"], "get_remote_workspace"),
             (&["workspaces"], "cli_list_workspaces"),
             (
-                &["switch", "--workspace", "w", "--confirmed"],
+                &[
+                    "switch",
+                    "--agent",
+                    "Codex",
+                    "--workspace",
+                    "w",
+                    "--confirmed",
+                ],
                 "switch_remote_workspace",
             ),
             (&["current-file", "--binding", "b"], "current_remote_file"),
@@ -1195,7 +1196,7 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(request(
-            vec!["switch", "--workspace", "id"]
+            vec!["switch", "--agent", "Codex", "--workspace", "id"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
@@ -1203,12 +1204,28 @@ mod tests {
         )
         .is_err());
         assert!(request(
-            strings(&["switch", "--workspace", "id", "--confirmed", "false"]),
+            strings(&[
+                "switch",
+                "--agent",
+                "Codex",
+                "--workspace",
+                "id",
+                "--confirmed",
+                "false",
+            ]),
             "/cwd".into()
         )
         .is_err());
         assert!(request(
-            strings(&["switch", "--workspace", "id", "--confirmed", "true"]),
+            strings(&[
+                "switch",
+                "--agent",
+                "Codex",
+                "--workspace",
+                "id",
+                "--confirmed",
+                "true",
+            ]),
             "/cwd".into()
         )
         .is_ok());
@@ -1240,7 +1257,7 @@ mod tests {
     }
     #[test]
     fn syntax_errors_include_only_the_relevant_command_usage() {
-        let switch = request(strings(&["switch"]), "/cwd".into()).unwrap_err();
+        let switch = request(strings(&["switch", "--agent", "Codex"]), "/cwd".into()).unwrap_err();
         assert!(switch.contains("--workspace is required"));
         assert!(switch.contains("Usage: safs switch"));
         assert!(!switch.contains("Usage: safs read "));

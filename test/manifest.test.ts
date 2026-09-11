@@ -21,7 +21,7 @@ interface ExtensionManifest {
       linux?: string;
       mac?: string;
     }>;
-    views?: Record<string, Array<{ id: string; name: string; type?: string }>>;
+    views?: Record<string, Array<{ id: string; name: string; type?: string; icon?: string }>>;
   };
 }
 
@@ -146,10 +146,12 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
 test('Agent integration uses copied prompts instead of probing Agent installations', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
-  assert.ok(nativeCliSource.includes('先运行 `safs bind`'));
+  assert.ok(nativeCliSource.includes('`safs --help`'));
   assert.ok(extensionSource.includes('nativeCliUsagePrompt'));
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
+  assert.ok(extensionSource.includes("tagged.searchParams.delete('agent')"));
+  assert.equal(extensionSource.includes('cliAgentIdentity'), false);
   assert.ok(extensionSource.includes("args: ['--version']"));
   assert.ok(extensionSource.includes('installedVersion !== extensionVersion'));
   assert.equal(extensionSource.includes('configureDetectedAgents'), false);
@@ -165,8 +167,15 @@ test('contributes the Agent activity Webview in the SAFS sidebar', async () => {
   assert.ok(manifest.activationEvents?.includes('onView:safs.agentActivity'));
   assert.deepEqual(
     manifest.contributes?.views?.safs?.find((view) => view.id === 'safs.agentActivity'),
-    { id: 'safs.agentActivity', name: 'Agent 活动', type: 'webview' }
+    {
+      id: 'safs.agentActivity', name: 'Agent 活动', type: 'webview',
+      icon: 'resources/agent-activity.svg'
+    }
   );
+  const mounts = manifest.contributes?.views?.safs?.find((view) => view.id === 'safs.mounts');
+  assert.equal(mounts?.icon, 'resources/remote-ssh.svg');
+  assert.notEqual(mounts?.icon, 'resources/agent-activity.svg');
+  await access(new URL('../resources/agent-activity.svg', import.meta.url));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes('registerWebviewViewProvider(agentActivityViewId'));
 });
@@ -293,9 +302,10 @@ test('declares both the install and uninstall forwarding commands', async () => 
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
   assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
   assert.ok(extensionSource.includes('卸载提示词'));
-  assert.ok(extensionSource.includes('nativeMcpBridgeInstallPrompt'));
+  assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
   const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
-  assert.ok(nativeCliSource.includes('传输类型使用 stdio'));
+  assert.ok(nativeCliSource.includes('用户级 Streamable HTTP MCP'));
+  assert.ok(nativeCliSource.includes('代理规则模式直连'));
 });
 
 test('runs CLI cleanup after the extension is completely uninstalled', async () => {

@@ -63,13 +63,13 @@ The remote terminal opens in the directory of the active file by default, or at 
 MCP is the default mode:
 
 1. Click **Enable Agent Forwarding** beside the connection in the SAFS view.
-2. Enter the Agent name and platform when prompted; the extension installs the lightweight local `safs mcp-bridge` and copies an installation prompt.
-3. Paste the prompt into the Agent so it can install the stdio-based `safs` MCP itself. SAFS does not detect or modify Agent configuration.
+2. Enter the Agent name and platform when prompted; the extension copies an installation prompt containing the local Streamable HTTP URL.
+3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself. SAFS does not detect or modify Agent configuration.
 4. Open the remote directory for that connection.
 5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
 6. Tell the Agent: `Use the safs MCP to inspect the current remote project and run its tests.`
 
-The stdio bridge connects directly to the local router without reading `ALL_PROXY`, `HTTPS_PROXY`, or `HTTP_PROXY`, preventing a proxy from turning loopback requests into HTTP 502 responses. Alternatively, run `SAFS: Copy Streamable HTTP URL` to configure HTTP directly; this advanced option requires the Agent's `NO_PROXY` to include `127.0.0.1,localhost,::1`.
+If a global proxy causes HTTP 502, proxy connection errors, or timeouts, switch the proxy to rule mode and route `127.0.0.1`, `localhost`, and `::1` directly; alternatively, switch `safs.agentInterface` to `cli`.
 
 > The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment. If VS Code runs on Windows and the Agent runs in WSL, set `safs.agentPlatform` to `wsl`.
 
@@ -99,18 +99,12 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-MCP and CLI share the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. After setting `safs.agentInterface` to `cli`, run `SAFS: Install Agent Forwarding for My Agent`, enter the Agent name and platform, and paste the copied usage prompt into the Agent. The prompt explains that `safs` is a global command and that all SAFS remote operations must use it. Restart the Agent, start a new conversation, and run `safs bind` first. The default `mcp` mode is recommended for most users. Switch to CLI when minimizing token usage matters, because CLI mode does not install MCP tools. Both modes bypass HTTP proxies when connecting to the local router.
+CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. After setting `safs.agentInterface` to `cli`, run `SAFS: Install Agent Forwarding for My Agent` and paste the short copied prompt into the Agent; `safs --help` provides the actual workflow. The Agent starts with `safs bind --agent "<Agent name>"`. The default `mcp` mode is recommended for most users. Switch to CLI when minimizing token usage matters, or when a global proxy cannot be configured to route loopback directly. CLI bypasses HTTP proxies when connecting to the local router.
 
-The Agent name entered during installation becomes the default activity label for that
-platform. When multiple Agents share the global command, set `SAFS_AGENT_NAME` before
-starting each secondary Agent process to override the default, for example:
-
-```sh
-SAFS_AGENT_NAME='Claude Code' claude
-```
-
-The label is used only for the activity view, diagnostics, and binding isolation; it is
-not part of local router authentication.
+CLI installation is global and Agent-independent. The Agent name is recorded only when
+`bind` creates a binding; later operations inherit it through `--binding`. The label is
+used for the activity view, diagnostics, and binding isolation, not local router
+authentication. Multiple Agents can therefore share one `safs` command.
 
 Pass the `bindingId` returned by `safs bind` or `safs switch` explicitly through
 `--binding`, ensuring every operation behind the fixed CLI endpoint still targets
@@ -118,6 +112,7 @@ the selected VS Code window. Structured JSON and write content can be read from
 stdin to avoid quoting long values in the shell:
 
 ```sh
+safs bind --agent 'Codex'
 binding_id='binding-id-from-safs-bind'
 safs read --binding "$binding_id" --path README.md
 safs find --binding "$binding_id" --name '*.ts'
@@ -127,7 +122,7 @@ printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
 printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
 safs write --binding "$binding_id" --path short.txt --content 'short text'
 safs exec --binding "$binding_id" --command 'pwd'
-safs switch --workspace 'workspace-id-from-safs-workspaces' --confirmed
+safs switch --agent 'Codex' --workspace 'workspace-id-from-safs-workspaces' --confirmed
 ```
 
 `search --mode files` returns paths of files whose contents match. To search by

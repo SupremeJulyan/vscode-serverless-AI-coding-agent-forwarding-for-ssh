@@ -13,6 +13,7 @@ test('CLI workspace guidance uses shell commands and enforces a new user turn', 
   const adapted = adaptCliToolResult({ ok: false, result: {
     code: 'WORKSPACE_SELECTION_REQUIRED',
     message: 'call switch_remote_workspace',
+    agentName: 'Codex',
     candidates: [{ workspaceId: 'workspace-a', host: 'dev', workspaceRoot: '/project' }]
   } }, 'get_remote_workspace');
   const result = adapted.result as any;
@@ -22,7 +23,11 @@ test('CLI workspace guidance uses shell commands and enforces a new user turn', 
   assert.equal(result.message.includes('switch_remote_workspace'), false);
   assert.equal(
     result.candidates[0].switchCommand,
-    'safs switch --workspace workspace-a --confirmed'
+    'safs switch --agent "Codex" --workspace workspace-a --confirmed'
+  );
+  assert.equal(
+    result.nextCommandAfterUserReply,
+    'safs switch --agent "Codex" --workspace <workspaceId> --confirmed'
   );
 });
 

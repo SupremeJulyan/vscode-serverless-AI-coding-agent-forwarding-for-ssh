@@ -63,13 +63,13 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 默认使用 MCP 模式：
 
 1. 在 SAFS 视图中点击连接项旁的 **启用 Agent 转发**。
-2. 按提示输入 Agent 名称和所在平台；扩展会安装轻量的本机 `safs mcp-bridge` 并复制一段安装提示词。
-3. 将提示词粘贴给 Agent，由 Agent 自行安装 stdio 类型的 `safs` MCP。SAFS 不会探测或修改 Agent 配置。
+2. 按提示输入 Agent 名称和所在平台；扩展会复制一段包含本机 Streamable HTTP URL 的安装提示词。
+3. 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。SAFS 不会探测或修改 Agent 配置。
 4. 打开该连接的远程目录。
 5. 重启 Agent 并新建对话，然后通过 `/mcp` 或 MCP 管理界面确认存在 `safs` 服务。
 6. 告诉 Agent：`使用 safs mcp 检查当前远程项目并运行测试`。
 
-stdio 桥会强制直连本机路由器，不读取 `ALL_PROXY`、`HTTPS_PROXY` 或 `HTTP_PROXY`，避免代理将 loopback 请求变成 HTTP 502。也可运行 `SAFS: 复制 Streamable HTTP URL` 直接配置 HTTP；这种高级方式需要确保 Agent 的 `NO_PROXY` 包含 `127.0.0.1,localhost,::1`。
+如果全局代理导致 MCP 出现 HTTP 502、代理连接错误或超时，请把代理切换为规则模式，并确保 `127.0.0.1`、`localhost`、`::1` 直连；也可以把 `safs.agentInterface` 切换为 `cli`。
 
 > MCP 地址只监听 `127.0.0.1`。Agent 与运行 SAFS 的 VS Code 必须位于同一操作系统环境。VS Code 在 Windows、Agent 在 WSL 时，将 `safs.agentPlatform` 设为 `wsl`。
 
@@ -96,22 +96,18 @@ stdio 桥会强制直连本机路由器，不读取 `ALL_PROXY`、`HTTPS_PROXY` 
 
 #### CLI 模式
 
-MCP 与 CLI 共用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。扩展每次启动后首次准备该程序时会读取其真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。将 `safs.agentInterface` 设为 `cli` 后，运行 `SAFS: 为我的Agent安装转发功能`，输入 Agent 名称和平台，再把复制的使用提示词粘贴给 Agent。提示词会说明 `safs` 是全局命令，所有 SAFS 远程操作都必须通过它完成。重启 Agent 并新建对话后，先运行 `safs bind`。一般保持默认的 `mcp` 即可；需要尽量减少 Token 消耗时可切换为 CLI，因为此模式不安装 MCP 工具。两种模式访问本机路由器时都会绕过 HTTP 代理。
+CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。扩展每次启动后首次准备该程序时会读取其真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。将 `safs.agentInterface` 设为 `cli` 后，运行 `SAFS: 为我的Agent安装转发功能`，再把复制的简短提示词粘贴给 Agent；具体用法由 `safs --help` 提供。Agent 首先运行 `safs bind --agent "<Agent 名称>"`。一般保持默认的 `mcp` 即可；需要尽量减少 Token 消耗，或全局代理无法为 loopback 配置直连时，可切换为 CLI。CLI 访问本机路由器时会绕过 HTTP 代理。
 
-安装时填写的 Agent 名称会作为该平台 CLI 的默认活动标签。多个 Agent 共用同一个
-全局命令时，可在启动 Agent 进程前设置 `SAFS_AGENT_NAME` 覆盖默认名称，例如：
-
-```sh
-SAFS_AGENT_NAME='Claude Code' claude
-```
-
-名称仅用于活动视图、日志和 binding 隔离，不参与本机路由认证。
+CLI 安装是全局且与 Agent 无关的。`bind` 创建 binding 时才记录 Agent 名称；后续操作
+通过 `--binding` 自动沿用该名称，用于活动视图、日志和 binding 隔离，不参与本机路由认证。
+多个 Agent 因此可以共用同一个 `safs` 命令。
 
 `safs bind` 或 `safs switch` 返回的 `bindingId` 通过 `--binding` 显式传给后续命令，
 确保固定 CLI 入口后的每次操作仍指向用户选定的 VS Code 窗口。结构化 JSON 和写入内容
 支持从 stdin 读取，避免长内容的 Shell 转义：
 
 ```sh
+safs bind --agent 'Codex'
 binding_id='binding-id-from-safs-bind'
 safs read --binding "$binding_id" --path README.md
 safs find --binding "$binding_id" --name '*.ts'
@@ -121,7 +117,7 @@ printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
 printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
 safs write --binding "$binding_id" --path short.txt --content 'short text'
 safs exec --binding "$binding_id" --command 'pwd'
-safs switch --workspace 'workspace-id-from-safs-workspaces' --confirmed
+safs switch --agent 'Codex' --workspace 'workspace-id-from-safs-workspaces' --confirmed
 ```
 
 `search --mode files` 返回“内容匹配的文件路径”；按文件名查找请使用 `find --name`、

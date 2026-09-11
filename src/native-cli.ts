@@ -47,32 +47,17 @@ export function nativeCliConnectionPath(executable: string): string {
   return path.join(path.dirname(executable), '.safs-connection.json');
 }
 
-export function nativeMcpBridgeInstallPrompt(
-  executable: string, agentName: string, platform: 'wsl' | 'mac' | 'linux' | 'win'
+export function streamableHttpMcpInstallPrompt(
+  url: string, _agentName: string, _platform: 'wsl' | 'mac' | 'linux' | 'win'
 ): string {
-  // The WSL install lives in the WSL user's ~/.local/bin. Its Windows-visible
-  // UNC path cannot be executed by a Linux Agent, so use the PATH entry that
-  // ensureUnixCliPath installs and takes effect after the requested restart.
-  const command = platform === 'wsl' ? 'safs' : executable;
-  const args = ['mcp-bridge', '--agent', agentName, '--platform', platform];
   return [
-    '请为自己安装名为 safs 的用户级 MCP 服务器；如果已存在同名条目，请将其替换为下面的配置。传输类型使用 stdio（不要使用 Streamable HTTP）：',
-    `command: ${JSON.stringify(command)}`,
-    `args: ${JSON.stringify(args)}`,
-    '只执行 MCP 配置安装，不要运行或探测其他 Agent。完成后提醒我重启并新建对话生效。'
+    `请安装名为 safs 的用户级 Streamable HTTP MCP：${url}`,
+    '完成后提醒我重启 Agent。若出现 HTTP 502 或连接超时，请提示我让代理规则模式直连 127.0.0.1/localhost/::1，或切换 SAFS CLI 模式。'
   ].join('\n');
 }
 
-export function nativeCliUsagePrompt(
-  agentName: string, platform: 'wsl' | 'mac' | 'linux' | 'win'
-): string {
-  return [
-    `你是通过 SAFS CLI 访问远程工作区的 Agent，记录名称为 ${JSON.stringify(agentName)}，平台为 ${platform}。`,
-    '`safs` 已安装为全局命令。远程路径不属于本地文件系统：涉及 SAFS 远程目录的列出、读取、搜索、编辑、写入、删除、移动、权限修改、命令执行、上传和下载，一律使用 `safs`，不要使用本地文件工具或本地 shell 直接操作远程路径。',
-    '开始远程任务时先运行 `safs bind`，保存返回的 bindingId，并在后续命令中持续传入 `--binding <bindingId>`。可运行 `safs --help` 或 `safs <子命令> --help` 查看准确语法。',
-    '需要切换工作区时，先用 `safs workspaces` 获取候选并询问用户；收到用户明确选择后，才运行候选的 `safs switch` 命令。切换成功后停止当前任务，等待用户发起新请求。',
-    '请记住这些规则并在后续 SAFS 远程任务中遵守。不要探测、安装或修改其他 Agent。完成后提醒我重启 Agent 并新建对话。'
-  ].join('\n');
+export function nativeCliUsagePrompt(): string {
+  return 'SAFS CLI 已安装。请先运行 `safs bind --agent "<你的 Agent 名称>"`，其他用法见 `safs --help`。';
 }
 
 /**

@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
-  nativeCliConnectionPath, nativeCliPlatform, nativeCliUsagePrompt, nativeMcpBridgeInstallPrompt,
+  nativeCliConnectionPath, nativeCliPlatform, nativeCliUsagePrompt,
   parseNativeCliVersion, removeNativeCli, withoutSafsPathBlock,
+  streamableHttpMcpInstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/native-cli';
 
@@ -17,12 +18,10 @@ test('parses only the stable native CLI version output', () => {
 });
 
 test('builds global CLI guidance for remote-only Agent operations', () => {
-  const prompt = nativeCliUsagePrompt('Codex', 'mac');
-  assert.match(prompt, /`safs` 已安装为全局命令/);
-  assert.match(prompt, /先运行 `safs bind`/);
-  assert.match(prompt, /--binding <bindingId>/);
-  assert.match(prompt, /不要使用本地文件工具或本地 shell/);
-  assert.match(prompt, /询问用户/);
+  const prompt = nativeCliUsagePrompt();
+  assert.match(prompt, /`safs bind --agent/);
+  assert.match(prompt, /`safs --help`/);
+  assert.equal(prompt.split('\n').length, 1);
   assert.equal(prompt.includes('token='), false);
 });
 
@@ -37,19 +36,16 @@ test('selects native binaries for desktop platforms and WSL', () => {
   assert.throws(() => nativeCliPlatform('linux', 'ia32'));
 });
 
-test('builds a manual stdio MCP bridge prompt without exposing the router token', () => {
-  const prompt = nativeMcpBridgeInstallPrompt(
-    '/Users/test/.local/bin/safs', 'Codex Test', 'mac'
+test('builds a Streamable HTTP MCP prompt with proxy failure guidance', () => {
+  const prompt = streamableHttpMcpInstallPrompt(
+    'http://127.0.0.1:9848/mcp?token=secret', 'Codex Test', 'mac'
   );
-  assert.match(prompt, /stdio/);
-  assert.match(prompt, /"\/Users\/test\/\.local\/bin\/safs"/);
-  assert.match(prompt, /\["mcp-bridge","--agent","Codex Test","--platform","mac"\]/);
-  assert.equal(prompt.includes('token='), false);
-  const wsl = nativeMcpBridgeInstallPrompt(
-    String.raw`\\wsl.localhost\Ubuntu\home\test\.local\bin\safs`, 'Claude', 'wsl'
-  );
-  assert.match(wsl, /command: "safs"/);
-  assert.equal(wsl.includes('wsl.localhost'), false);
+  assert.match(prompt, /Streamable HTTP/);
+  assert.match(prompt, /http:\/\/127\.0\.0\.1:9848\/mcp\?token=secret/);
+  assert.match(prompt, /规则模式/);
+  assert.match(prompt, /127\.0\.0\.1\/localhost\/::1/);
+  assert.match(prompt, /SAFS CLI 模式/);
+  assert.equal(prompt.split('\n').length, 2);
 });
 
 test('passes the Windows user PATH directory through the environment', () => {

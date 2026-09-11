@@ -196,12 +196,14 @@
       "safs": [
         {
           "id": "safs.mounts",
-          "name": "远程目录"
+          "name": "远程目录",
+          "icon": "resources/remote-ssh.svg"
         },
         {
           "id": "safs.agentActivity",
           "name": "Agent 活动",
-          "type": "webview"
+          "type": "webview",
+          "icon": "resources/agent-activity.svg"
         }
       ]
     },
@@ -538,7 +540,7 @@
           "enum": ["cli", "mcp"],
           "default": "mcp",
           "scope": "machine",
-          "description": "Agent entry point. mcp (default) installs a native stdio bridge that connects directly to the stable loopback router without using HTTP proxy settings; cli exposes the same native executable as the user-level `safs` command. Use the same value across windows, reload VS Code windows and restart Agents after changing it."
+          "description": "Agent entry point. mcp (default) uses the stable loopback-only Streamable HTTP router; cli exposes the native executable as the user-level `safs` command. If a global proxy intercepts loopback MCP traffic, use proxy rule mode with 127.0.0.1/localhost/::1 set to direct, or switch to cli. Use the same value across windows, reload VS Code windows and restart Agents after changing it."
         },
         "safs.agentMcpToolProfile": {
           "type": "string",
