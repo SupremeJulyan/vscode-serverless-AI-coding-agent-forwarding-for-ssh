@@ -4,26 +4,42 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  bundledNativeCli, ensureUnixCliPath, globalNativeCli, hybridAgentInstallPrompt,
-  installNativeCli,
-  nativeCliConnectionPath, nativeCliPlatform, nativeCliUsagePrompt,
+  bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
+  nativeCliConnectionPath, nativeCliPlatform, nativeCliUninstallPrompt, nativeCliUsagePrompt,
   parseNativeCliVersion, removeNativeCli, withoutSafsPathBlock,
-  streamableHttpMcpInstallPrompt,
+  streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/native-cli';
 
 test('parses only the stable native CLI version output', () => {
-  assert.equal(parseNativeCliVersion('safs 1.8.1\n'), '1.8.1');
+  assert.equal(parseNativeCliVersion('safs 1.8.2\n'), '1.8.2');
   assert.equal(parseNativeCliVersion('safs v2.0.0-beta.1\n'), '2.0.0-beta.1');
   assert.equal(parseNativeCliVersion('warning: version 1.8.0\n'), undefined);
 });
 
 test('builds global CLI guidance for remote-only Agent operations', () => {
   const prompt = nativeCliUsagePrompt();
+  assert.match(prompt, /user-level global persistent instructions/);
+  assert.match(prompt, /not in the current conversation or project instructions/);
+  assert.match(prompt, /do not append a duplicate block/);
+  assert.equal(prompt.match(/<!-- SAFS CLI BEGIN -->/gu)?.length, 2);
+  assert.equal(prompt.match(/<!-- SAFS CLI END -->/gu)?.length, 2);
   assert.match(prompt, /`safs bind --agent/);
+  assert.match(prompt, /reuse the returned `--binding`/);
   assert.match(prompt, /`safs --help`/);
-  assert.equal(prompt.split('\n').length, 1);
+  assert.match(prompt, /Use structured SAFS commands for every remote file operation/);
+  assert.match(prompt, /never use local filesystem tools or `safs exec`/);
+  assert.equal(prompt.includes('workspaceRoot'), false);
   assert.equal(prompt.includes('token='), false);
+  assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
+});
+
+test('builds a scoped prompt for removing persistent CLI rules', () => {
+  const prompt = nativeCliUninstallPrompt();
+  assert.match(prompt, /user-level global persistent instructions/);
+  assert.match(prompt, /Remove only that SAFS block/);
+  assert.match(prompt, /preserve every unrelated instruction/);
+  assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
 });
 
 test('selects native binaries for desktop platforms and WSL', () => {
@@ -39,25 +55,24 @@ test('selects native binaries for desktop platforms and WSL', () => {
 
 test('builds a Streamable HTTP MCP prompt with proxy failure guidance', () => {
   const prompt = streamableHttpMcpInstallPrompt(
-    'http://127.0.0.1:9848/mcp?token=secret', 'Codex Test', 'mac'
+    'http://127.0.0.1:9848/mcp?token=secret'
   );
   assert.match(prompt, /Streamable HTTP/);
   assert.match(prompt, /http:\/\/127\.0\.0\.1:9848\/mcp\?token=secret/);
-  assert.match(prompt, /规则模式/);
+  assert.match(prompt, /rule-based mode/);
   assert.match(prompt, /127\.0\.0\.1\/localhost\/::1/);
-  assert.match(prompt, /SAFS CLI 模式/);
+  assert.match(prompt, /SAFS to CLI mode/);
   assert.equal(prompt.split('\n').length, 2);
+  assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
 });
 
-test('builds a compact hybrid MCP and CLI installation prompt', () => {
-  const prompt = hybridAgentInstallPrompt(
-    'http://127.0.0.1:9848/mcp?token=secret'
-  );
-  assert.match(prompt, /用户级 Streamable HTTP MCP/);
-  assert.match(prompt, /MCP 仅用于绑定和切换工作区/);
-  assert.match(prompt, /全局 safs CLI/);
-  assert.match(prompt, /127\.0\.0\.1\/localhost\/::1/);
+test('builds an English MCP uninstall prompt without operational rules', () => {
+  const prompt = streamableHttpMcpUninstallPrompt();
+  assert.match(prompt, /Uninstall the user-level MCP server named "safs"/);
+  assert.match(prompt, /Remove only that MCP entry/);
   assert.equal(prompt.split('\n').length, 2);
+  assert.equal(prompt.includes('safs exec'), false);
+  assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
 });
 
 test('passes the Windows user PATH directory through the environment', () => {

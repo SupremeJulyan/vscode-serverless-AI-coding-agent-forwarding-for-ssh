@@ -8,6 +8,7 @@ const workspaceInstructions = [
   'SAFS tools operate on remote files, not the local host filesystem. Do not call SAFS tools for ordinary local workspaces. Use only for explicit SAFS tasks or known safs:// context.',
   'Relative paths use the bound workspace root. Use search to locate relevant files and bounded reads for evidence; batch independent selections with remote_read_many.',
   'Prefer remote_edit for small edits and remote_write for full replacements. When available, use structured delete/move/chmod tools for those changes.',
+  'The selected workspace root is a hard boundary for every mutation. Never use run_remote_command or shell redirection to bypass a file tool that rejected an outside-workspace path.',
   'Inspect truncation and per-item status. Continue reads with returned cursors/offsets; fetch command output with remote_output instead of rerunning commands. Binary/large transfers use transfer tools when enabled.',
   'Local shell may invoke the SAFS CLI transport only; never treat remote paths as local files.'
 ].join(' ');
@@ -26,6 +27,7 @@ export const hybridAgentMcpInstructions = [
   'Use get_remote_workspace to bind the current SAFS workspace.',
   'Use switch_remote_workspace only when the user chooses another workspace.',
   'After either tool returns a bindingId, run remote operations through the global safs CLI with --binding <bindingId>; use safs --help for command syntax.',
+  'Use structured safs CLI commands for every remote file operation, including reading, listing, searching, writing, editing, moving, deleting, changing permissions, uploading, and downloading. Never perform file operations through safs exec; reserve safs exec for task commands such as builds and tests.',
   'A successful switch cancels the previous task, so stop and wait for a new user request.'
 ].join(' ');
 
@@ -233,8 +235,8 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
       name: 'run_remote_command',
       title: 'Run a remote SSH command',
       description: routed
-        ? 'Runs a command on the bound SSH host. The default working directory is the current VS Code workspace root. This is not a filesystem sandbox: the command has all permissions of the configured SSH account; prefer structured file tools for workspace changes.'
-        : 'Runs a shell command on the selected SSH host. The default working directory is the current VS Code workspace root. This is not a filesystem sandbox: the command has all permissions of the configured SSH account; prefer structured file tools for workspace changes.',
+        ? 'Runs a command on the bound SSH host. The default working directory is the current VS Code workspace root. Explicit working directories and common shell write targets outside workspaceRoot are rejected, but this is not a general-purpose filesystem sandbox. Prefer structured file tools for workspace changes.'
+        : 'Runs a shell command on the selected SSH host. The default working directory is the current VS Code workspace root. Explicit working directories and common shell write targets outside workspaceRoot are rejected, but this is not a general-purpose filesystem sandbox. Prefer structured file tools for workspace changes.',
       inputSchema: {
         ...binding, command: z.string().min(1), remoteCwd: z.string().optional()
       },

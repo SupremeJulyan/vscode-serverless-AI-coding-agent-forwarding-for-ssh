@@ -1,8 +1,9 @@
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
-  ensureUnixCliPath, globalNativeCli, hybridAgentInstallPrompt, installNativeCli,
-  nativeCliConnectionPath, nativeCliPlatform, nativeCliUsagePrompt, parseNativeCliVersion,
-  streamableHttpMcpInstallPrompt, windowsUserPathUpdatePlan
+  ensureUnixCliPath, globalNativeCli, installNativeCli,
+  nativeCliConnectionPath, nativeCliPlatform, nativeCliUninstallPrompt, nativeCliUsagePrompt,
+  parseNativeCliVersion,
+  streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt, windowsUserPathUpdatePlan
 } from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
@@ -82,6 +83,7 @@ import { shellQuote } from './shell-quote';
 import {
   evaluateMcpCommandPolicy, readMcpCommandPolicySettings
 } from './mcp-command-policy';
+import { remoteCommandBoundaryViolation } from './remote-command-boundary';
 import {
   cleanTerminalDiagnostic, decodeTerminalDiagnostic, nextAutoReconnectAttempt,
   shouldRecoverTerminalExit, terminalDiagnosticPlan
@@ -2246,20 +2248,6 @@ function forwardedWindowMountName(
   return windowBoundMountName(boundMountName, requested);
 }
 
-function toolPath(folder: RemoteFolder, value = '.'): string {
-  // Relative tool paths resolve against the current remote directory
-  // (kept in sync by SAFS: 切换远程目录), while still being validated
-  // against the mount root.
-  const base = currentWorkspacePath(folder);
-  const resolved = value.startsWith('/')
-    ? path.posix.normalize(value)
-    : path.posix.resolve(base, value);
-  if (!isRemotePathInsideRoot(folder.remoteRoot, resolved)) {
-    throw new Error(`路径超出远程工作区：${value}`);
-  }
-  return resolved;
-}
-
 /** Resolve an Agent file-transfer path without allowing it to leave this window's workspace. */
 function transferRemotePath(folder: RemoteFolder, value: string): string {
   const workspaceRoot = currentWorkspacePath(folder);
@@ -2562,10 +2550,19 @@ async function executeRemoteCommand(
 ): Promise<Record<string, unknown>> {
   if (!input.command?.trim()) throw new Error('Remote command must not be empty.');
   const { mount, folder } = await mountAndFolder(input.mountName);
-  const requestedCwd = toolPath(folder, input.remoteCwd);
-  const remoteCwd = await (await pool.get(mount.host)).realpath(requestedCwd);
-  if (!isRemotePathInsideRoot(folder.remoteRoot, remoteCwd)) {
-    throw new Error(`远程工作目录通过符号链接超出工作区：${requestedCwd}`);
+  const workspaceRoot = currentWorkspacePath(folder);
+  const requestedCwd = input.remoteCwd?.startsWith('/')
+    ? path.posix.normalize(input.remoteCwd)
+    : path.posix.resolve(workspaceRoot, input.remoteCwd ?? '.');
+  if (!isRemotePathInsideRoot(workspaceRoot, requestedCwd)) {
+    throw new Error(`远程工作目录超出当前工作区：${input.remoteCwd}`);
+  }
+  const session = await pool.get(mount.host);
+  const [realWorkspaceRoot, remoteCwd] = await Promise.all([
+    session.realpath(workspaceRoot), session.realpath(requestedCwd)
+  ]);
+  if (!isRemotePathInsideRoot(realWorkspaceRoot, remoteCwd)) {
+    throw new Error(`远程工作目录通过符号链接超出当前工作区：${requestedCwd}`);
   }
   // 命令输出上限：Agent 上下文 token 保护。超限截断并标记 truncated: true，
   // 避免单次 head/cat/grep 把几十万 token 灌进会话。
@@ -2592,6 +2589,20 @@ async function executeRemoteCommand(
     remoteCwd,
     command: input.command
   }).catch(logFailure);
+  const boundaryViolation = remoteCommandBoundaryViolation(
+    input.command, workspaceRoot, requestedCwd
+  );
+  if (boundaryViolation) {
+    const target = redactSensitiveText(boundaryViolation.target);
+    bridgeOutput?.appendLine(
+      `[工作区边界拦截] 拒绝远程命令：${policy.redactedCommand}（目标：${target}）`
+    );
+    throw new Error(
+      boundaryViolation.kind === 'working-directory'
+        ? `远程命令不能把工作目录切换到当前工作区之外：${target}`
+        : `远程命令不能写入当前工作区之外：${target}；请使用 SAFS 结构化文件命令，不能通过 safs exec 绕过工作区边界。`
+    );
+  }
   if (!policy.allowed) {
     bridgeOutput?.appendLine(
       `[高危指令拦截] 拒绝执行：${policy.redactedCommand}（规则：${policy.matched}）`
@@ -3865,7 +3876,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   ): Promise<{ agentName: string; platform: AgentPlatformLabel } | undefined> => {
     const agentName = await vscode.window.showInputBox({
       title,
-      prompt: '请输入使用 SAFS 转发的 Agent 名（仅用于活动显示和诊断）',
+      prompt: '请输入使用 SAFS 转发的 Agent 名（已安装直接按 Esc 跳过）',
       placeHolder: '例如：Codex、Claude、MyAgent',
       ignoreFocusOut: true,
       validateInput: (value) => !value.trim()
@@ -3916,7 +3927,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (agentInterface() === 'cli') {
       await vscode.env.clipboard.writeText(nativeCliUsagePrompt());
       void vscode.window.showInformationMessage(
-        'SAFS：CLI 提示词已复制，请粘贴到 Agent。'
+        'SAFS：CLI 规则安装提示已复制，请粘贴到 Agent。'
       );
       return;
     }
@@ -3924,22 +3935,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await askAgentNameAndPlatform('SAFS：为我的Agent安装转发功能');
     if (!answer) return;
     const url = agentTaggedMcpUrl(router.url, answer.agentName, answer.platform);
-    const promptText = hybridMode()
-      ? hybridAgentInstallPrompt(url)
-      : streamableHttpMcpInstallPrompt(url, answer.agentName, answer.platform);
+    const promptText = streamableHttpMcpInstallPrompt(url);
     await vscode.env.clipboard.writeText(promptText);
     void vscode.window.showInformationMessage(
       'SAFS：安装提示词已复制，请粘贴到 Agent。'
     );
   });
   command('uninstallAgentForwarding', async () => {
+    if (agentInterface() === 'cli') {
+      await vscode.env.clipboard.writeText(nativeCliUninstallPrompt());
+      void vscode.window.showInformationMessage(
+        'SAFS：CLI 规则卸载提示已复制，请粘贴到 Agent。'
+      );
+      return;
+    }
     const answer = await askAgentNameAndPlatform('SAFS：为我的Agent卸载转发功能');
     if (!answer) return;
     // 与安装对称：复制一段提示词让 Agent 自己删除名为 safs 的用户级 MCP。
-    const promptText = [
-      '请卸载你之前安装的名为 safs 的用户级 MCP 服务器，只删除该条目，不要改动其他配置或其他 Agent。',
-      '完成后告诉我已删除，然后重启并新建对话确认不再加载 SAFS 工具。'
-    ].join('\n');
+    const promptText = streamableHttpMcpUninstallPrompt();
     await vscode.env.clipboard.writeText(promptText);
     void vscode.window.showInformationMessage(
       'SAFS：卸载提示词已复制，请粘贴到 Agent。'

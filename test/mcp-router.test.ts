@@ -131,7 +131,10 @@ test('hybrid mode exposes two MCP tools and reuses their binding through CLI', a
     await router.start();
     const mcpUrl = new URL(agentTaggedMcpUrl(router.url, 'Codex', 'linux'));
     await client.connect(new StreamableHTTPClientTransport(mcpUrl));
-    assert.match(client.getInstructions() ?? '', /global safs CLI/);
+    const instructions = client.getInstructions() ?? '';
+    assert.match(instructions, /global safs CLI/);
+    assert.match(instructions, /Never perform file operations through safs exec/);
+    assert.equal(instructions.includes('workspaceRoot'), false);
     assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), [
       'get_remote_workspace', 'switch_remote_workspace'
     ]);

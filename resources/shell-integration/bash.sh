@@ -1,15 +1,19 @@
 # SAFS session-only shell integration for Bash.
-# Loaded with --init-file; it emulates login startup before installing hooks.
+# Loaded with --init-file; interactive sessions emulate login startup before
+# installing hooks. Non-interactive sourcing is kept isolated for validation
+# and must not import host-specific PROMPT_COMMAND hooks.
 
-if [[ -r /etc/profile ]]; then
-  . /etc/profile
-fi
-if [[ -r ~/.bash_profile ]]; then
-  . ~/.bash_profile
-elif [[ -r ~/.bash_login ]]; then
-  . ~/.bash_login
-elif [[ -r ~/.profile ]]; then
-  . ~/.profile
+if [[ $- == *i* ]]; then
+  if [[ -r /etc/profile ]]; then
+    . /etc/profile
+  fi
+  if [[ -r ~/.bash_profile ]]; then
+    . ~/.bash_profile
+  elif [[ -r ~/.bash_login ]]; then
+    . ~/.bash_login
+  elif [[ -r ~/.profile ]]; then
+    . ~/.profile
+  fi
 fi
 
 __safs_escape_value() {

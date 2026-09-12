@@ -47,24 +47,32 @@ export function nativeCliConnectionPath(executable: string): string {
   return path.join(path.dirname(executable), '.safs-connection.json');
 }
 
-export function streamableHttpMcpInstallPrompt(
-  url: string, _agentName: string, _platform: 'wsl' | 'mac' | 'linux' | 'win'
-): string {
+export function streamableHttpMcpInstallPrompt(url: string): string {
   return [
-    `请安装名为 safs 的用户级 Streamable HTTP MCP：${url}`,
-    '完成后提醒我重启 Agent。若出现 HTTP 502 或连接超时，请提示我让代理规则模式直连 127.0.0.1/localhost/::1，或切换 SAFS CLI 模式。'
-  ].join('\n');
-}
-
-export function hybridAgentInstallPrompt(url: string): string {
-  return [
-    `请安装名为 safs 的用户级 Streamable HTTP MCP：${url}`,
-    '这是 SAFS 混合模式：MCP 仅用于绑定和切换工作区，其他操作使用已安装的全局 safs CLI。完成后请重启 Agent；代理异常时让 127.0.0.1/localhost/::1 直连。'
+    `Install a user-level Streamable HTTP MCP server named "safs" with this URL: ${url}`,
+    'After installation, tell me to restart the Agent. If it returns HTTP 502 or times out, tell me to switch the proxy to rule-based mode and bypass 127.0.0.1/localhost/::1, or switch SAFS to CLI mode.'
   ].join('\n');
 }
 
 export function nativeCliUsagePrompt(): string {
-  return 'SAFS CLI 已安装。请先运行 `safs bind --agent "<你的 Agent 名称>"`，其他用法见 `safs --help`。';
+  return [
+    'Create or replace exactly one block delimited by `<!-- SAFS CLI BEGIN -->` and `<!-- SAFS CLI END -->` in your user-level global persistent instructions, not in the current conversation or project instructions. Preserve every unrelated instruction and do not append a duplicate block. If you do not support user-level global persistent instructions, tell me explicitly.',
+    '<!-- SAFS CLI BEGIN -->',
+    'For tasks where the user explicitly asks to use SAFS for a remote environment: `safs` is an installed global CLI. Start by running `safs bind --agent "<your Agent name>"`, reuse the returned `--binding` in every later command, and consult `safs --help` for syntax. Use structured SAFS commands for every remote file operation; never use local filesystem tools or `safs exec` to read, list, search, write, edit, move, delete, change permissions, upload, or download remote files. Reserve `safs exec` for task commands such as builds and tests.',
+    '<!-- SAFS CLI END -->',
+    'When finished, tell me where you saved the block.'
+  ].join('\n');
+}
+
+export function nativeCliUninstallPrompt(): string {
+  return 'Remove the single block delimited by `<!-- SAFS CLI BEGIN -->` and `<!-- SAFS CLI END -->` from your user-level global persistent instructions. Remove only that SAFS block, preserve every unrelated instruction, and tell me which file or setting you changed. If the block does not exist, tell me without changing anything else.';
+}
+
+export function streamableHttpMcpUninstallPrompt(): string {
+  return [
+    'Uninstall the user-level MCP server named "safs" that you previously installed. Remove only that MCP entry and do not change any other configuration or Agent.',
+    'When finished, tell me it was removed, then tell me to restart the Agent and start a new conversation to confirm that SAFS tools are no longer loaded.'
+  ].join('\n');
 }
 
 /**

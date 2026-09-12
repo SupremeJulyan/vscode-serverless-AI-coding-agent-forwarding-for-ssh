@@ -85,7 +85,7 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     await writeCliConnection(temporary, cliUrl.toString());
     const version = await executeCaptured({ command: executable, args: ['--version'] });
     assert.equal(version.exitCode, 0, version.stderr);
-    assert.equal(version.stdout.trim(), 'safs 1.8.1');
+    assert.equal(version.stdout.trim(), 'safs 1.8.2');
     const help = await executeCaptured({ command: executable, args: ['edit', '--help'] });
     assert.equal(help.exitCode, 0, help.stderr);
     assert.match(help.stdout, /^Usage: safs edit /);

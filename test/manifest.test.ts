@@ -32,7 +32,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.8.1');
+  assert.equal(manifest.version, '1.8.2');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -309,12 +309,12 @@ test('declares both the install and uninstall forwarding commands', async () => 
   assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
   assert.ok(extensionSource.includes('卸载提示词'));
   assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
-  assert.ok(extensionSource.includes('hybridAgentInstallPrompt'));
+  assert.equal(extensionSource.includes('hybridAgentInstallPrompt'), false);
   assert.ok(extensionSource.includes('agentInterfaceHybridMigrationV1'));
   assert.ok(extensionSource.includes('vscode.ConfigurationTarget.Global'));
   const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
-  assert.ok(nativeCliSource.includes('用户级 Streamable HTTP MCP'));
-  assert.ok(nativeCliSource.includes('代理规则模式直连'));
+  assert.ok(nativeCliSource.includes('user-level Streamable HTTP MCP'));
+  assert.ok(nativeCliSource.includes('switch the proxy to rule-based mode'));
 });
 
 test('runs CLI cleanup after the extension is completely uninstalled', async () => {
