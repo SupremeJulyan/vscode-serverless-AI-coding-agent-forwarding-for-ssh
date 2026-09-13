@@ -298,21 +298,19 @@ test('uses only the unified cross-platform config path', async () => {
   assert.deepEqual(matches, ['**/.safs/config.json']);
 });
 
-test('shows the install prompt only after enabling a parent mount', async () => {
+test('shows the install prompt only after enabling a parent mount or an explicit command', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
   const install = commands.find((item) => item.command === 'safs.installAgentForwarding');
   const uninstall = commands.find((item) => item.command === 'safs.uninstallAgentForwarding');
-  assert.equal(install, undefined);
+  assert.equal(install?.title, 'SAFS: 为我的Agent安装转发功能');
   assert.equal(uninstall?.title, 'SAFS: 为我的Agent卸载转发功能');
-  assert.equal(
-    manifest.activationEvents?.includes('onCommand:safs.installAgentForwarding'), false
-  );
+  assert.ok(manifest.activationEvents?.includes('onCommand:safs.installAgentForwarding'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.uninstallAgentForwarding'));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.equal(extensionSource.includes("command('installAgentForwarding'"), false);
+  assert.ok(extensionSource.includes("command('installAgentForwarding'"));
   assert.equal(extensionSource.includes('.installAgentForwarding`'), false);
   assert.ok(extensionSource.includes('await copyAgentForwardingInstallPrompt(vscodeContext)'));
   assert.ok(extensionSource.includes('if (!changed) return'));

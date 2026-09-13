@@ -3976,6 +3976,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       'SAFS：URL 已复制；代理异常请用规则模式或 CLI。'
     );
   });
+  command('installAgentForwarding', async () => {
+    // This explicit command is the only installation-prompt entry other than
+    // a parent mount's disabled -> enabled transition. It runs only in the
+    // window where the user invokes it; startup and configuration listeners
+    // prepare transports silently.
+    startAgentHttpRouterLeadership(context);
+    const result = await configureAgentInterface(context);
+    if (result.cliExecutable) {
+      bridgeOutput?.info(`[Agent CLI] 安装完成：${result.cliExecutable}`);
+    }
+    await copyAgentForwardingInstallPrompt(context);
+  });
   command('uninstallAgentForwarding', async () => {
     if (agentInterface() === 'cli') {
       await vscode.env.clipboard.writeText(nativeCliUninstallPrompt());

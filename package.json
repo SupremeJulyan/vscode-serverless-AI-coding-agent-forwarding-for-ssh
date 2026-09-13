@@ -49,6 +49,7 @@
     "onCommand:safs.openConfig",
     "onCommand:safs.addSshConfig",
     "onCommand:safs.copyStreamableHttpUrl",
+    "onCommand:safs.installAgentForwarding",
     "onCommand:safs.uninstallAgentForwarding",
     "onCommand:safs.openHistoryItem",
     "onCommand:safs.enableHistorySync",
@@ -93,6 +94,10 @@
       {
         "command": "safs.copyStreamableHttpUrl",
         "title": "SAFS: 复制 Streamable HTTP URL"
+      },
+      {
+        "command": "safs.installAgentForwarding",
+        "title": "SAFS: 为我的Agent安装转发功能"
       },
       {
         "command": "safs.uninstallAgentForwarding",
