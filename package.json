@@ -542,10 +542,10 @@
         },
         "safs.agentInterface": {
           "type": "string",
-          "enum": ["hybrid", "mcp", "cli"],
+          "enum": ["mcp", "hybrid", "cli"],
           "enumDescriptions": [
-            "Hybrid: MCP exposes only workspace bind/switch tools; remote operations use the global SAFS CLI with the returned bindingId.",
             "MCP (default): exposes the MCP tool profile selected below without installing the global CLI.",
+            "Hybrid: MCP exposes only workspace bind/switch tools; remote operations use the global SAFS CLI with the returned bindingId.",
             "CLI only: exposes the global SAFS CLI without installing MCP."
           ],
           "default": "mcp",

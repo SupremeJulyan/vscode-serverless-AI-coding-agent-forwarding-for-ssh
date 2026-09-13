@@ -58,6 +58,8 @@ You can then browse, open, save, create, rename, and delete files just as you wo
 
 The remote terminal opens in the directory of the active file by default, or at the workspace root when there is no active file. Ctrl+click a file path in the terminal to open it directly; use Cmd+click on macOS.
 
+The first time you open the configured remote home from a parent connection node, SAFS shows the two platform-specific shortcuts for opening a remote folder and terminal. It does not repeat this hint later.
+
 ### 3. Let an Agent operate the remote workspace
 
 MCP is the default mode:

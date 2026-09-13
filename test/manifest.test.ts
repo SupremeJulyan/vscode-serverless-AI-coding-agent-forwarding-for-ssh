@@ -47,7 +47,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
   assert.deepEqual(
     manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.enum,
-    ['hybrid', 'mcp', 'cli']
+    ['mcp', 'hybrid', 'cli']
   );
 });
 
@@ -111,6 +111,9 @@ test('uses distinct conflict-resistant shortcuts on each desktop platform', asyn
     mac: 'cmd+ctrl+t',
     command: 'safs.openTerminal'
   });
+  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  assert.ok(extensionSource.includes('showRemoteShortcutHintOnce(vscodeContext)'));
+  assert.ok(extensionSource.includes("platformStateKey('remoteShortcutHintV1')"));
 });
 
 test('shows separate Agent forwarding actions for enabled and disabled mounts', async () => {

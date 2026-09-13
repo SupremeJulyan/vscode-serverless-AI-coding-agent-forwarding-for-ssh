@@ -79,6 +79,7 @@ import {
 } from './mcp-command-policy';
 import { remoteCommandBoundaryViolation } from './remote-command-boundary';
 import { proxyEnvironmentWarning } from './proxy-environment';
+import { remoteShortcutKeys } from './shortcut-hint';
 import {
   cleanTerminalDiagnostic, decodeTerminalDiagnostic, nextAutoReconnectAttempt,
   shouldRecoverTerminalExit, terminalDiagnosticPlan
@@ -102,6 +103,7 @@ const directoryHistoryKey = platformStateKey('directoryHistory');
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
 const proxyEnvironmentCheckKey = platformStateKey('proxyEnvironmentCheckV1');
+const remoteShortcutHintKey = platformStateKey('remoteShortcutHintV1');
 const aiForwardUpdates = new Map<string, Promise<void>>();
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
@@ -809,6 +811,16 @@ function localRootForFolder(folder: RemoteFolder): string {
   return vscode.Uri.from({ scheme: 'file', path: folder.workspaceRoot }).fsPath;
 }
 
+async function showRemoteShortcutHintOnce(context: vscode.ExtensionContext): Promise<void> {
+  if (context.globalState.get<boolean>(remoteShortcutHintKey, false)) return;
+  await context.globalState.update(remoteShortcutHintKey, true);
+  const shortcuts = remoteShortcutKeys(platformAdapter.kind);
+  await vscode.window.showInformationMessage(
+    `SAFS：下次可使用 ${shortcuts.openFolder} / ${shortcuts.openTerminal} 打开远程目录 / 终端。`,
+    { modal: true }
+  );
+}
+
 async function openDirectoryItem(requested: MountConfig): Promise<void> {
   const forwarding = vscodeContext.globalState
     .get<string[]>(aiForwardMountsKey, []).includes(requested.name);
@@ -817,22 +829,22 @@ async function openDirectoryItem(requested: MountConfig): Promise<void> {
     startAgentHttpRouterLeadership(vscodeContext);
     await ensureAgentHttpRouter(vscodeContext);
   }
-  await vscode.window.withProgress({
+  const folder = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: 'SAFS：正在连接远程目录',
     cancellable: false
   }, async (progress) => {
     progress.report({ message: '正在验证远程目录…' });
-    const folder = await ensureFolder(requested);
-    const remoteDirectory = folder.remoteRoot;
-    agentTrace('Open', `创建新窗口，workspace=${folderUri(folder, remoteDirectory)}`);
-    progress.report({ message: '正在打开工作区…' });
-    await vscode.commands.executeCommand(
-      'vscode.openFolder',
-      vscode.Uri.parse(folderUri(folder, remoteDirectory)),
-      true
-    );
+    return ensureFolder(requested);
   });
+  const remoteDirectory = folder.remoteRoot;
+  await showRemoteShortcutHintOnce(vscodeContext);
+  agentTrace('Open', `创建新窗口，workspace=${folderUri(folder, remoteDirectory)}`);
+  await vscode.commands.executeCommand(
+    'vscode.openFolder',
+    vscode.Uri.parse(folderUri(folder, remoteDirectory)),
+    true
+  );
 }
 
 async function openRemoteDirectory(): Promise<void> {
