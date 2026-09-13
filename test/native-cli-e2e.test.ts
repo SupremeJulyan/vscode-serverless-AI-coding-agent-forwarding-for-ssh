@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 import test from 'node:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
@@ -85,13 +85,16 @@ test('native CLI binds and executes through the existing SAFS router', async () 
   const executable = bundledNativeCli(
     process.cwd(), nativeCliPlatform(process.platform, process.arch)
   );
+  const extensionVersion = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ).version as string;
   try {
     const cliUrl = new URL(router.url);
     cliUrl.searchParams.set('source', 'cli');
     await writeCliConnection(temporary, cliUrl.toString());
     const version = await executeCaptured({ command: executable, args: ['--version'] });
     assert.equal(version.exitCode, 0, version.stderr);
-    assert.equal(version.stdout.trim(), 'safs 1.8.2');
+    assert.equal(version.stdout.trim(), `safs ${extensionVersion}`);
     const help = await executeCaptured({ command: executable, args: ['edit', '--help'] });
     assert.equal(help.exitCode, 0, help.stderr);
     assert.match(help.stdout, /^Usage: safs edit /);
