@@ -3525,7 +3525,7 @@ async function askAgentNameAndPlatform(
 ): Promise<{ agentName: string; platform: AgentPlatformLabel } | undefined> {
   const agentName = await vscode.window.showInputBox({
     title,
-    prompt: '请输入使用 SAFS 转发的 Agent 名',
+    prompt: '请输入使用 SAFS 转发的 Agent 名 （已安装按Esc跳过）',
     placeHolder: '例如：Codex、Claude、MyAgent',
     ignoreFocusOut: true,
     validateInput: (value) => !value.trim()
