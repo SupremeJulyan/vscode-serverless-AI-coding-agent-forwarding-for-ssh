@@ -18,6 +18,10 @@ const shellProbeMaxLength = 4096;
 let integrationBundlePath: string | undefined;
 let scriptsPromise: Promise<RemoteShellIntegrationScripts> | undefined;
 
+function normalizeShellScript(value: string): string {
+  return value.replace(/\r\n?/gu, '\n');
+}
+
 export function setRemoteShellIntegrationBundlePath(value: string): void {
   integrationBundlePath = value;
   scriptsPromise = undefined;
@@ -34,7 +38,11 @@ export function loadRemoteShellIntegrationScripts(): Promise<RemoteShellIntegrat
     readFile(path.join(integrationBundlePath, 'zsh-profile.zsh'), 'utf8'),
     readFile(path.join(integrationBundlePath, 'zsh-rc.zsh'), 'utf8')
   ]).then(([bash, fish, zshEnv, zshProfile, zshRc]) => ({
-    bash, fish, zshEnv, zshProfile, zshRc
+    bash: normalizeShellScript(bash),
+    fish: normalizeShellScript(fish),
+    zshEnv: normalizeShellScript(zshEnv),
+    zshProfile: normalizeShellScript(zshProfile),
+    zshRc: normalizeShellScript(zshRc)
   }));
   return scriptsPromise;
 }

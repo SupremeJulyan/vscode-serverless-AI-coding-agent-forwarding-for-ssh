@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { keyboardInteractivePasswordReplies } from '../src/authentication';
 import {
-  decodeShellIntegrationValue, normalizeRemoteShellPath, RemoteCwdOscTracker,
-  remoteIntegratedLoginCommand, remoteShellKind, remoteShellProbeCommand,
-  RemoteShellIntegrationScripts
+  decodeShellIntegrationValue, loadRemoteShellIntegrationScripts, normalizeRemoteShellPath,
+  RemoteCwdOscTracker, remoteIntegratedLoginCommand, remoteShellKind, remoteShellProbeCommand,
+  RemoteShellIntegrationScripts, setRemoteShellIntegrationBundlePath
 } from '../src/remote-shell-integration';
 import { ssh2RemoteCommand } from '../src/ssh-command';
 
@@ -54,6 +57,26 @@ test('builds a file-descriptor-only Bash integration login', () => {
   assert.match(command, /SAFS_BASH_0123456789abcdef01234567/u);
   assert.match(command, /# bash integration/u);
   assert.doesNotMatch(command, /mktemp|cat >/u);
+});
+
+test('normalizes CRLF shell integration scripts before fd injection', async () => {
+  const directory = join(tmpdir(), `safs-shell-integration-${Date.now()}`);
+  await mkdir(directory);
+  await Promise.all([
+    writeFile(join(directory, 'bash.sh'), 'if true; then\r\n  :\r\nelif true; then\r\n  :\r\nfi\r\n'),
+    writeFile(join(directory, 'fish.fish'), 'set value 1\r\n'),
+    writeFile(join(directory, 'zsh-env.zsh'), 'typeset value=1\r\n'),
+    writeFile(join(directory, 'zsh-profile.zsh'), 'typeset value=1\r\n'),
+    writeFile(join(directory, 'zsh-rc.zsh'), 'typeset value=1\r\n')
+  ]);
+
+  setRemoteShellIntegrationBundlePath(directory);
+  const loaded = await loadRemoteShellIntegrationScripts();
+  const command = remoteIntegratedLoginCommand('/bin/bash', undefined, loaded, sessionId);
+
+  assert.doesNotMatch(loaded.bash, /\r/u);
+  assert.doesNotMatch(command, /\r/u);
+  assert.match(command, /elif true; then\n/u);
 });
 
 test('builds Fish fd injection and private self-cleaning Zsh startup files', () => {

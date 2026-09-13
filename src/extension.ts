@@ -129,6 +129,7 @@ let httpRouterStart: Promise<AgentHttpRouter> | undefined;
 /** 每个目标 CLI 在本次 Extension Host 生命周期只做一次真实版本检查。 */
 const cliVersionChecks = new Map<string, Promise<void>>();
 let agentHttpRouterHeartbeat: NodeJS.Timeout | undefined;
+let agentHttpRouterSettingsPromptShown = false;
 let vscodeContext: vscode.ExtensionContext;
 let pool: SftpConnectionPool;
 let registry: RemoteFolderRegistry;
@@ -3148,8 +3149,35 @@ function startAgentHttpRouterLeadership(context: vscode.ExtensionContext): void 
     lastLog = message;
     bridgeOutput?.appendLine(`[Agent HTTP Router] ${message}`);
   };
+  const promptSettingsOnce = (error: unknown, message: string) => {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    const permissionDenied = code === 'EACCES' || code === 'EPERM';
+    if (agentHttpRouterSettingsPromptShown
+      || (!permissionDenied && !message.includes('safs.agentHttpRouterPort'))) {
+      return;
+    }
+    agentHttpRouterSettingsPromptShown = true;
+    const detail = permissionDenied
+      ? `${message}\n请将 safs.agentHttpRouterPort 改为其他可用端口，然后重新加载 VS Code 窗口。`
+      : message;
+    void vscode.window.showErrorMessage(
+      'SAFS 无法启动 HTTP MCP 路由器',
+      { modal: true, detail },
+      '打开端口设置'
+    ).then((selected) => {
+      if (selected === '打开端口设置') {
+        return vscode.commands.executeCommand(
+          'workbench.action.openSettings',
+          '@id:safs.agentHttpRouterPort'
+        );
+      }
+      return undefined;
+    });
+  };
   const retry = () => void ensureAgentHttpRouter(context).catch((error) => {
-    logOnce(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    logOnce(message);
+    promptSettingsOnce(error, message);
   });
   retry();
   agentHttpRouterHeartbeat = setInterval(retry, 4_000 + Math.floor(Math.random() * 1_000));
