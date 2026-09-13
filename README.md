@@ -6,6 +6,8 @@
 
 SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SSH 使用远程终端；服务器无需安装 VS Code Server。启用 Agent 转发后，Copilot、Codex、Claude Code 等 Agent 也能在当前远程工作区读写文件、搜索代码和执行命令。
 
+![启动 Agent 转发](images/start-agent-forwarding.gif)
+
 ![SAFS 完整界面](https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main/images/safs-interface.png)
 
 ## 适用场景
