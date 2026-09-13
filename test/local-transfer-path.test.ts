@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import test from 'node:test';
+import { symlinkOrSkip } from './symlink-helper';
 import {
   isLocalPathInside, validateLocalDownloadTarget, validateLocalUploadSource
 } from '../src/local-transfer-path';
@@ -24,7 +25,7 @@ test('local transfer paths stay inside the automatic Agent staging root', async 
   await assert.rejects(validateLocalDownloadTarget(root, path.join(outside, 'target')));
 });
 
-test('local transfer validation rejects symlink escapes', async () => {
+test('local transfer validation rejects symlink escapes', async (t) => {
   const base = await mkdtemp(path.join(os.tmpdir(), 'safs-local-transfer-link-'));
   const root = path.join(base, 'agent-cwd');
   const outside = path.join(base, 'outside');
@@ -34,7 +35,7 @@ test('local transfer validation rejects symlink escapes', async () => {
   const fileLink = path.join(root, 'source-link');
   const dirLink = path.join(root, 'target-link');
   const danglingLink = path.join(root, 'dangling-link');
-  await symlink(outsideFile, fileLink);
+  if (!await symlinkOrSkip(t, outsideFile, fileLink)) return;
   await symlink(outside, dirLink, 'dir');
   await symlink(path.join(outside, 'missing'), danglingLink);
   await assert.rejects(validateLocalUploadSource(root, fileLink), /symbolic link|outside/);

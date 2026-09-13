@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, statSync } from 'node:fs';
-import { readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { symlinkOrSkip } from './symlink-helper';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
@@ -107,7 +108,7 @@ test('appendKnownHostsFile writes standard known_hosts lines idempotently with 0
   assert.equal(content.split(/\r?\n/).filter((line) => line.trim()).length, 2);
   assert.ok(content.includes(lineFor(host, 'ssh-ed25519', blobA)));
   assert.ok(content.includes(lineFor(host, 'ssh-rsa', blobB)));
-  assert.equal((statSync(file).mode & 0o777), 0o600);
+  if (process.platform !== 'win32') assert.equal((statSync(file).mode & 0o777), 0o600);
 });
 
 test('concurrent known_hosts updates preserve every writer and leave no lock artifacts', async () => {
@@ -125,11 +126,11 @@ test('concurrent known_hosts updates preserve every writer and leave no lock art
   assert.deepEqual((await readdir(dir)).sort(), ['known_hosts']);
 });
 
-test('atomic known_hosts writes replace a symlink without modifying its target', async () => {
+test('atomic known_hosts writes replace a symlink without modifying its target', async (t) => {
   const { file, dir } = tempKnownHosts();
   const target = path.join(dir, 'do-not-modify');
   await writeFile(target, 'original\n');
-  await symlink(target, file);
+  if (!await symlinkOrSkip(t, target, file)) return;
 
   await appendKnownHostsFile(file, [{
     host: hostEntryName(hostAt(22)), type: 'ssh-ed25519', blob: blobA
@@ -187,7 +188,7 @@ test('replaceKnownHostsForHost removes stale keys but preserves other hosts', as
   assert.ok(content.includes(lineFor(hostA, 'ssh-ed25519', blobC)));
   assert.ok(!content.includes(lineFor(hostA, 'ssh-ed25519', blobA)));
   assert.ok(!content.includes(lineFor(hostA, 'ssh-rsa', blobB)));
-  assert.equal((statSync(file).mode & 0o777), 0o600);
+  if (process.platform !== 'win32') assert.equal((statSync(file).mode & 0o777), 0o600);
 });
 
 test('replaceKnownHostsForHost migrates legacy bracketed IPv6 at port 22', async () => {

@@ -32,7 +32,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.8.3');
+  assert.equal(manifest.version, '1.8.4');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -269,7 +269,7 @@ test('shows when this window is the Agent forwarding focus', async () => {
   // 服务器无 SFTP 子系统回退 SCP/exec 时，入口显示为 SAFS SCP 并即时刷新。
   assert.ok(extensionSource.includes('refreshSafsEntryLabel()'));
   // 连接状态变化事件即时刷新入口文案（重连换通道、空闲回收后懒重连）。
-  assert.ok(extensionSource.includes('refreshTree();\n      refreshSafsEntryLabel()'));
+  assert.match(extensionSource, /refreshTree\(\);\r?\n      refreshSafsEntryLabel\(\)/);
 });
 
 test('uses only the unified cross-platform config path', async () => {
@@ -331,7 +331,7 @@ test('shows the install prompt only after enabling a parent mount or an explicit
   assert.equal(extensionSource.includes('agentInterfaceHybridMigrationV1'), false);
   assert.equal(extensionSource.includes('legacyAgentInterfaceMigrationTarget'), false);
   assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
-  assert.ok(extensionSource.includes('NO_PROXY 环境变量绕过 localhost'));
+  assert.ok(extensionSource.includes('检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。'));
   const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
   assert.ok(nativeCliSource.includes('user-level Streamable HTTP MCP'));
   assert.equal(nativeCliSource.includes('switch the proxy to rule-based mode'), false);

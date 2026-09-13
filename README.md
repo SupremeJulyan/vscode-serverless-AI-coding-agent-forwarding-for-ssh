@@ -71,7 +71,9 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 5. 重启 Agent 并新建对话，然后通过 `/mcp` 或 MCP 管理界面确认存在 `safs` 服务。
 6. 告诉 Agent：`使用 safs 检查当前远程项目并运行测试`。
 
-插件首次启动时会检查 `ALL_PROXY`、`HTTPS_PROXY` 和 `HTTP_PROXY` 等环境变量。检测到全局代理且 `NO_PROXY` 未完整覆盖本机回环地址时，会提示设置 `NO_PROXY=localhost,127.0.0.1,::1`，然后重启 Agent，避免本机 Agent 转发请求被代理截获。
+插件首次启动时会检查 `ALL_PROXY`、`HTTPS_PROXY` 和 `HTTP_PROXY` 等环境变量。检测到代理环境变量且 `NO_PROXY` 未完整覆盖本机回环地址时，会提示可能影响 Agent 本机转发连接；这不代表代理软件开启了全局模式。可设置 `NO_PROXY=localhost,127.0.0.1,::1`，然后重启 Agent，让本机转发请求绕过代理。
+
+提示中的“测试本机连接”按钮会执行新命令 `SAFS: 测试本机代理连接`（`safs.testLocalProxy`），也可从命令面板随时运行。测试通过 curl 请求临时本机服务，分别显示 `localhost`、`127.0.0.1` 和 `::1` 的连通性及是否使用显式代理。需要安装 curl；8.7.0 之前的版本可能无法报告代理状态。测试使用扩展进程的环境变量，不代表独立 Agent 的环境或系统 TUN 路由。
 
 > MCP 地址只监听 `127.0.0.1`。Agent 与运行 SAFS 的 VS Code 必须位于同一操作系统环境。
 

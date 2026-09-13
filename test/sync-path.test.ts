@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, symlink } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
+import { symlinkOrSkip } from './symlink-helper';
 import { assertLocalSyncPath, localPathForRemote } from '../src/sync-path';
 
 test('localPathForRemote keeps materialized paths below the sync root', () => {
@@ -11,13 +12,13 @@ test('localPathForRemote keeps materialized paths below the sync root', () => {
   assert.throws(() => localPathForRemote(root, '../../escape'), /escapes the local sync root/);
 });
 
-test('assertLocalSyncPath rejects linked parents and optionally exposes a linked leaf', async () => {
+test('assertLocalSyncPath rejects linked parents and optionally exposes a linked leaf', async (t) => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'safs-sync-path-'));
   const root = path.join(parent, 'root');
   const outside = path.join(parent, 'outside');
   await mkdir(root);
   await mkdir(outside);
-  await symlink(outside, path.join(root, 'linked-dir'));
+  if (!await symlinkOrSkip(t, outside, path.join(root, 'linked-dir'), 'dir')) return;
   await symlink(path.join(outside, 'secret'), path.join(root, 'linked-file'));
 
   await assert.rejects(

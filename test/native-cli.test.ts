@@ -48,8 +48,9 @@ test('selects native binaries for the current extension environment', () => {
   assert.equal(nativeCliPlatform('win32', 'x64'), 'win32-x64');
   assert.equal(nativeCliPlatform('win32', 'arm64'), 'win32-arm64');
   assert.match(bundledNativeCli('root', 'win32-x64'), /safs\.exe$/);
-  assert.equal(globalNativeCli('/home/me', 'linux-x64'), '/home/me/.local/bin/safs');
-  assert.equal(nativeCliConnectionPath('/home/me/.local/bin/safs'), '/home/me/.local/bin/.safs-connection.json');
+  const home = join(tmpdir(), 'safs-native-home');
+  assert.equal(globalNativeCli(home, 'linux-x64'), join(home, '.local', 'bin', 'safs'));
+  assert.equal(nativeCliConnectionPath(join(home, '.local', 'bin', 'safs')), join(home, '.local', 'bin', '.safs-connection.json'));
   assert.throws(() => nativeCliPlatform('linux', 'ia32'));
 });
 

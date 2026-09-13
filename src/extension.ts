@@ -79,6 +79,7 @@ import {
 } from './mcp-command-policy';
 import { remoteCommandBoundaryViolation } from './remote-command-boundary';
 import { proxyEnvironmentWarning } from './proxy-environment';
+import { testLoopbackProxy } from './proxy-diagnostic';
 import { remoteShortcutKeys } from './shortcut-hint';
 import {
   cleanTerminalDiagnostic, decodeTerminalDiagnostic, nextAutoReconnectAttempt,
@@ -575,10 +576,12 @@ function scheduleFirstProxyEnvironmentCheck(context: vscode.ExtensionContext): v
           warning.missingLoopbackHosts.join(', ')
         }`
       );
-      void vscode.window.showWarningMessage(
-        'SAFS 检测到全局代理，会影响 Agent 转发功能。请设置 NO_PROXY 环境变量绕过 localhost、127.0.0.1 和 ::1，然后重启 Agent。',
-        { modal: true }
+      const action = await vscode.window.showWarningMessage(
+        'SAFS 检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。',
+        { modal: true },
+        '测试本机连接'
       );
+      if (action === '测试本机连接') await vscode.commands.executeCommand('safs.testLocalProxy');
     } finally {
       checking = false;
     }
@@ -3930,6 +3933,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tree.refresh();
   });
   command('status', showStatus);
+  command('testLocalProxy', async () => {
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification, title: 'SAFS：正在测试本机代理连接…'
+    }, async () => {
+      const results = await testLoopbackProxy();
+      const detail = results.map((result) => `${result.host}：${result.unavailable
+        ? '无法启动本机测试服务（地址可能不可用）'
+        : `${result.reachable ? '连接成功' : '连接失败'}；${result.proxyUsed === true
+          ? '请求使用了代理' : result.proxyUsed === false ? '请求未使用显式代理'
+            : '无法确认是否使用代理（curl 可能版本过旧）'}`}`).join('\n');
+      await vscode.window.showInformationMessage('SAFS：本机代理测试结果', {
+        modal: true,
+        detail: `${detail}\n\n测试使用当前扩展进程的代理环境变量及 curl，HTTP_PROXY 也参与测试。结果不代表独立 Agent 的环境或系统 TUN 路由；连接失败也可能由防火墙或地址不可用导致。若使用了代理，可设置 NO_PROXY=localhost,127.0.0.1,::1 后重启 Agent。`
+      });
+    });
+  });
   command('openConfig', () => openConfig());
   command('addSshConfig', async () => {
     await addSshConfig(context);

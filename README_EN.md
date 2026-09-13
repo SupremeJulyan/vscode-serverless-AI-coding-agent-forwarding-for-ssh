@@ -71,7 +71,9 @@ MCP is the default mode:
 5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
 6. Tell the Agent: `Use safs to inspect the current remote project and run its tests.`
 
-On its first startup, the extension checks environment variables such as `ALL_PROXY`, `HTTPS_PROXY`, and `HTTP_PROXY`. If a global proxy is present and `NO_PROXY` does not fully cover loopback, SAFS asks you to set `NO_PROXY=localhost,127.0.0.1,::1` and restart the Agent so local forwarding requests are not intercepted.
+On its first startup, the extension checks environment variables such as `ALL_PROXY`, `HTTPS_PROXY`, and `HTTP_PROXY`. If proxy environment variables are present and `NO_PROXY` does not fully cover loopback, SAFS warns that local Agent forwarding connections may be affected; this does not mean the proxy application is in global mode. You can set `NO_PROXY=localhost,127.0.0.1,::1` and restart the Agent to bypass the proxy for local forwarding requests.
+
+The warning includes a local connection test button. You can also run `safs.testLocalProxy` from the command palette. It uses curl to request temporary loopback services and reports connectivity and explicit proxy use for `localhost`, `127.0.0.1`, and `::1`. Curl is required; versions before 8.7.0 may not report proxy use. Results reflect the extension process environment, not a separate Agent environment or system TUN routing.
 
 > The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment.
 

@@ -6,7 +6,9 @@ import { join } from 'node:path';
 import { executeCaptured } from '../src/process';
 import { searchCommand, RemoteSearchOptions } from '../src/remote-search';
 
-test('search executes content and filename modes without hiding errors', async () => {
+test('search executes content and filename modes without hiding errors', {
+  skip: process.platform === 'win32' ? 'Remote search integration requires a Unix shell and filesystem paths' : false
+}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-search-'));
   try {
     await mkdir(join(root, 'dist'));
