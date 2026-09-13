@@ -32,7 +32,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.8.2');
+  assert.equal(manifest.version, '1.8.3');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -43,7 +43,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
   assert.equal(
     manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.default,
-    'hybrid'
+    'mcp'
   );
   assert.deepEqual(
     manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.enum,
@@ -161,6 +161,8 @@ test('Agent integration uses copied prompts instead of probing Agent installatio
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
   assert.ok(extensionSource.includes("tagged.searchParams.delete('agent')"));
+  assert.ok(extensionSource.includes("command('installCli'"));
+  assert.ok(extensionSource.includes("if (!cliEnabled())"));
   assert.equal(extensionSource.includes('cliAgentIdentity'), false);
   assert.ok(extensionSource.includes("args: ['--version']"));
   assert.ok(extensionSource.includes('installedVersion !== extensionVersion'));
@@ -246,14 +248,12 @@ test('shows when this window is the Agent forwarding focus', async () => {
   assert.ok(extensionSource.includes('本窗口的远程连接干活'));
   assert.ok(extensionSource.includes('改动与远程双向同步'));
   assert.ok(extensionSource.includes('isSyncMirrorWindow()'));
-  assert.ok(extensionSource.includes("value: 'wsl'"));
-  assert.ok(extensionSource.includes("value: 'mac'"));
-  assert.ok(extensionSource.includes("value: 'linux'"));
-  assert.ok(extensionSource.includes("value: 'win'"));
+  assert.equal(extensionSource.includes('选择 Agent 所在平台'), false);
+  assert.equal(extensionSource.includes('askAgentNameAndPlatform'), false);
   assert.ok(extensionSource.includes('updateSafsStatusBar(vscode.window.state.focused)'));
-  assert.ok(extensionSource.includes('if (agentName && agentPlatform)'));
+  assert.ok(extensionSource.includes('if (agentName) focusedAgentSource'));
   assert.ok(extensionSource.includes(
-    'updateSafsStatusBar(vscode.window.state.focused, agentName, agentPlatform)'
+    'updateSafsStatusBar(vscode.window.state.focused, agentName)'
   ));
   assert.ok(extensionSource.includes("'safs.agentForwardingFocus'"));
   assert.ok(extensionSource.includes('vscode.StatusBarAlignment.Left, 10_000'));
@@ -285,8 +285,8 @@ test('uses only the unified cross-platform config path', async () => {
     undefined
   );
   assert.equal(
-    manifest.contributes?.configuration?.properties?.['safs.agentPlatform']?.default,
-    'auto'
+    manifest.contributes?.configuration?.properties?.['safs.agentPlatform'],
+    undefined
   );
   assert.equal(
     manifest.contributes?.configuration?.properties?.['safs.agentHttpRouterPort']
@@ -309,25 +309,29 @@ test('shows the install prompt only after enabling a parent mount or an explicit
   const commands = manifest.contributes?.commands ?? [];
   const install = commands.find((item) => item.command === 'safs.installAgentForwarding');
   const uninstall = commands.find((item) => item.command === 'safs.uninstallAgentForwarding');
+  const installCli = commands.find((item) => item.command === 'safs.installCli');
   assert.equal(install?.title, 'SAFS: 为我的Agent安装转发功能');
   assert.equal(uninstall?.title, 'SAFS: 为我的Agent卸载转发功能');
+  assert.equal(installCli?.title, 'SAFS: 安装或更新全局 CLI');
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.installAgentForwarding'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.uninstallAgentForwarding'));
+  assert.ok(manifest.activationEvents?.includes('onCommand:safs.installCli'));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes("command('installAgentForwarding'"));
   assert.equal(extensionSource.includes('.installAgentForwarding`'), false);
   assert.ok(extensionSource.includes('await copyAgentForwardingInstallPrompt(vscodeContext)'));
   assert.ok(extensionSource.includes('if (!changed) return'));
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
-  assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
   assert.ok(extensionSource.includes('卸载提示词'));
   assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
   assert.equal(extensionSource.includes('hybridAgentInstallPrompt'), false);
-  assert.ok(extensionSource.includes('agentInterfaceHybridMigrationV1'));
-  assert.ok(extensionSource.includes('vscode.ConfigurationTarget.Global'));
+  assert.equal(extensionSource.includes('agentInterfaceHybridMigrationV1'), false);
+  assert.equal(extensionSource.includes('legacyAgentInterfaceMigrationTarget'), false);
+  assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
+  assert.ok(extensionSource.includes('NO_PROXY 环境变量绕过 localhost'));
   const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
   assert.ok(nativeCliSource.includes('user-level Streamable HTTP MCP'));
-  assert.ok(nativeCliSource.includes('switch the proxy to rule-based mode'));
+  assert.equal(nativeCliSource.includes('switch the proxy to rule-based mode'), false);
 });
 
 test('runs CLI cleanup after the extension is completely uninstalled', async () => {

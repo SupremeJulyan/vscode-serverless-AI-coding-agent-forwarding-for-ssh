@@ -39,7 +39,7 @@ test('activity lifecycle persists bounded events and redacts failures', async ()
   const store = new AgentActivityStore(state, 'activity', () => new Date(now));
   await store.initialize();
   const first = store.start({
-    source: 'cli', agentName: 'Codex', agentPlatform: 'linux', toolName: 'remote_write',
+    source: 'cli', agentName: 'Codex', toolName: 'remote_write',
     input: { path: 'README.md', content: 'new source' }, mountName: 'dev',
     workspaceRoot: '/srv/project'
   });

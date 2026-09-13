@@ -60,28 +60,26 @@ The remote terminal opens in the directory of the active file by default, or at 
 
 ### 3. Let an Agent operate the remote workspace
 
-Hybrid is the default mode:
+MCP is the default mode:
 
 1. Click **Enable Agent Forwarding** beside the parent connection node in the SAFS view. The current window shows the installation input only once when that connection changes from disabled to enabled; you can also explicitly run `SAFS: Install Agent Forwarding for My Agent`. Opening other windows or changing interface mode does not show it again.
-2. The extension installs or updates the current platform's global `safs` CLI. In MCP or hybrid mode, enter the Agent name and platform when prompted, and it copies an English installation prompt containing the local Streamable HTTP URL.
-3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself. MCP loads only workspace bind and switch; all other operations use CLI. SAFS does not detect or modify Agent configuration.
+2. Enter the Agent name when prompted. The extension copies an English installation prompt containing the local Streamable HTTP URL. Default MCP mode does not install the global CLI.
+3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself. The default mode loads the MCP tool set selected by `safs.agentMcpToolProfile`. SAFS does not detect or modify Agent configuration.
 4. Open the remote directory for that connection.
 5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
 6. Tell the Agent: `Use safs to inspect the current remote project and run its tests.`
 
-If a global proxy causes HTTP 502, proxy connection errors, or timeouts, switch the proxy to rule mode and route `127.0.0.1`, `localhost`, and `::1` directly; alternatively, switch `safs.agentInterface` to `cli`.
+On its first startup, the extension checks environment variables such as `ALL_PROXY`, `HTTPS_PROXY`, and `HTTP_PROXY`. If a global proxy is present and `NO_PROXY` does not fully cover loopback, SAFS asks you to set `NO_PROXY=localhost,127.0.0.1,::1` and restart the Agent so local forwarding requests are not intercepted.
 
-> The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment. If VS Code runs on Windows and the Agent runs in WSL, set `safs.agentPlatform` to `wsl`.
+> The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment.
 
 `safs.agentInterface` supports three modes:
 
-- `hybrid` (default): MCP binds or switches the workspace and returns a `bindingId` plus CLI operation constraints; file and command operations run through the global `safs` CLI. Loading only two MCP tools reduces tool-schema context.
-- `mcp`: every operation uses the MCP tool set selected by `safs.agentMcpToolProfile`.
-- `cli`: no MCP installation; the Agent runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
+- `mcp` (default): every operation uses the MCP tool set selected by `safs.agentMcpToolProfile`, without installing the global CLI.
+- `hybrid`: switching to this mode installs or updates the global `safs` CLI. MCP only binds or switches workspaces; file and command operations use CLI.
+- `cli`: switching to this mode installs or updates the global `safs` CLI and does not require MCP installation. The Agent runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
 
-Changing modes does not automatically uninstall the other entry point, so different Agents can use MCP and CLI concurrently.
-On upgrade, an explicitly saved legacy `mcp` value is migrated to `hybrid` once; an
-explicit `cli` choice is preserved, and any mode can still be selected afterward.
+Changing modes does not automatically uninstall the other entry point, so different Agents can use MCP and CLI concurrently. Regardless of the current mode, run `SAFS: Install or Update Global CLI` from the Command Palette to install or repair CLI explicitly.
 
 When the same host, mount, and remote root are republished, an existing binding automatically
 resumes on the unique new instance. Selection is requested again only when the target is gone or
@@ -126,7 +124,7 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. In CLI-only mode, click **Enable Agent Forwarding** on the parent connection node or explicitly run `SAFS: Install Agent Forwarding for My Agent`, then paste the automatically copied English prompt into the Agent. The prompt asks the Agent to create or update one marked SAFS block in its user-level global persistent instructions—not only in the current conversation or project—while preserving every other existing rule and avoiding duplicate blocks. `safs --help` provides the actual workflow, and the Agent starts with `safs bind --agent "<Agent name>"`. The uninstall command copies an English prompt that removes only the block with the same markers. The default hybrid mode already provides CLI's token advantage; use CLI-only mode when an Agent does not support MCP or loopback MCP cannot be routed directly. CLI bypasses HTTP proxies when connecting to the local router. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
+CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. Switching to hybrid or CLI mode installs the executable for the current extension environment; `SAFS: Install or Update Global CLI` does the same explicitly in any mode. The executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. In CLI-only mode, click **Enable Agent Forwarding** on the parent connection node or explicitly run `SAFS: Install Agent Forwarding for My Agent`, then paste the automatically copied English prompt into the Agent. The prompt asks the Agent to create or update one marked SAFS block in its user-level global persistent instructions—not only in the current conversation or project—while preserving every other existing rule and avoiding duplicate blocks. `safs --help` provides the actual workflow, and the Agent starts with `safs bind --agent "<Agent name>"`. The uninstall command copies an English prompt that removes only the block with the same markers. Use CLI-only mode when an Agent does not support MCP or when you want a CLI-only workflow. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
 
 CLI installation is global and Agent-independent. The Agent name is recorded only when
 `bind` creates a binding; later operations inherit it through `--binding`. The label is
@@ -181,7 +179,7 @@ Search for `SAFS` in VS Code Settings:
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | Automatically `cd` an open remote terminal when the active file changes |
 | `safs.terminalAutoReconnect` | `true` | Reconnect a remote terminal after an unexpected exit |
-| `safs.agentPlatform` | `auto` | Change to `wsl` when the Agent runs in WSL |
+| `safs.agentInterface` | `mcp` | Select MCP, hybrid, or CLI-only; the latter two install the global CLI |
 | `safs.agentMcpToolProfile` | `full` | Change to `core` to reduce the Agent context used by tool definitions |
 | `safs.agentMcpTimeoutMs` | `120000` | Timeout for Agent commands, searches, and transfers; `0` disables it |
 | `safs.sftp.watchInterval` | `5` | Polling interval for remote file changes, in seconds |

@@ -14,7 +14,6 @@ test('writes redacted commands together with their audit hashes', async () => {
   const first = await appendMcpCommandLog({
     source: 'mcp',
     agentName: 'MyAgent',
-    agentPlatform: 'linux',
     mountName: 'prod',
     remoteCwd: '/srv/project',
     command: 'git status'
@@ -62,10 +61,10 @@ test('logs every tool with Agent identity without storing file content', async (
   const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-mcp-tool-log-'));
   const now = new Date('2026-08-25T09:00:00.000Z');
   const line = formatMcpToolLogLine({
-    toolName: 'remote_write', agentName: 'codex', agentPlatform: 'wsl',
+    toolName: 'remote_write', agentName: 'codex',
     input: { mountName: 'prod', path: 'notes.txt', content: 'top secret content' }
   }, now);
-  assert.match(line, /^2026-08-25T09:00:00\.000Z \[tool=remote_write\] \[agent=codex\] \[platform=wsl\]/);
+  assert.match(line, /^2026-08-25T09:00:00\.000Z \[tool=remote_write\] \[agent=codex\]/);
   assert.match(line, /"mountName":"prod"/);
   assert.match(line, /"path":"notes.txt"/);
   assert.match(line, /"contentBytes":18/);
@@ -84,7 +83,7 @@ test('logs every tool with Agent identity without storing file content', async (
   assert.equal(editLine.includes('replacement source'), false);
 
   const file = await appendMcpToolLog({
-    toolName: 'remote_list', agentName: 'opencode', agentPlatform: 'linux',
+    toolName: 'remote_list', agentName: 'opencode',
     input: { mountName: 'yx', path: '.' }
   }, directory, now);
   assert.match(await readFile(file, 'utf8'), /\[tool=remote_list\] \[agent=opencode\]/);

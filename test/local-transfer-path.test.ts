@@ -4,21 +4,8 @@ import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import test from 'node:test';
 import {
-  isLocalPathInside, localPathForAgent, localPathFromAgent,
-  validateLocalDownloadTarget, validateLocalUploadSource
+  isLocalPathInside, validateLocalDownloadTarget, validateLocalUploadSource
 } from '../src/local-transfer-path';
-
-test('local transfer paths translate between Windows hosts and WSL Agents', () => {
-  assert.equal(
-    localPathFromAgent('/mnt/c/Users/name/staging/file.bin', 'wsl', 'win32'),
-    'C:\\Users\\name\\staging\\file.bin'
-  );
-  assert.equal(
-    localPathForAgent('C:\\Users\\name\\staging\\file.bin', 'wsl', 'win32'),
-    '/mnt/c/Users/name/staging/file.bin'
-  );
-  assert.equal(localPathFromAgent('/tmp/file', 'linux', 'linux'), '/tmp/file');
-});
 
 test('local transfer paths stay inside the automatic Agent staging root', async () => {
   const base = await mkdtemp(path.join(os.tmpdir(), 'safs-local-transfer-'));

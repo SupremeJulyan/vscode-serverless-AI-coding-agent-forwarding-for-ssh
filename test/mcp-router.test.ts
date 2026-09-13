@@ -104,11 +104,11 @@ async function freePort(): Promise<number> {
 
 test('adds an encoded Agent source label without changing the router token', () => {
   const tagged = new URL(agentTaggedMcpUrl(
-    'http://127.0.0.1:9848/mcp?token=secret', '  自定义 Agent  ', 'wsl', 'cli'
+    'http://127.0.0.1:9848/mcp?token=secret', '  自定义 Agent  ', 'cli'
   ));
   assert.equal(tagged.searchParams.get('token'), 'secret');
   assert.equal(tagged.searchParams.get('agent'), '自定义 Agent');
-  assert.equal(tagged.searchParams.get('platform'), 'wsl');
+  assert.equal(tagged.searchParams.get('platform'), null);
   assert.equal(tagged.searchParams.get('source'), 'cli');
 });
 
@@ -135,7 +135,7 @@ test('hybrid mode exposes two MCP tools and reuses their binding through CLI', a
   try {
     await backend.start();
     await router.start();
-    const mcpUrl = new URL(agentTaggedMcpUrl(router.url, 'Codex', 'linux'));
+    const mcpUrl = new URL(agentTaggedMcpUrl(router.url, 'Codex'));
     await client.connect(new StreamableHTTPClientTransport(mcpUrl));
     const instructions = client.getInstructions() ?? '';
     assert.match(instructions, /follow the cliInstructions/);
@@ -327,7 +327,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
     await router.start();
     assert.equal(router.leader, true);
     await client.connect(new StreamableHTTPClientTransport(
-      new URL(agentTaggedMcpUrl(router.url, 'Codex', 'wsl'))
+      new URL(agentTaggedMcpUrl(router.url, 'Codex'))
     ));
     const instructions = client.getInstructions() ?? '';
     assert.match(instructions, /use the MCP tools only/i);
@@ -357,7 +357,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
       name: 'run_remote_command', arguments: { bindingId, command: 'pwd' }
     });
     assert.equal(JSON.parse((ran.content as any[])[0].text).input.agentName, 'Codex');
-    assert.equal(JSON.parse((ran.content as any[])[0].text).input.agentPlatform, 'wsl');
+    assert.equal('agentPlatform' in JSON.parse((ran.content as any[])[0].text).input, false);
 
     const rejected = await client.callTool({
       name: 'remote_list', arguments: { bindingId, path: 'forbidden' }
@@ -463,7 +463,7 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
     ];
     await router.start();
     await client.connect(new StreamableHTTPClientTransport(
-      new URL(agentTaggedMcpUrl(router.url, 'Codex', 'wsl'))
+      new URL(agentTaggedMcpUrl(router.url, 'Codex'))
     ));
 
     const tools = await client.listTools();

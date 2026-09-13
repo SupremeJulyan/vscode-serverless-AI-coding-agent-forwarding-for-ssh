@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server or on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -49,6 +49,7 @@
     "onCommand:safs.openConfig",
     "onCommand:safs.addSshConfig",
     "onCommand:safs.copyStreamableHttpUrl",
+    "onCommand:safs.installCli",
     "onCommand:safs.installAgentForwarding",
     "onCommand:safs.uninstallAgentForwarding",
     "onCommand:safs.openHistoryItem",
@@ -94,6 +95,10 @@
       {
         "command": "safs.copyStreamableHttpUrl",
         "title": "SAFS: 复制 Streamable HTTP URL"
+      },
+      {
+        "command": "safs.installCli",
+        "title": "SAFS: 安装或更新全局 CLI"
       },
       {
         "command": "safs.installAgentForwarding",
@@ -539,13 +544,13 @@
           "type": "string",
           "enum": ["hybrid", "mcp", "cli"],
           "enumDescriptions": [
-            "Hybrid (recommended): MCP exposes only workspace bind/switch tools; remote operations use the global SAFS CLI with the returned bindingId.",
-            "Full MCP: exposes the MCP tool profile selected below.",
+            "Hybrid: MCP exposes only workspace bind/switch tools; remote operations use the global SAFS CLI with the returned bindingId.",
+            "MCP (default): exposes the MCP tool profile selected below without installing the global CLI.",
             "CLI only: exposes the global SAFS CLI without installing MCP."
           ],
-          "default": "hybrid",
+          "default": "mcp",
           "scope": "machine",
-          "description": "Agent entry point. hybrid (default) combines two precise MCP workspace tools with the token-efficient global `safs` CLI; mcp exposes the selected MCP tool profile; cli uses only the CLI. MCP and CLI may coexist and switching modes never uninstalls the other entry point. If a proxy intercepts loopback MCP traffic, route 127.0.0.1/localhost/::1 directly or use cli. Reload VS Code windows and restart Agents after changing it."
+          "description": "Agent entry point. mcp (default) exposes the selected MCP tool profile and does not install the global CLI; hybrid combines two MCP workspace tools with the global `safs` CLI; cli uses only the CLI. Switching to hybrid or cli installs or updates the bundled CLI. Reload VS Code windows and restart Agents after changing it."
         },
         "safs.agentMcpToolProfile": {
           "type": "string",
@@ -560,15 +565,6 @@
           "maximum": 1048576,
           "default": 8192,
           "description": "Command/search preview byte budget (MCP previews cap at 65536). MCP retains up to 16 MiB per execution for remote_output continuation, within a 32 MiB window cache for up to 10 minutes. retentionTruncated marks incomplete capture."
-        },
-        "safs.agentPlatform": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "wsl"
-          ],
-          "default": "auto",
-          "markdownDescription": "Agent 工作位置：`auto`（默认，与插件运行平台相同），`wsl`（插件运行在 Windows、Agent 在 WSL 中运行时选择，用于生成正确平台的本地 MCP URL 与安装提示词）。"
         },
         "safs.highRiskCommandPatterns": {
           "type": "array",

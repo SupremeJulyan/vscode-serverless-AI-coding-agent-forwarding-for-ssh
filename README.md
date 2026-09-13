@@ -60,28 +60,26 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 ### 3. 让 Agent 操作远程工作区
 
-默认使用混合模式：
+默认使用 MCP 模式：
 
 1. 在 SAFS 视图中点击连接父节点旁的 **启用 Agent 转发**。安装输入框只会在该连接从关闭切换为开启时由当前窗口显示一次；也可以主动运行 `SAFS: 为我的Agent安装转发功能`。启动其他窗口或切换接口模式不会重复弹出。
-2. 扩展安装或更新当前平台的全局 `safs` CLI；在 MCP 或混合模式下，按提示输入 Agent 名称和所在平台后，会复制一段包含本机 Streamable HTTP URL 的英文安装提示词。
-3. 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。该 MCP 只加载工作区绑定和切换两个工具，其他操作使用 CLI；SAFS 不会探测或修改 Agent 配置。
+2. 按提示输入 Agent 名称，扩展会复制一段包含本机 Streamable HTTP URL 的英文安装提示词。默认 MCP 模式不会安装全局 CLI。
+3. 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。默认加载 `safs.agentMcpToolProfile` 选择的 MCP 工具集；SAFS 不会探测或修改 Agent 配置。
 4. 打开该连接的远程目录。
 5. 重启 Agent 并新建对话，然后通过 `/mcp` 或 MCP 管理界面确认存在 `safs` 服务。
 6. 告诉 Agent：`使用 safs 检查当前远程项目并运行测试`。
 
-如果全局代理导致 MCP 出现 HTTP 502、代理连接错误或超时，请把代理切换为规则模式，并确保 `127.0.0.1`、`localhost`、`::1` 直连；也可以把 `safs.agentInterface` 切换为 `cli`。
+插件首次启动时会检查 `ALL_PROXY`、`HTTPS_PROXY` 和 `HTTP_PROXY` 等环境变量。检测到全局代理且 `NO_PROXY` 未完整覆盖本机回环地址时，会提示设置 `NO_PROXY=localhost,127.0.0.1,::1`，然后重启 Agent，避免本机 Agent 转发请求被代理截获。
 
-> MCP 地址只监听 `127.0.0.1`。Agent 与运行 SAFS 的 VS Code 必须位于同一操作系统环境。VS Code 在 Windows、Agent 在 WSL 时，将 `safs.agentPlatform` 设为 `wsl`。
+> MCP 地址只监听 `127.0.0.1`。Agent 与运行 SAFS 的 VS Code 必须位于同一操作系统环境。
 
 `safs.agentInterface` 支持三种模式：
 
-- `hybrid`（默认）：MCP 精确绑定或切换工作区，返回 `bindingId` 和 CLI 操作约束；文件和命令操作通过全局 `safs` CLI 执行。只加载两个 MCP 工具，减少工具 Schema 占用。
-- `mcp`：所有操作使用 MCP，加载 `safs.agentMcpToolProfile` 选择的完整或核心工具集。
-- `cli`：不安装 MCP；Agent 运行 `safs bind --agent "<Agent 名称>"` 后完全通过 CLI 操作。
+- `mcp`（默认）：所有操作使用 MCP，加载 `safs.agentMcpToolProfile` 选择的完整或核心工具集，不安装全局 CLI。
+- `hybrid`：切换到该模式时安装或更新全局 `safs` CLI；MCP 只负责精确绑定或切换工作区，文件和命令操作通过 CLI 执行。
+- `cli`：切换到该模式时安装或更新全局 `safs` CLI，不要求安装 MCP；Agent 运行 `safs bind --agent "<Agent 名称>"` 后完全通过 CLI 操作。
 
-三种模式不会在切换时自动卸载另一入口，因此不同 Agent 可以同时分别使用 MCP 和 CLI。
-从旧版升级时，用户设置中显式保存的 `mcp` 会在首次激活时一次性迁移为 `hybrid`；
-显式选择的 `cli` 不会被覆盖，之后仍可手动切换。
+三种模式不会在切换时自动卸载另一入口，因此不同 Agent 可以同时分别使用 MCP 和 CLI。无论当前模式是什么，都可以通过命令面板运行 `SAFS: 安装或更新全局 CLI` 手动安装或修复 CLI。
 
 同一主机、挂载和远程根目录重新发布时，已有绑定会自动续接到唯一的新实例，不需要再次
 确认；只有目标确实消失或存在歧义时才会要求重新选择工作区。
@@ -119,7 +117,7 @@ Agent 根据提示词自行判断边界。远程文件的读取、搜索、创�
 
 #### CLI 模式
 
-CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。扩展每次启动后首次准备该程序时会读取其真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。纯 CLI 模式下，在目录树父连接节点点击 **启用 Agent 转发**，或主动运行 `SAFS: 为我的Agent安装转发功能`，再把自动复制的英文提示词粘贴给 Agent；提示词要求 Agent 将唯一的 SAFS 标记块追加或更新到用户级全局持久指令中，而不是只在当前对话或项目中保存，并保留其他现有规则。具体用法由 `safs --help` 提供，Agent 首先运行 `safs bind --agent "<Agent 名称>"`。卸载转发命令会复制按同一标记仅删除该全局 SAFS 规则的英文提示词。默认混合模式已经具备 CLI 的 Token 优势；仅当 Agent 不支持 MCP 或 loopback MCP 无法直连时才需要纯 CLI 模式。CLI 访问本机路由器时会绕过 HTTP 代理。原生 CLI 不再提供 stdio `mcp-bridge`；MCP 模式直接使用提示词中的 Streamable HTTP URL。
+CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。切换到混合或 CLI 模式会安装当前扩展环境对应的程序；任意模式下也可以运行 `SAFS: 安装或更新全局 CLI` 主动安装或修复。扩展准备 CLI 时会读取其真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。纯 CLI 模式下，在目录树父连接节点点击 **启用 Agent 转发**，或主动运行 `SAFS: 为我的Agent安装转发功能`，再把自动复制的英文提示词粘贴给 Agent；提示词要求 Agent 将唯一的 SAFS 标记块追加或更新到用户级全局持久指令中，而不是只在当前对话或项目中保存，并保留其他现有规则。具体用法由 `safs --help` 提供，Agent 首先运行 `safs bind --agent "<Agent 名称>"`。卸载转发命令会复制按同一标记仅删除该全局 SAFS 规则的英文提示词。仅当 Agent 不支持 MCP 或希望使用纯命令行工作流时选择 CLI 模式。原生 CLI 不再提供 stdio `mcp-bridge`；MCP 模式直接使用提示词中的 Streamable HTTP URL。
 
 CLI 安装是全局且与 Agent 无关的。`bind` 创建 binding 时才记录 Agent 名称；后续操作
 通过 `--binding` 自动沿用该名称，用于活动视图、日志和 binding 隔离，不参与本机路由认证。
@@ -169,7 +167,7 @@ CLI 语法或参数错误会直接附带当前子命令的正确 Usage，不需�
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | 切换文件时，让已打开的远程终端自动 `cd` 到对应目录 |
 | `safs.terminalAutoReconnect` | `true` | 远程终端意外结束后自动重连 |
-| `safs.agentPlatform` | `auto` | Agent 在 WSL 中运行时改为 `wsl` |
+| `safs.agentInterface` | `mcp` | 选择纯 MCP、混合或纯 CLI 接口；后两者会安装全局 CLI |
 | `safs.agentMcpToolProfile` | `full` | 改为 `core` 可减少 Agent 工具定义的上下文开销 |
 | `safs.agentMcpTimeoutMs` | `120000` | Agent 命令、搜索和传输的超时；`0` 表示关闭 |
 | `safs.sftp.watchInterval` | `5` | 轮询远程文件变化的间隔（秒） |

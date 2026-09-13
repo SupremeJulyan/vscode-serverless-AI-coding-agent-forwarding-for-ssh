@@ -84,7 +84,6 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
   try {
     const taggedUrl = new URL(server.url);
     taggedUrl.searchParams.set('agent', 'codex');
-    taggedUrl.searchParams.set('platform', 'wsl');
     await client.connect(new StreamableHTTPClientTransport(taggedUrl));
     assert.deepEqual(await client.listResources(), { resources: [] });
     assert.deepEqual(await client.listResourceTemplates(), { resourceTemplates: [] });
@@ -150,7 +149,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     });
     const downloadedText = (downloaded.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
     assert.deepEqual(JSON.parse(downloadedText), {
-      remotePath: 'dist/app.bin', localPath: '/tmp/app.bin', agentPlatform: 'wsl', completed: true
+      remotePath: 'dist/app.bin', localPath: '/tmp/app.bin', completed: true
     });
     const uploaded = await client.callTool({
       name: 'remote_upload', arguments: {
@@ -159,8 +158,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     });
     const uploadedText = (uploaded.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
     assert.deepEqual(JSON.parse(uploadedText), {
-      localPaths: ['/tmp/app.bin'], remoteDirectory: 'dist',
-      agentPlatform: 'wsl', completed: true
+      localPaths: ['/tmp/app.bin'], remoteDirectory: 'dist', completed: true
     });
     const deleted = await client.callTool({
       name: 'remote_delete', arguments: { path: 'dist/old.bin', recursive: false }
@@ -181,7 +179,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     });
     assert.deepEqual(JSON.parse((names.content as any[])[0].text), {
       query: '*.ts', mode: 'names', ignoreCase: true, agentName: 'codex',
-      agentPlatform: 'wsl', stdout: 'src/index.ts:1:hello'
+      stdout: 'src/index.ts:1:hello'
     });
     const rejected = await client.callTool({
       name: 'remote_list', arguments: { path: 'forbidden' }

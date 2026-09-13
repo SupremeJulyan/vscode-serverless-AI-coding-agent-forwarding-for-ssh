@@ -41,28 +41,25 @@ export interface AgentMcpCallbacks {
   }): Promise<unknown>;
   upload(input: {
     mountName?: string; localPaths: string[]; remoteDirectory: string;
-    agentPlatform?: string;
   }): Promise<unknown>;
   download(input: {
     mountName?: string; remotePath: string; localPath: string;
-    agentPlatform?: string;
   }): Promise<unknown>;
   search(input: RemoteSearchOptions & {
-    mountName?: string; agentName?: string; agentPlatform?: string;
+    mountName?: string; agentName?: string;
   }): Promise<unknown>;
   run(input: {
     command: string; mountName?: string; remoteCwd?: string; agentName?: string;
-    agentPlatform?: string;
   }): Promise<unknown>;
-  request?(agentName?: string, agentPlatform?: string): void;
+  request?(agentName?: string): void;
   audit?(entry: {
     toolName: string; input: Record<string, unknown>;
-    agentName?: string; agentPlatform?: string;
+    agentName?: string;
   }): void;
   activity?: {
     start(entry: {
       source: AgentActivitySource; toolName: string; input: Record<string, unknown>;
-      agentName?: string; agentPlatform?: string;
+      agentName?: string;
     }): string | undefined;
     succeed(id: string, result: unknown): void;
     fail(id: string, error: unknown): void;
@@ -108,7 +105,7 @@ export class AgentMcpServer {
   }
 
   private createProtocolServer(
-    agentName?: string, agentPlatform?: string, source: AgentActivitySource = 'mcp'
+    agentName?: string, source: AgentActivitySource = 'mcp'
   ): McpServer {
     const server = new McpServer(
       { name: 'safs', version: '1.0.0' },
@@ -144,7 +141,7 @@ export class AgentMcpServer {
       if (trackedTools.has(toolName)) {
         try {
           activityId = this.callbacks.activity?.start({
-            source, toolName, input, agentName, agentPlatform
+            source, toolName, input, agentName
           });
         } catch (error) {
           this.callbacks.log?.(
@@ -188,7 +185,7 @@ export class AgentMcpServer {
     const outputScope = async () => {
       const workspace = await this.callbacks.currentWorkspace();
       if (!workspace) throw new Error('No active workspace for retained output.');
-      return JSON.stringify([workspace.host, workspace.workspaceUri, agentName, agentPlatform]);
+      return JSON.stringify([workspace.host, workspace.workspaceUri, agentName]);
     };
     const capture = async (callback: () => Promise<unknown>) => {
       const scope = await outputScope();
@@ -256,13 +253,13 @@ export class AgentMcpServer {
               mountName?: string; sourcePath: string; targetPath: string; overwrite?: boolean;
             }));
           case 'remote_upload':
-            return invoke(name, input, () => this.callbacks.upload({
-              ...input, agentPlatform
-            } as Parameters<AgentMcpCallbacks['upload']>[0]));
+            return invoke(name, input, () => this.callbacks.upload(
+              input as Parameters<AgentMcpCallbacks['upload']>[0]
+            ));
           case 'remote_download':
-            return invoke(name, input, () => this.callbacks.download({
-              ...input, agentPlatform
-            } as Parameters<AgentMcpCallbacks['download']>[0]));
+            return invoke(name, input, () => this.callbacks.download(
+              input as Parameters<AgentMcpCallbacks['download']>[0]
+            ));
           case 'remote_output':
             return invoke(name, input, async () => this.outputs.read(
               input.outputId as string, await outputScope(),
@@ -271,11 +268,11 @@ export class AgentMcpServer {
             ));
           case 'remote_search':
             return invoke(name, input, () => capture(() => this.callbacks.search({
-              ...input, agentName, agentPlatform
+              ...input, agentName
             } as Parameters<AgentMcpCallbacks['search']>[0])));
           case 'run_remote_command':
             return invoke(name, input, () => capture(() => this.callbacks.run({
-              ...input, agentName, agentPlatform
+              ...input, agentName
             } as Parameters<AgentMcpCallbacks['run']>[0])));
         }
       }
@@ -301,28 +298,22 @@ export class AgentMcpServer {
       const agentName = typeof request.query.agent === 'string'
         ? request.query.agent.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_')
         : undefined;
-      const platformValue = request.query.platform;
-      const agentPlatform = typeof platformValue === 'string'
-        && ['wsl', 'mac', 'linux', 'win'].includes(platformValue)
-        ? platformValue
-        : undefined;
       const source: AgentActivitySource = request.query.source === 'cli' ? 'cli' : 'mcp';
       const method = typeof request.body?.method === 'string' ? request.body.method : 'unknown';
       const tool = request.body?.params?.name;
       this.callbacks.log?.(`收到 MCP 请求：${method}${tool ? ` (${tool})` : ''}${
         agentName ? `，agent=${agentName}` : '，agent=<unknown>'
-      }${agentPlatform ? `，platform=${agentPlatform}` : ''
       }`);
-      this.callbacks.request?.(agentName, agentPlatform);
+      this.callbacks.request?.(agentName);
       if (method === 'tools/call' && typeof tool === 'string') {
         const input = request.body?.params?.arguments;
         this.callbacks.audit?.({
           toolName: tool,
           input: input && typeof input === 'object' ? input as Record<string, unknown> : {},
-          agentName, agentPlatform
+          agentName
         });
       }
-      const protocol = this.createProtocolServer(agentName, agentPlatform, source);
+      const protocol = this.createProtocolServer(agentName, source);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       try {
         await protocol.connect(transport);

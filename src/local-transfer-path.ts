@@ -7,27 +7,7 @@ export function isLocalPathInside(root: string, candidate: string): boolean {
     && relative !== '..' && !path.isAbsolute(relative));
 }
 
-/** Translate a WSL Agent path into the native Windows extension-host view. */
-export function localPathFromAgent(
-  value: string, agentPlatform?: string, hostPlatform: NodeJS.Platform = process.platform
-): string {
-  if (hostPlatform !== 'win32' || agentPlatform !== 'wsl') return value;
-  const match = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(value.trim());
-  if (!match) return value;
-  const rest = (match[2] ?? '').replace(/\//g, '\\');
-  return `${match[1].toUpperCase()}:\\${rest}`;
-}
-
-/** Translate a native Windows staging path into the view seen by a WSL Agent. */
-export function localPathForAgent(
-  value: string, agentPlatform?: string, hostPlatform: NodeJS.Platform = process.platform
-): string {
-  if (hostPlatform !== 'win32' || agentPlatform !== 'wsl') return value;
-  const match = /^([a-zA-Z]):[\\/](.*)$/.exec(value.trim());
-  if (!match) return value;
-  return `/mnt/${match[1].toLowerCase()}/${match[2].replace(/\\/g, '/')}`;
-}
-
+/** Reject linked path components before creating a local download target. */
 async function assertNoLinkedTargetComponent(root: string, target: string): Promise<void> {
   const relative = path.relative(path.resolve(root), path.resolve(target));
   let current = path.resolve(root);

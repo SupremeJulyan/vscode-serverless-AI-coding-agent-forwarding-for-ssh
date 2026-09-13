@@ -87,7 +87,6 @@ test('native CLI binds and executes through the existing SAFS router', async () 
   );
   try {
     const cliUrl = new URL(router.url);
-    cliUrl.searchParams.set('platform', 'linux');
     cliUrl.searchParams.set('source', 'cli');
     await writeCliConnection(temporary, cliUrl.toString());
     const version = await executeCaptured({ command: executable, args: ['--version'] });

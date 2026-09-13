@@ -14,7 +14,6 @@ export interface AgentActivityEvent {
   id: string;
   source: AgentActivitySource;
   agentName: string;
-  agentPlatform?: string;
   toolName: string;
   category: AgentActivityCategory;
   status: AgentActivityStatus;
@@ -30,7 +29,6 @@ export interface AgentActivityEvent {
 export interface AgentActivityStart {
   source: AgentActivitySource;
   agentName?: string;
-  agentPlatform?: string;
   toolName: string;
   input?: Record<string, unknown>;
   mountName: string;
@@ -196,7 +194,6 @@ export class AgentActivityStore {
       id: randomUUID(),
       source: input.source,
       agentName: safeText(input.agentName, 100)?.trim() || 'Unknown Agent',
-      agentPlatform: safeText(input.agentPlatform, 16),
       toolName: input.toolName.replace(/[^a-z0-9_.-]/gi, '_').slice(0, 100) || 'unknown',
       category: agentActivityCategory(input.toolName),
       status: 'running',

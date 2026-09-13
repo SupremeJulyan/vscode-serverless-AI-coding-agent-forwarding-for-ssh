@@ -8,11 +8,11 @@ export type NativeCliPlatform =
   | 'win32-x64' | 'win32-arm64';
 
 export function nativeCliPlatform(
-  host: NodeJS.Platform, arch: string, agentInWsl = false
+  host: NodeJS.Platform, arch: string
 ): NativeCliPlatform {
   const cpu = arch === 'x64' ? 'x64' : arch === 'arm64' ? 'arm64' : undefined;
   if (!cpu) throw new Error(`SAFS CLI 不支持 CPU 架构：${arch}`);
-  const os = agentInWsl || host === 'linux' ? 'linux'
+  const os = host === 'linux' ? 'linux'
     : host === 'darwin' ? 'darwin' : host === 'win32' ? 'win32' : undefined;
   if (!os) throw new Error(`SAFS CLI 不支持操作系统：${host}`);
   return `${os}-${cpu}` as NativeCliPlatform;
@@ -50,7 +50,7 @@ export function nativeCliConnectionPath(executable: string): string {
 export function streamableHttpMcpInstallPrompt(url: string): string {
   return [
     `Install a user-level Streamable HTTP MCP server named "safs" with this URL: ${url}`,
-    'After installation, tell me to restart the Agent. If it returns HTTP 502 or times out, tell me to switch the proxy to rule-based mode and bypass 127.0.0.1/localhost/::1, or switch SAFS to CLI mode.'
+    'After installation, tell me to restart the Agent.'
   ].join('\n');
 }
 

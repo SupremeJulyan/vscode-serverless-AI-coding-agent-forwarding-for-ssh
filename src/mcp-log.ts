@@ -8,7 +8,6 @@ export interface McpCommandLogEntry {
   source: string;
   /** URL 中由 MCP 注册方声明的来源标签，仅用于日志/诊断。 */
   agentName?: string;
-  agentPlatform?: string;
   mountName: string;
   remoteCwd: string;
   command: string;
@@ -17,7 +16,6 @@ export interface McpCommandLogEntry {
 export interface McpToolLogEntry {
   toolName: string;
   agentName?: string;
-  agentPlatform?: string;
   input?: Record<string, unknown>;
 }
 
@@ -39,13 +37,12 @@ export function formatMcpCommandLogLine(
 ): string {
   const agent = entry.agentName?.trim().slice(0, 100)
     .replace(/[\]\r\n\t]/g, '_');
-  const platform = entry.agentPlatform?.trim().replace(/[^a-z]/gi, '').slice(0, 10);
   // Persist the command for auditability, but redact common credentials first.
   // JSON encoding keeps multiline commands and control characters on one log line.
   const command = JSON.stringify(redactSensitiveText(entry.command));
   const commandBytes = Buffer.byteLength(entry.command, 'utf8');
   const commandSha256 = createHash('sha256').update(entry.command).digest('hex');
-  return `${now.toISOString()} [${entry.source}]${agent ? ` [agent=${agent}]` : ''}${platform ? ` [platform=${platform}]` : ''} [mount=${entry.mountName}] [cwd=${entry.remoteCwd}] command=${command} command_bytes=${commandBytes} command_sha256=${commandSha256}`;
+  return `${now.toISOString()} [${entry.source}]${agent ? ` [agent=${agent}]` : ''} [mount=${entry.mountName}] [cwd=${entry.remoteCwd}] command=${command} command_bytes=${commandBytes} command_sha256=${commandSha256}`;
 }
 
 export async function appendMcpCommandLog(
@@ -96,9 +93,8 @@ function safeToolInput(toolName: string, input: Record<string, unknown> = {}): s
 
 export function formatMcpToolLogLine(entry: McpToolLogEntry, now = new Date()): string {
   const agent = entry.agentName?.trim().slice(0, 100).replace(/[\]\r\n\t]/g, '_');
-  const platform = entry.agentPlatform?.trim().replace(/[^a-z]/gi, '').slice(0, 10);
   const tool = entry.toolName.trim().replace(/[^a-z0-9_.-]/gi, '_').slice(0, 100);
-  return `${now.toISOString()} [tool=${tool || 'unknown'}]${agent ? ` [agent=${agent}]` : ' [agent=unknown]'}${platform ? ` [platform=${platform}]` : ''} args=${safeToolInput(tool, entry.input)}`;
+  return `${now.toISOString()} [tool=${tool || 'unknown'}]${agent ? ` [agent=${agent}]` : ' [agent=unknown]'} args=${safeToolInput(tool, entry.input)}`;
 }
 
 export async function appendMcpToolLog(

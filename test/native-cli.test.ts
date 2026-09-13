@@ -42,26 +42,25 @@ test('builds a scoped prompt for removing persistent CLI rules', () => {
   assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
 });
 
-test('selects native binaries for desktop platforms and WSL', () => {
+test('selects native binaries for the current extension environment', () => {
   assert.equal(nativeCliPlatform('linux', 'x64'), 'linux-x64');
   assert.equal(nativeCliPlatform('darwin', 'arm64'), 'darwin-arm64');
   assert.equal(nativeCliPlatform('win32', 'x64'), 'win32-x64');
-  assert.equal(nativeCliPlatform('win32', 'arm64', true), 'linux-arm64');
+  assert.equal(nativeCliPlatform('win32', 'arm64'), 'win32-arm64');
   assert.match(bundledNativeCli('root', 'win32-x64'), /safs\.exe$/);
   assert.equal(globalNativeCli('/home/me', 'linux-x64'), '/home/me/.local/bin/safs');
   assert.equal(nativeCliConnectionPath('/home/me/.local/bin/safs'), '/home/me/.local/bin/.safs-connection.json');
   assert.throws(() => nativeCliPlatform('linux', 'ia32'));
 });
 
-test('builds a Streamable HTTP MCP prompt with proxy failure guidance', () => {
+test('builds a concise Streamable HTTP MCP installation prompt', () => {
   const prompt = streamableHttpMcpInstallPrompt(
     'http://127.0.0.1:9848/mcp?token=secret'
   );
   assert.match(prompt, /Streamable HTTP/);
   assert.match(prompt, /http:\/\/127\.0\.0\.1:9848\/mcp\?token=secret/);
-  assert.match(prompt, /rule-based mode/);
-  assert.match(prompt, /127\.0\.0\.1\/localhost\/::1/);
-  assert.match(prompt, /SAFS to CLI mode/);
+  assert.match(prompt, /restart the Agent/);
+  assert.doesNotMatch(prompt, /proxy|CLI mode/i);
   assert.equal(prompt.split('\n').length, 2);
   assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
 });

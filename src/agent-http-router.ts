@@ -95,11 +95,8 @@ export function adaptCliToolResult(
 }
 
 /** 为共用 MCP 地址附加可观测的 Agent 来源标签（不作为身份认证）。 */
-export type AgentPlatformLabel = 'wsl' | 'mac' | 'linux' | 'win';
-
 export function agentTaggedMcpUrl(
-  routerUrl: string, agentName: string, platform?: AgentPlatformLabel,
-  source?: AgentActivitySource
+  routerUrl: string, agentName: string, source?: AgentActivitySource
 ): string {
   const normalized = agentName.trim();
   if (!normalized) throw new Error('Agent name must not be empty');
@@ -109,7 +106,6 @@ export function agentTaggedMcpUrl(
   }
   const url = new URL(routerUrl);
   url.searchParams.set('agent', normalized);
-  if (platform) url.searchParams.set('platform', platform);
   if (source) url.searchParams.set('source', source);
   return url.toString();
 }
@@ -142,7 +138,7 @@ export interface AgentHttpRouterOptions {
   toolProfile?: () => AgentToolProfile;
   audit?: (entry: {
     toolName: string; input: Record<string, unknown>;
-    agentName?: string; agentPlatform?: AgentPlatformLabel;
+    agentName?: string;
   }) => void;
 }
 
@@ -154,7 +150,7 @@ export class AgentHttpRouter {
   private readonly bindings = new Map<string, {
     instanceId: string; host: string; mountName: string; workspaceRoot: string;
     workspaceUri: string; owner: string;
-    agentName?: string; agentPlatform?: AgentPlatformLabel;
+    agentName?: string;
   }>();
   private readonly preferredTargets = new Map<string, {
     host: string; mountName: string; workspaceRoot: string; workspaceUri: string;
@@ -189,8 +185,8 @@ export class AgentHttpRouter {
     return this.discover();
   }
 
-  private bindingKey(agentName?: string, agentPlatform?: AgentPlatformLabel): string {
-    return `${agentName ?? '<unknown>'}\0${agentPlatform ?? '<unknown>'}`;
+  private bindingKey(agentName?: string): string {
+    return agentName ?? '<unknown>';
   }
 
   private workspace(bindingId: string): DiscoveredAgentWorkspace | undefined {
@@ -261,8 +257,7 @@ export class AgentHttpRouter {
 
   private async forward(
     workspace: DiscoveredAgentWorkspace, name: string, args: Record<string, unknown>,
-    agentName?: string, agentPlatform?: AgentPlatformLabel,
-    source: AgentActivitySource = 'mcp'
+    agentName?: string, source: AgentActivitySource = 'mcp'
   ): Promise<any> {
     const url = new URL(workspace.mcpUrl);
     if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) {
@@ -273,7 +268,6 @@ export class AgentHttpRouter {
       throw new Error('Refusing to forward to the router itself');
     }
     if (agentName) url.searchParams.set('agent', agentName);
-    if (agentPlatform) url.searchParams.set('platform', agentPlatform);
     url.searchParams.set('source', source);
     const requestId = `http-router-${process.pid}-${Date.now()}-${randomUUID()}`;
     this.options.log?.(
@@ -314,7 +308,7 @@ export class AgentHttpRouter {
 
   private async callTool(
     name: string, input: Record<string, unknown>, agentName?: string,
-    agentPlatform?: AgentPlatformLabel, source: AgentActivitySource = 'mcp'
+    source: AgentActivitySource = 'mcp'
   ): Promise<any> {
     if (name === 'cli_list_workspaces') {
       return {
@@ -327,7 +321,7 @@ export class AgentHttpRouter {
       const bindingAgentName = source === 'cli'
         ? requestAgentName(input.agentName)
         : agentName;
-      const owner = this.bindingKey(bindingAgentName, agentPlatform);
+      const owner = this.bindingKey(bindingAgentName);
       if (source === 'cli' && !bindingAgentName) {
         return this.toolError(
           'CLI_AGENT_NAME_REQUIRED',
@@ -422,8 +416,7 @@ export class AgentHttpRouter {
         workspaceRoot: selectedWorkspace.workspaceRoot,
         workspaceUri: selectedWorkspace.workspaceUri,
         owner,
-        agentName: bindingAgentName,
-        agentPlatform
+        agentName: bindingAgentName
       });
       this.preferredTargets.set(owner, {
         host: selectedWorkspace.host,
@@ -467,7 +460,7 @@ export class AgentHttpRouter {
     const binding = this.bindings.get(bindingId);
     const cliBindingRequest = source === 'cli';
     if (!binding || (!cliBindingRequest
-      && binding.owner !== this.bindingKey(agentName, agentPlatform))) {
+      && binding.owner !== this.bindingKey(agentName))) {
       return this.toolError(
         'WORKSPACE_BINDING_INVALID',
         'The workspace binding is invalid for this Agent session. Select the workspace again.'
@@ -485,10 +478,9 @@ export class AgentHttpRouter {
     const { bindingId: _bindingId, ...publicInput } = input;
     const args = { ...publicInput, mountName: workspace.mountName };
     const effectiveAgentName = cliBindingRequest ? binding.agentName : agentName;
-    const effectiveAgentPlatform = cliBindingRequest ? binding.agentPlatform : agentPlatform;
     try {
       return await this.forward(
-        workspace, name, args, effectiveAgentName, effectiveAgentPlatform, source
+        workspace, name, args, effectiveAgentName, source
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -501,9 +493,7 @@ export class AgentHttpRouter {
     }
   }
 
-  private createProtocolServer(
-    agentName?: string, agentPlatform?: AgentPlatformLabel
-  ): McpServer {
+  private createProtocolServer(agentName?: string): McpServer {
     const profile = this.options.toolProfile?.();
     const server = new McpServer(
       { name: 'safs-http-router', version: '1.0.0' },
@@ -517,7 +507,7 @@ export class AgentHttpRouter {
     registerAgentMcpTools(server, {
       routed: true,
       profile,
-      invoke: (name, input) => this.callTool(name, input, agentName, agentPlatform, 'mcp')
+      invoke: (name, input) => this.callTool(name, input, agentName, 'mcp')
     });
     return server;
   }
@@ -559,11 +549,6 @@ export class AgentHttpRouter {
         response.status(400).json({ ok: false, error: 'Invalid CLI request' });
         return;
       }
-      const platformValue = request.query.platform;
-      const agentPlatform = typeof platformValue === 'string'
-        && ['wsl', 'mac', 'linux', 'win'].includes(platformValue)
-        ? platformValue as AgentPlatformLabel
-        : undefined;
       const agentName = requestAgentName(request.query.agent);
       const currentName = currentCliToolName(name);
       try {
@@ -587,7 +572,7 @@ export class AgentHttpRouter {
             const item = unwrapCliToolResult(
               await this.callTool(
                 operation.name, operation.arguments as Record<string, unknown>,
-                agentName, agentPlatform, 'cli'
+                agentName, 'cli'
               ),
               operation.name === 'current_remote_file'
             );
@@ -598,7 +583,7 @@ export class AgentHttpRouter {
         }
         response.json(adaptCliToolResult(unwrapCliToolResult(
           await this.callTool(
-            currentName, input as Record<string, unknown>, agentName, agentPlatform, 'cli'
+            currentName, input as Record<string, unknown>, agentName, 'cli'
           ),
           currentName === 'current_remote_file'
         ), currentName));
@@ -624,17 +609,11 @@ export class AgentHttpRouter {
         return;
       }
       const agentName = requestAgentName(request.query.agent);
-      const platformValue = request.query.platform;
-      const agentPlatform = typeof platformValue === 'string'
-        && ['wsl', 'mac', 'linux', 'win'].includes(platformValue)
-        ? platformValue as AgentPlatformLabel
-        : undefined;
       const method = typeof request.body?.method === 'string' ? request.body.method : 'unknown';
       const tool = request.body?.params?.name;
       this.options.log?.(
         `收到 MCP 请求：${method}${tool ? ` (${tool})` : ''}${
           agentName ? `，agent=${agentName}` : '，agent=<unknown>'
-        }${agentPlatform ? `，platform=${agentPlatform}` : ''
         }`
       );
       // 绑定工具由固定路由器本地完成；其它工具只在实际执行窗口记录，避免双份日志。
@@ -644,10 +623,10 @@ export class AgentHttpRouter {
         this.options.audit?.({
           toolName: tool,
           input: input && typeof input === 'object' ? input as Record<string, unknown> : {},
-          agentName, agentPlatform
+          agentName
         });
       }
-      const protocol = this.createProtocolServer(agentName, agentPlatform);
+      const protocol = this.createProtocolServer(agentName);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       try {
         await protocol.connect(transport);
