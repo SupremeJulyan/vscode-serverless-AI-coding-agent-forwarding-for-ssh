@@ -112,14 +112,14 @@ Once enabled, the Agent can:
 
 Open **Agent Activity** in the SAFS Activity Bar to see MCP and CLI operations that are
 actually executed by the current remote window. The status animation shows running,
-successful, and failed operations. File changes, remote commands, transfers, and errors
-appear as short live messages, while the timeline can be filtered by operation type and
-status. Consecutive reads, directory listings, and searches are grouped automatically.
+successful, and failed operations. The timeline keeps the newest operation first and can be
+filtered by operation type and status. Consecutive reads, directory listings, and searches
+are grouped automatically.
 
 The view keeps the latest 200 redacted records for this window. It never stores file
 contents, diffs, stdout, or stderr; commands and errors are persisted only as short,
-redacted summaries. Pausing live messages does not stop recording, and clearing the view
-does not delete the audit logs under `~/.safs/mcp_logs`. Ordinary SSH terminals and native
+redacted summaries. Clearing the view does not delete the audit logs under
+`~/.safs/mcp_logs`. Ordinary SSH terminals and native
 VS Code Language Model Tools are outside this view's capture scope.
 
 To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed manually through a prompt or URL, run `SAFS: Uninstall Agent Forwarding for My Agent`.

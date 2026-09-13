@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  AgentActivityStore, agentActivityLimit, isAgentActivityImportant,
-  summarizeAgentActivityInput
+  AgentActivityStore, agentActivityLimit, summarizeAgentActivityInput
 } from '../src/agent-activity';
 import { activityViewHtml } from '../src/agent-activity-view';
 
@@ -50,7 +49,6 @@ test('activity lifecycle persists bounded events and redacts failures', async ()
   assert.equal(failed.status, 'error');
   assert.equal(failed.durationMs, 250);
   assert.equal(failed.error, 'request token=<hidden> failed');
-  assert.equal(isAgentActivityImportant(failed), true);
 
   for (let index = 0; index < agentActivityLimit + 5; index += 1) {
     const id = store.start({
@@ -63,7 +61,6 @@ test('activity lifecycle persists bounded events and redacts failures', async ()
   const stored = state.get<any[]>('activity', []);
   assert.equal(stored.length, agentActivityLimit);
   assert.equal(JSON.stringify(stored).includes('must not persist'), false);
-  assert.equal(isAgentActivityImportant(stored.at(-1)), false);
   store.dispose();
 });
 
@@ -90,7 +87,13 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   assert.match(html, /default-src 'none'/);
   assert.match(html, /script-src 'nonce-/);
   assert.equal(html.includes('https://'), false);
-  assert.match(html, /暂停弹幕/);
+  assert.equal(html.includes('暂停弹幕'), false);
+  assert.equal(html.includes('恢复弹幕'), false);
+  assert.equal(html.includes('关键操作会在这里显示'), false);
+  assert.equal(html.includes('最近关键操作'), false);
+  assert.match(html, /class="orb-frame"/);
+  assert.match(html, /class="orb-wave"/);
+  assert.equal(html.includes("orb.textContent = kind"), false);
   assert.match(html, /全部类型/);
   assert.match(html, /type: 'clear'/);
   assert.match(html, /prefers-reduced-motion/);

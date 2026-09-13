@@ -77,38 +77,38 @@ export function activityViewHtml(webview: vscode.Webview): string {
       background: var(--vscode-editor-background); margin-bottom: 8px;
     }
     .orb {
-      width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%;
-      background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
-      font-size: 17px; position: relative;
+      width: 36px; height: 36px; display: grid; place-items: center; position: relative;
+      border: 1px solid var(--vscode-widget-border); border-radius: 11px;
+      color: var(--vscode-descriptionForeground);
+      background: linear-gradient(145deg, var(--vscode-editorWidget-background, var(--vscode-editor-background)), var(--vscode-sideBar-background));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 3px 8px rgba(0,0,0,.16);
     }
+    .orb svg { width: 25px; height: 25px; overflow: visible; }
+    .orb-frame, .orb-wave { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+    .orb-frame { stroke-width: 1.15; opacity: .72; }
+    .orb-wave { stroke-width: 1.55; }
+    .orb-dot { fill: currentColor; }
+    .status.running .orb { color: var(--vscode-progressBar-background); border-color: currentColor; }
     .status.running .orb::after {
       content: ''; position: absolute; inset: -4px; border: 2px solid var(--vscode-progressBar-background);
-      border-radius: 50%; animation: pulse 1.1s ease-out infinite;
+      border-radius: 14px; animation: pulse 1.1s ease-out infinite;
     }
-    .status.success .orb { background: var(--vscode-testing-iconPassed, #2ea043); }
-    .status.error .orb { background: var(--vscode-testing-iconFailed, #f85149); }
+    .status.running .orb-wave { stroke-dasharray: 4 2; animation: wave 1s linear infinite; }
+    .status.success .orb { color: var(--vscode-testing-iconPassed, #2ea043); border-color: currentColor; }
+    .status.error .orb { color: var(--vscode-testing-iconFailed, #f85149); border-color: currentColor; }
+    .status.success .orb::after, .status.error .orb::after {
+      position: absolute; right: -4px; bottom: -4px; display: grid; place-items: center;
+      width: 15px; height: 15px; border: 2px solid var(--vscode-editor-background);
+      border-radius: 50%; color: #fff; font: 700 10px/1 var(--vscode-font-family);
+    }
+    .status.success .orb::after { content: '✓'; background: var(--vscode-testing-iconPassed, #2ea043); }
+    .status.error .orb::after { content: '!'; background: var(--vscode-testing-iconFailed, #f85149); }
     .status-title { font-weight: 600; }
     .status-detail { color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     @keyframes pulse { from { transform: scale(.8); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
-    .ticker {
-      position: relative; min-height: 25px; overflow: hidden; margin-bottom: 8px;
-      border-radius: 5px; background: var(--vscode-textBlockQuote-background);
-    }
-    .ticker.empty::after {
-      content: '关键操作会在这里显示'; display: block; padding: 4px 8px;
-      color: var(--vscode-descriptionForeground);
-    }
-    .bullet {
-      padding: 4px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      animation: arrive .25s ease-out, leave .3s ease-in 3.7s forwards;
-    }
-    .bullet.error { color: var(--vscode-errorForeground); }
-    @keyframes arrive { from { transform: translateX(28px); opacity: 0; } }
-    @keyframes leave { to { transform: translateX(-20px); opacity: 0; } }
+    @keyframes wave { to { stroke-dashoffset: -6; } }
     .controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 5px; margin-bottom: 8px; }
     select { min-width: 0; padding: 2px 4px; }
-    .toolbar { display: flex; gap: 5px; margin-bottom: 8px; }
-    .toolbar button[aria-pressed="true"] { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
     .empty-state {
       padding: 18px 8px; text-align: center; color: var(--vscode-descriptionForeground);
       border: 1px dashed var(--vscode-widget-border); border-radius: 7px;
@@ -141,10 +141,17 @@ export function activityViewHtml(webview: vscode.Webview): string {
 </head>
 <body>
   <section id="status" class="status idle" aria-live="polite">
-    <div id="orb" class="orb" aria-hidden="true">◇</div>
+    <div id="orb" class="orb" role="img" aria-label="空闲">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path class="orb-frame" d="M5.5 4.5h13a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2Z M3.8 8h16.4"/>
+        <circle class="orb-dot" cx="6.3" cy="6.25" r=".65"/>
+        <circle class="orb-dot" cx="8.65" cy="6.25" r=".65" opacity=".75"/>
+        <circle class="orb-dot" cx="11" cy="6.25" r=".65" opacity=".5"/>
+        <path class="orb-wave" d="M6.2 14h2.15l1.45-2.8 2.55 5 1.7-3.15h3.7"/>
+      </svg>
+    </div>
     <div><div id="statusTitle" class="status-title">等待 Agent 操作</div><div id="statusDetail" class="status-detail">当前远程窗口</div></div>
   </section>
-  <div id="ticker" class="ticker empty" aria-live="polite"></div>
   <div class="controls">
     <select id="category" aria-label="按操作类型筛选">
       <option value="all">全部类型</option><option value="read">读取/搜索</option>
@@ -156,21 +163,17 @@ export function activityViewHtml(webview: vscode.Webview): string {
     </select>
     <button id="clear" type="button" title="清空当前窗口记录">清空</button>
   </div>
-  <div class="toolbar"><button id="pause" type="button" aria-pressed="false">暂停弹幕</button></div>
   <main id="timeline" class="timeline"></main>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const timeline = document.getElementById('timeline');
-    const ticker = document.getElementById('ticker');
     const statusCard = document.getElementById('status');
     const statusTitle = document.getElementById('statusTitle');
     const statusDetail = document.getElementById('statusDetail');
     const orb = document.getElementById('orb');
     const categoryFilter = document.getElementById('category');
     const statusFilter = document.getElementById('eventStatus');
-    const pauseButton = document.getElementById('pause');
     let events = [];
-    let paused = false;
     let statusTimer;
     const seenStatus = new Map();
     const labels = {
@@ -298,25 +301,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
       statusCard.className = 'status ' + kind;
       statusTitle.textContent = title;
       statusDetail.textContent = detail || '当前远程窗口';
-      orb.textContent = kind === 'running' ? '↻' : kind === 'success' ? '✓' : kind === 'error' ? '!' : '◇';
+      orb.setAttribute('aria-label', kind === 'running' ? '执行中' : kind === 'success' ? '成功' : kind === 'error' ? '失败' : '空闲');
       if (kind === 'success' || kind === 'error') {
         statusTimer = setTimeout(function() { setStatus('idle', '等待 Agent 操作', '当前远程窗口'); }, 2000);
       }
-    }
-    function bullet(event) {
-      if (paused) return;
-      const important = event.category !== 'read' || event.status === 'error' || event.status === 'interrupted';
-      if (!important) return;
-      ticker.classList.remove('empty');
-      while (ticker.children.length >= 3) ticker.firstElementChild.remove();
-      const message = event.agentName + ' · ' + label(event) + (target(event) ? ' · ' + target(event) : '')
-        + (event.status === 'error' || event.status === 'interrupted' ? ' · ' + statusText(event.status) : '');
-      const item = textElement('div', 'bullet ' + (event.status === 'error' || event.status === 'interrupted' ? 'error' : ''), message);
-      ticker.appendChild(item);
-      setTimeout(function() {
-        item.remove();
-        if (!ticker.children.length) ticker.classList.add('empty');
-      }, 4100);
     }
     function acceptState(message) {
       const incoming = Array.isArray(message.events) ? message.events : [];
@@ -325,13 +313,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
         incoming.forEach(function(event) {
           const previous = seenStatus.get(event.id);
           if (previous !== event.status) {
-            if (event.status === 'running') {
-              bullet(event);
-            } else if (previous === 'running') {
+            if (event.status !== 'running' && previous === 'running') {
               if (!completedEvent || Date.parse(event.completedAt || '') >= Date.parse(completedEvent.completedAt || '')) {
                 completedEvent = event;
               }
-              if (event.status !== 'success') bullet(event);
             }
           }
         });
@@ -355,11 +340,6 @@ export function activityViewHtml(webview: vscode.Webview): string {
     });
     categoryFilter.addEventListener('change', render);
     statusFilter.addEventListener('change', render);
-    pauseButton.addEventListener('click', function() {
-      paused = !paused;
-      pauseButton.setAttribute('aria-pressed', String(paused));
-      pauseButton.textContent = paused ? '恢复弹幕' : '暂停弹幕';
-    });
     document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
     vscode.postMessage({ type: 'ready' });
   </script>

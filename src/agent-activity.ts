@@ -57,11 +57,6 @@ export function agentActivityCategory(toolName: string): AgentActivityCategory {
   return 'read';
 }
 
-export function isAgentActivityImportant(event: AgentActivityEvent): boolean {
-  return event.status === 'error' || event.status === 'interrupted'
-    || event.category !== 'read';
-}
-
 function safeText(value: unknown, limit: number): string | undefined {
   if (typeof value !== 'string') return undefined;
   const redacted = redactSensitiveText(value).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ');

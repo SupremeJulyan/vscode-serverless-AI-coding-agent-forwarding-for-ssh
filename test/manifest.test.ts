@@ -185,7 +185,11 @@ test('contributes the Agent activity Webview in the SAFS sidebar', async () => {
   const mounts = manifest.contributes?.views?.safs?.find((view) => view.id === 'safs.mounts');
   assert.equal(mounts?.icon, 'resources/remote-ssh.svg');
   assert.notEqual(mounts?.icon, 'resources/agent-activity.svg');
-  await access(new URL('../resources/agent-activity.svg', import.meta.url));
+  const activityIcon = await readFile(
+    new URL('../resources/agent-activity.svg', import.meta.url), 'utf8'
+  );
+  assert.ok(activityIcon.includes('M3 13h4l2-5 4 10'));
+  assert.equal(activityIcon.includes('M8 2.75 L16 2.75'), false);
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes('registerWebviewViewProvider(agentActivityViewId'));
 });
