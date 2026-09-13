@@ -12,20 +12,20 @@ test('applies multiple exact remote edits transactionally and in order', () => {
 test('rejects missing, ambiguous, empty, or excessive remote edits', () => {
   assert.throws(() => applyRemoteTextEdits('same same', [
     { oldText: 'missing', newText: 'x' }
-  ]), /未找到/);
+  ]), /did not match/);
   assert.throws(() => applyRemoteTextEdits('same same', [
     { oldText: 'same', newText: 'x' }
-  ]), /匹配到多处/);
+  ]), /matched more than once/);
   assert.throws(() => applyRemoteTextEdits('aaa', [
     { oldText: 'aa', newText: 'x' }
-  ]), /匹配到多处/);
-  assert.throws(() => applyRemoteTextEdits('text', []), /至少需要/);
+  ]), /matched more than once/);
+  assert.throws(() => applyRemoteTextEdits('text', []), /at least one edit/);
   assert.throws(() => applyRemoteTextEdits('text', [
     { oldText: '', newText: 'x' }
-  ]), /不能为空/);
+  ]), /must not be empty/);
   assert.throws(() => applyRemoteTextEdits('text', Array.from(
     { length: 101 }, () => ({ oldText: 'x', newText: 'y' })
-  )), /最多接受/);
+  )), /at most 100 edits/);
 });
 
 test('computes stable SHA-256 hashes for optimistic concurrency checks', () => {

@@ -1,7 +1,7 @@
 use serde_json::{json, Map, Value};
 use std::{
     env, fs,
-    io::{self, BufRead, BufReader, BufWriter, Read, Write},
+    io::{self, Read},
     process,
     time::Duration,
 };
@@ -13,7 +13,6 @@ Workspace: bind, workspaces, switch, current-file
 Read:      list, read, read-many, search, find, output
 Write:     edit, write, delete, chmod, move, upload, download
 Execute:   exec, batch
-MCP:       mcp-bridge
 
 Run `safs COMMAND --help` for exact arguments and JSON examples.
 Global options: --compact, --verbose
@@ -125,12 +124,6 @@ Continues a retained, truncated command stream without rerunning the command.
             r#"Usage: safs batch --binding ID --input JSON|-
 Example: --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
 Runs 1 to 50 operations sequentially in one local HTTP request.
-"#,
-        ),
-        "mcp-bridge" => Some(
-            r#"Usage: safs mcp-bridge --agent NAME --platform wsl|mac|linux|win
-Runs a stdio MCP bridge to the local SAFS router. The bridge always bypasses
-HTTP proxy settings so loopback traffic cannot be intercepted by a proxy.
 "#,
         ),
         _ => None,
@@ -616,146 +609,6 @@ fn invoke(config_path: &str, name: String, arguments: Value) -> Result<Value, St
         .ok_or("SAFS router returned no result".into())
 }
 
-fn tagged_mcp_connection(
-    config_path: &str,
-    agent_name: &str,
-    platform: &str,
-) -> Result<RouterConnection, String> {
-    let agent_name = validate_agent_name(agent_name, "--agent")?;
-    if !matches!(platform, "wsl" | "mac" | "linux" | "win") {
-        return Err("--platform must be wsl, mac, linux, or win".into());
-    }
-    let mut connection = router_connection(config_path, "/mcp")?;
-    let retained: Vec<(String, String)> = connection
-        .url
-        .query_pairs()
-        .filter(|(key, _)| key != "agent" && key != "platform")
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    connection
-        .url
-        .query_pairs_mut()
-        .clear()
-        .extend_pairs(retained)
-        .append_pair("agent", &agent_name)
-        .append_pair("platform", platform);
-    Ok(connection)
-}
-
-fn decode_mcp_response(body: &str) -> Result<Vec<Value>, String> {
-    let body = body.trim();
-    if body.is_empty() {
-        return Ok(Vec::new());
-    }
-    if let Ok(value) = serde_json::from_str(body) {
-        return Ok(vec![value]);
-    }
-    let normalized = body.replace("\r\n", "\n");
-    let mut messages = Vec::new();
-    for event in normalized.split("\n\n") {
-        let data = event
-            .lines()
-            .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !data.is_empty() {
-            messages.push(
-                serde_json::from_str(&data)
-                    .map_err(|_| "Invalid SSE JSON from SAFS router".to_string())?,
-            );
-        }
-    }
-    if messages.is_empty() {
-        return Err("Invalid response from SAFS MCP router".into());
-    }
-    Ok(messages)
-}
-
-fn mcp_error(request: &Value, message: String) -> Option<Value> {
-    request.get("id").cloned().map(|id| {
-        json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": { "code": -32000, "message": message }
-        })
-    })
-}
-
-fn write_mcp_message(writer: &mut impl Write, message: &Value) -> Result<(), String> {
-    serde_json::to_writer(&mut *writer, message)
-        .map_err(|_| "Cannot encode MCP response".to_string())?;
-    writer
-        .write_all(b"\n")
-        .and_then(|_| writer.flush())
-        .map_err(|_| "Cannot write MCP response".to_string())
-}
-
-fn run_mcp_bridge(config_path: &str, mut args: Vec<String>, verbose: bool) -> Result<i32, String> {
-    let agent_name =
-        take_option(&mut args, "--agent")?.ok_or("mcp-bridge requires --agent NAME")?;
-    let platform = take_option(&mut args, "--platform")?
-        .ok_or("mcp-bridge requires --platform wsl|mac|linux|win")?;
-    if !args.is_empty() {
-        return Err(format!("Invalid mcp-bridge option: {}", args[0]));
-    }
-    let connection = tagged_mcp_connection(config_path, &agent_name, &platform)?;
-    let agent = direct_agent(connection.timeout);
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let reader = BufReader::new(stdin.lock());
-    let mut writer = BufWriter::new(stdout.lock());
-    for line in reader.lines() {
-        let line = line.map_err(|_| "Cannot read MCP stdin".to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let request: Value = match serde_json::from_str(&line) {
-            Ok(value) => value,
-            Err(_) => {
-                write_mcp_message(
-                    &mut writer,
-                    &json!({
-                        "jsonrpc": "2.0",
-                        "id": Value::Null,
-                        "error": { "code": -32700, "message": "Invalid JSON on MCP stdin" }
-                    }),
-                )?;
-                continue;
-            }
-        };
-        let result = agent
-            .post(connection.url.as_str())
-            .header("accept", "application/json, text/event-stream")
-            .header("content-type", "application/json")
-            .send_json(&request)
-            .map_err(|error| redacted_request_error(error, &connection.url))
-            .and_then(|mut response| {
-                response
-                    .body_mut()
-                    .read_to_string()
-                    .map_err(|error| format!("Cannot read SAFS MCP response: {error}"))
-            })
-            .and_then(|body| decode_mcp_response(&body));
-        match result {
-            Ok(messages) => {
-                for message in messages {
-                    write_mcp_message(&mut writer, &message)?;
-                }
-            }
-            Err(detail) => {
-                let message = format!("Local SAFS MCP router request failed: {detail}");
-                if verbose {
-                    eprintln!("SAFS MCP bridge: {message}");
-                }
-                if let Some(error) = mcp_error(&request, message) {
-                    write_mcp_message(&mut writer, &error)?;
-                }
-            }
-        }
-    }
-    Ok(0)
-}
-
 fn result_exit_code(result: &Value) -> i32 {
     let error_code = result.get("code").and_then(Value::as_str);
     let item_failed = result
@@ -786,6 +639,13 @@ fn result_exit_code(result: &Value) -> i32 {
                 0
             }
         }) as i32
+}
+
+fn should_report_operation_error(name: &str, result: &Value, exit_code: i32) -> bool {
+    exit_code != 0
+        && (name != "run_remote_command"
+            || result.get("code").is_some()
+            || result.get("status").and_then(Value::as_str) == Some("error"))
 }
 
 fn compact_result(value: &mut Value) {
@@ -861,10 +721,6 @@ fn run() -> Result<i32, String> {
             })
         })
         .ok_or("Cannot locate the SAFS connection file")?;
-    if args.first().is_some_and(|value| value == "mcp-bridge") {
-        args.remove(0);
-        return run_mcp_bridge(&config, args, verbose);
-    }
     let reads_stdin = args.windows(2).any(|pair| {
         matches!(pair, [flag, value] if (flag == "--input" || flag == "--file") && value == "-")
     });
@@ -887,7 +743,7 @@ fn run() -> Result<i32, String> {
     )?;
     let mut result = invoke(&config, name.clone(), arguments)?;
     let code = result_exit_code(&result);
-    if code != 0 && name != "run_remote_command" {
+    if should_report_operation_error(&name, &result, code) {
         return Err(if verbose {
             serde_json::to_string(&result).unwrap_or_else(|_| "SAFS operation failed".into())
         } else {
@@ -1313,6 +1169,16 @@ mod tests {
             result_exit_code(&json!({"code": "WORKSPACE_SELECTION_REQUIRED"})),
             0
         );
+        assert!(should_report_operation_error(
+            "run_remote_command",
+            &json!({"code": "WORKSPACE_BOUNDARY_VIOLATION", "message": "outside"}),
+            1
+        ));
+        assert!(!should_report_operation_error(
+            "run_remote_command",
+            &json!({"exitCode": 1, "stderr": "test failed"}),
+            1
+        ));
     }
     #[test]
     fn builds_batches_and_compacts_routine_metadata() {
@@ -1356,21 +1222,5 @@ mod tests {
         .unwrap();
         assert_eq!(args["operations"][0]["name"], "current_remote_file");
         assert_eq!(args["operations"][0]["arguments"]["bindingId"], "id");
-    }
-
-    #[test]
-    fn decodes_json_and_sse_mcp_responses() {
-        assert_eq!(
-            decode_mcp_response(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).unwrap(),
-            vec![json!({"jsonrpc":"2.0","id":1,"result":{}})]
-        );
-        assert_eq!(
-            decode_mcp_response(
-                "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\r\n\r\n"
-            )
-            .unwrap(),
-            vec![json!({"jsonrpc":"2.0","id":2,"result":{}})]
-        );
-        assert!(decode_mcp_response("not-json-or-sse").is_err());
     }
 }

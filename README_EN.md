@@ -62,8 +62,8 @@ The remote terminal opens in the directory of the active file by default, or at 
 
 Hybrid is the default mode:
 
-1. Click **Enable Agent Forwarding** beside the connection in the SAFS view.
-2. The extension installs or updates the current platform's global `safs` CLI. Enter the Agent name and platform when prompted, and it copies an English installation prompt containing the local Streamable HTTP URL.
+1. Click **Enable Agent Forwarding** beside the parent connection node in the SAFS view. The current window shows the installation input only once when that connection changes from disabled to enabled; opening other windows or changing interface mode does not show it again.
+2. The extension installs or updates the current platform's global `safs` CLI. In MCP or hybrid mode, enter the Agent name and platform when prompted, and it copies an English installation prompt containing the local Streamable HTTP URL.
 3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself. MCP loads only workspace bind and switch; all other operations use CLI. SAFS does not detect or modify Agent configuration.
 4. Open the remote directory for that connection.
 5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
@@ -75,7 +75,7 @@ If a global proxy causes HTTP 502, proxy connection errors, or timeouts, switch 
 
 `safs.agentInterface` supports three modes:
 
-- `hybrid` (default): MCP binds or switches the workspace and returns a `bindingId`; file and command operations run through the global `safs` CLI. Loading only two MCP tools reduces tool-schema context.
+- `hybrid` (default): MCP binds or switches the workspace and returns a `bindingId` plus CLI operation constraints; file and command operations run through the global `safs` CLI. Loading only two MCP tools reduces tool-schema context.
 - `mcp`: every operation uses the MCP tool set selected by `safs.agentMcpToolProfile`.
 - `cli`: no MCP installation; the Agent runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
 
@@ -83,11 +83,22 @@ Changing modes does not automatically uninstall the other entry point, so differ
 On upgrade, an explicitly saved legacy `mcp` value is migrated to `hybrid` once; an
 explicit `cli` choice is preserved, and any mode can still be selected afterward.
 
+When the same host, mount, and remote root are republished, an existing binding automatically
+resumes on the unique new instance. Selection is requested again only when the target is gone or
+ambiguous.
+
+In hybrid mode, a successful bind returns only the target workspace, `bindingId`, and CLI
+instructions. Pure MCP returns only the target workspace and `bindingId`. Switching first lists
+candidates and waits for an explicit user choice; after a successful switch, the Agent stops the
+current task and waits for a new user request.
+
 In every mode, the SAFS backend validates write operations against the bound `workspaceRoot`, so
 the boundary does not depend on the Agent interpreting a prompt. Use the corresponding structured
 SAFS commands for remote reads, searches, creation, edits, moves, deletion, and transfers. Reserve
-`safs exec` for task commands such as builds and tests, never for file operations. For example,
-SAFS rejects creating a file under `/A` when the workspace is rooted at `/A/B`.
+`safs exec` for task commands such as builds and tests, never for file operations. A boundary
+rejection is marked non-retryable, explicitly prohibits falling back to `safs exec`, and is printed
+directly by the CLI. For example, SAFS rejects creating a file under `/A` when the workspace is
+rooted at `/A/B`.
 
 Once enabled, the Agent can:
 
@@ -115,7 +126,7 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. In CLI-only mode, run `SAFS: Install Agent Forwarding for My Agent` and paste the copied English prompt into the Agent. The prompt asks the Agent to create or update one marked SAFS block in its user-level global persistent instructions—not only in the current conversation or project—while preserving every other existing rule and avoiding duplicate blocks. `safs --help` provides the actual workflow, and the Agent starts with `safs bind --agent "<Agent name>"`. The uninstall command copies an English prompt that removes only the block with the same markers. The default hybrid mode already provides CLI's token advantage; use CLI-only mode when an Agent does not support MCP or loopback MCP cannot be routed directly. CLI bypasses HTTP proxies when connecting to the local router.
+CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. The first time the extension prepares it after startup, the executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. In CLI-only mode, click **Enable Agent Forwarding** on the parent connection node and paste the automatically copied English prompt into the Agent. The prompt asks the Agent to create or update one marked SAFS block in its user-level global persistent instructions—not only in the current conversation or project—while preserving every other existing rule and avoiding duplicate blocks. `safs --help` provides the actual workflow, and the Agent starts with `safs bind --agent "<Agent name>"`. The uninstall command copies an English prompt that removes only the block with the same markers. The default hybrid mode already provides CLI's token advantage; use CLI-only mode when an Agent does not support MCP or loopback MCP cannot be routed directly. CLI bypasses HTTP proxies when connecting to the local router. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
 
 CLI installation is global and Agent-independent. The Agent name is recorded only when
 `bind` creates a binding; later operations inherit it through `--binding`. The label is

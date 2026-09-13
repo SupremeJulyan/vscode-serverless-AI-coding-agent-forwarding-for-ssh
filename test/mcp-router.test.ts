@@ -120,9 +120,15 @@ test('normalizes Windows and WSL views of the same Agent cwd', () => {
 test('hybrid mode exposes two MCP tools and reuses their binding through CLI', async () => {
   const backend = new AgentMcpServer(0, 'hybrid-backend', callbacks('hybrid'));
   const router = new AgentHttpRouter(await freePort(), 'router-token', {
-    discover: () => [record('hybrid-window', backend.url, {
-      workspaceRoot: '/srv/hybrid', agentCwd: '/local/hybrid', focused: true
-    })],
+    discover: () => [
+      record('hybrid-window', backend.url, {
+        workspaceRoot: '/srv/hybrid', agentCwd: '/local/hybrid', focused: true
+      }),
+      record('hybrid-other', backend.url, {
+        mountName: 'B', host: 'other', workspaceRoot: '/srv/other',
+        agentCwd: '/local/other', focused: false
+      })
+    ],
     toolProfile: () => 'hybrid'
   });
   const client = new Client({ name: 'hybrid-agent', version: '1.0.0' });
@@ -132,8 +138,8 @@ test('hybrid mode exposes two MCP tools and reuses their binding through CLI', a
     const mcpUrl = new URL(agentTaggedMcpUrl(router.url, 'Codex', 'linux'));
     await client.connect(new StreamableHTTPClientTransport(mcpUrl));
     const instructions = client.getInstructions() ?? '';
-    assert.match(instructions, /global safs CLI/);
-    assert.match(instructions, /Never perform file operations through safs exec/);
+    assert.match(instructions, /follow the cliInstructions/);
+    assert.equal(instructions.includes('Never perform file operations through safs exec'), false);
     assert.equal(instructions.includes('workspaceRoot'), false);
     assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), [
       'get_remote_workspace', 'switch_remote_workspace'
@@ -144,7 +150,11 @@ test('hybrid mode exposes two MCP tools and reuses their binding through CLI', a
     const selectedValue = JSON.parse((selected.content as any[])[0].text);
     const bindingId = selectedValue.bindingId;
     assert.equal(typeof bindingId, 'string');
-    assert.equal(selectedValue.cliBindingArgument, `--binding ${bindingId}`);
+    assert.deepEqual(Object.keys(selectedValue).sort(), [
+      'bindingId', 'cliInstructions', 'workspace'
+    ]);
+    assert.match(selectedValue.cliInstructions, /--binding <bindingId>/);
+    assert.match(selectedValue.cliInstructions, /Never use local filesystem tools or safs exec/);
 
     const cliUrl = new URL(router.url);
     cliUrl.pathname = '/cli';
@@ -160,6 +170,93 @@ test('hybrid mode exposes two MCP tools and reuses their binding through CLI', a
     assert.equal(envelope.ok, true);
     assert.equal(envelope.result.label, 'hybrid');
     assert.equal(envelope.result.input.path, 'README.md');
+
+    const switched = await client.callTool({
+      name: 'switch_remote_workspace',
+      arguments: { workspaceId: 'hybrid-other', userConfirmed: true }
+    });
+    const switchedValue = JSON.parse((switched.content as any[])[0].text);
+    assert.deepEqual(Object.keys(switchedValue).sort(), [
+      'bindingId', 'cliInstructions', 'message', 'mustStopNow', 'workspace'
+    ]);
+    assert.deepEqual(switchedValue.workspace, {
+      host: 'other', workspaceRoot: '/srv/other'
+    });
+  } finally {
+    await client.close();
+    await Promise.allSettled([router.stop(), backend.stop()]);
+  }
+});
+
+test('binding survives a unique republish of the same logical workspace', async () => {
+  const backend = new AgentMcpServer(0, 'republished-backend', callbacks('republished'));
+  let workspaces: DiscoveredAgentWorkspace[] = [];
+  const router = new AgentHttpRouter(await freePort(), 'router-token', {
+    discover: () => workspaces
+  });
+  const client = new Client({ name: 'republish-agent', version: '1.0.0' });
+  try {
+    await backend.start();
+    workspaces = [record('old-instance', backend.url, {
+      host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
+      agentCwd: '/placeholder/a', focused: true
+    })];
+    await router.start();
+    await client.connect(new StreamableHTTPClientTransport(new URL(router.url)));
+    const selected = await client.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/placeholder/a/project' }
+    });
+    const selectedValue = JSON.parse((selected.content as any[])[0].text);
+
+    workspaces = [record('new-instance', backend.url, {
+      host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
+      agentCwd: '/new-placeholder/a', focused: false
+    })];
+    const resumed = await client.callTool({
+      name: 'remote_list', arguments: { bindingId: selectedValue.bindingId, path: '.' }
+    });
+    assert.equal(JSON.parse((resumed.content as any[])[0].text).label, 'republished');
+
+    workspaces = [];
+    const temporarilyMissing = await client.callTool({
+      name: 'remote_list', arguments: { bindingId: selectedValue.bindingId, path: '.' }
+    });
+    assert.equal(temporarilyMissing.isError, true);
+    assert.equal(
+      JSON.parse((temporarilyMissing.content as any[])[0].text).code,
+      'WORKSPACE_BINDING_EXPIRED'
+    );
+
+    workspaces = [
+      record('duplicate-one', backend.url, {
+        host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
+        agentCwd: '/duplicate/one', focused: false
+      }),
+      record('duplicate-two', backend.url, {
+        host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
+        agentCwd: '/duplicate/two', focused: false
+      })
+    ];
+    const ambiguous = await client.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/unrelated/local/cwd' }
+    });
+    assert.equal(ambiguous.isError, true);
+    assert.equal(
+      JSON.parse((ambiguous.content as any[])[0].text).code,
+      'WORKSPACE_SELECTION_REQUIRED'
+    );
+
+    workspaces = [record('latest-instance', backend.url, {
+      host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
+      agentCwd: '/latest-placeholder/a', focused: false
+    })];
+    const rebound = await client.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/unrelated/local/cwd' }
+    });
+    const reboundValue = JSON.parse((rebound.content as any[])[0].text);
+    assert.equal(rebound.isError, undefined);
+    assert.deepEqual(Object.keys(reboundValue).sort(), ['bindingId', 'workspace']);
+    assert.deepEqual(reboundValue.workspace, { host: 'host-a', workspaceRoot: '/srv/a' });
   } finally {
     await client.close();
     await Promise.allSettled([router.stop(), backend.stop()]);
@@ -193,7 +290,7 @@ test('exact cwd wins, expired binding stays invalid, and a new get may use focus
       arguments: { agentCwd: '/mnt/c/local/agent-cwd/a/project' }
     });
     const value = JSON.parse((selected.content as any[])[0].text);
-    assert.equal(value.selectedAutomatically, true);
+    assert.deepEqual(Object.keys(value).sort(), ['bindingId', 'workspace']);
     assert.deepEqual(value.workspace, { host: 'host-a', workspaceRoot: '/srv/a' });
 
     workspaces = [workspaces[1]];
@@ -232,6 +329,9 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
     await client.connect(new StreamableHTTPClientTransport(
       new URL(agentTaggedMcpUrl(router.url, 'Codex', 'wsl'))
     ));
+    const instructions = client.getInstructions() ?? '';
+    assert.match(instructions, /use the MCP tools only/i);
+    assert.equal(instructions.includes('SAFS CLI transport'), false);
     assert.deepEqual(await client.listResources(), { resources: [] });
     assert.deepEqual(await client.listResourceTemplates(), { resourceTemplates: [] });
 
@@ -245,7 +345,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
     assert.deepEqual(routeValue.workspace, {
       workspaceRoot: '/srv/a', host: 'dev'
     });
-    assert.equal(routeValue.selectedAutomatically, true);
+    assert.deepEqual(Object.keys(routeValue).sort(), ['bindingId', 'workspace']);
     assert.deepEqual(routerAudits, ['get_remote_workspace']);
 
     const connected = await client.callTool({
@@ -333,7 +433,7 @@ test('unmatched cwd automatically binds the uniquely focused SAFS window', async
     });
     const value = JSON.parse((selected.content as any[])[0].text);
     assert.equal(selected.isError, undefined);
-    assert.equal(value.selectedAutomatically, true);
+    assert.deepEqual(Object.keys(value).sort(), ['bindingId', 'workspace']);
     assert.deepEqual(value.workspace, { workspaceRoot: '/srv/a', host: 'host-a' });
   } finally {
     await client.close();
@@ -412,9 +512,11 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
     assert.deepEqual(selectedValue.workspace, {
       workspaceRoot: '/srv/b', host: 'host-b'
     });
-    assert.equal(selectedValue.selectedAutomatically, false);
-    assert.equal(selectedValue.previousTaskCancelled, true);
-    assert.equal(selectedValue.mustWaitForNewUserRequest, true);
+    assert.equal(selectedValue.mustStopNow, true);
+    assert.match(selectedValue.message, /Stop now and wait for a new user request/);
+    assert.deepEqual(Object.keys(selectedValue).sort(), [
+      'bindingId', 'message', 'mustStopNow', 'workspace'
+    ]);
     const bound = await client.callTool({
       name: 'remote_list', arguments: { bindingId, path: '.' }
     });

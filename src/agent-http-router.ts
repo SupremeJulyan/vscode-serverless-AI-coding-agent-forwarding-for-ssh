@@ -8,7 +8,7 @@ import {
 } from './agent-discovery';
 import {
   type AgentToolProfile, configureAgentMcpResources, hybridAgentMcpInstructions,
-  registerAgentMcpTools, routedAgentMcpInstructions
+  hybridCliInstructions, registerAgentMcpTools, routedAgentMcpInstructions
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
 
@@ -152,8 +152,12 @@ export class AgentHttpRouter {
   private _leader = false;
   private readonly discover: () => DiscoveredAgentWorkspace[];
   private readonly bindings = new Map<string, {
-    instanceId: string; host: string; workspaceRoot: string; owner: string;
+    instanceId: string; host: string; mountName: string; workspaceRoot: string;
+    workspaceUri: string; owner: string;
     agentName?: string; agentPlatform?: AgentPlatformLabel;
+  }>();
+  private readonly preferredTargets = new Map<string, {
+    host: string; mountName: string; workspaceRoot: string; workspaceUri: string;
   }>();
 
   constructor(
@@ -192,7 +196,28 @@ export class AgentHttpRouter {
   private workspace(bindingId: string): DiscoveredAgentWorkspace | undefined {
     const workspaces = this.workspaces();
     const binding = this.bindings.get(bindingId);
-    return binding && workspaces.find((workspace) => workspace.instanceId === binding.instanceId);
+    if (!binding) return undefined;
+    const exact = workspaces.find((workspace) => workspace.instanceId === binding.instanceId);
+    if (exact) return exact;
+    const replacements = workspaces.filter((workspace) =>
+      this.isSameLogicalTarget(binding, workspace)
+    );
+    if (replacements.length !== 1) return undefined;
+    binding.instanceId = replacements[0].instanceId;
+    this.options.log?.(
+      `Binding ${bindingId} resumed on republished workspace ${replacements[0].instanceId}`
+    );
+    return replacements[0];
+  }
+
+  private isSameLogicalTarget(
+    target: { host: string; mountName: string; workspaceRoot: string; workspaceUri: string },
+    workspace: DiscoveredAgentWorkspace
+  ): boolean {
+    return workspace.host === target.host
+      && workspace.mountName === target.mountName
+      && workspace.workspaceRoot === target.workspaceRoot
+      && workspace.workspaceUri === target.workspaceUri;
   }
 
   private publicWorkspace(workspace: DiscoveredAgentWorkspace): Record<string, unknown> {
@@ -302,6 +327,7 @@ export class AgentHttpRouter {
       const bindingAgentName = source === 'cli'
         ? requestAgentName(input.agentName)
         : agentName;
+      const owner = this.bindingKey(bindingAgentName, agentPlatform);
       if (source === 'cli' && !bindingAgentName) {
         return this.toolError(
           'CLI_AGENT_NAME_REQUIRED',
@@ -320,6 +346,7 @@ export class AgentHttpRouter {
         ? input.workspaceId.trim()
         : '';
       const agentCwd = typeof input.agentCwd === 'string' ? input.agentCwd.trim() : '';
+      let recoveredLogicalWorkspace = false;
       let workspace = workspaceId
         ? workspaces.find((candidate) => candidate.instanceId === workspaceId)
         : undefined;
@@ -358,6 +385,16 @@ export class AgentHttpRouter {
           (candidate) => canonicalAgentCwd(candidate.agentCwd!).length === longest
         );
         if (closest.length === 1) workspace = closest[0];
+        if (!workspace) {
+          const preferred = this.preferredTargets.get(owner);
+          const previous = preferred
+            ? workspaces.filter((candidate) => this.isSameLogicalTarget(preferred, candidate))
+            : [];
+          if (previous.length === 1) {
+            workspace = previous[0];
+            recoveredLogicalWorkspace = true;
+          }
+        }
         if (!workspace && closest.length === 0) {
           const focused = workspaces.filter((candidate) => candidate.focused);
           if (focused.length === 1) workspace = focused[0];
@@ -369,7 +406,6 @@ export class AgentHttpRouter {
               ? 'The Agent cwd matches multiple active SAFS windows. Ask the user to choose one candidate in the Agent conversation, then call this tool again with its workspaceId.'
               : 'The Agent cwd does not match an active SAFS placeholder and there is no unique focused SAFS window. Ask the user to choose one candidate in the Agent conversation, then call switch_remote_workspace with its workspaceId.',
             {
-              agentCwd,
               candidates: workspaces.map((candidate) => this.selectableWorkspace(candidate)),
               ...(source === 'cli' ? { agentName: bindingAgentName } : {})
             }
@@ -377,30 +413,47 @@ export class AgentHttpRouter {
         }
       }
       const selectedWorkspace = workspace!;
-      const owner = this.bindingKey(bindingAgentName, agentPlatform);
       const bindingId = randomUUID().replace(/-/g, '').slice(0, 16);
       const hybridMcp = source === 'mcp' && this.options.toolProfile?.() === 'hybrid';
       this.bindings.set(bindingId, {
         instanceId: selectedWorkspace.instanceId,
         host: selectedWorkspace.host,
+        mountName: selectedWorkspace.mountName,
         workspaceRoot: selectedWorkspace.workspaceRoot,
+        workspaceUri: selectedWorkspace.workspaceUri,
         owner,
         agentName: bindingAgentName,
         agentPlatform
+      });
+      this.preferredTargets.set(owner, {
+        host: selectedWorkspace.host,
+        mountName: selectedWorkspace.mountName,
+        workspaceRoot: selectedWorkspace.workspaceRoot,
+        workspaceUri: selectedWorkspace.workspaceUri
       });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
           workspace: this.publicWorkspace(selectedWorkspace),
           bindingId,
-          agentName: bindingAgentName,
-          ...(hybridMcp ? { cliBindingArgument: `--binding ${bindingId}` } : {}),
-          selectedAutomatically: !switching,
-          ...(switching ? {
-            previousTaskCancelled: true,
-            mustWaitForNewUserRequest: true
+          ...(hybridMcp ? {
+            cliInstructions: hybridCliInstructions
           } : {}),
-          localFilesystemAllowed: false,
-          localShellAllowed: false
+          ...(source === 'cli' ? {
+            agentName: bindingAgentName,
+            selectedAutomatically: !switching,
+            ...(recoveredLogicalWorkspace ? { recoveredLogicalWorkspace: true } : {}),
+            localFilesystemAllowed: false,
+            localShellAllowed: false
+          } : {}),
+          ...(switching && source === 'cli' ? {
+            previousTaskCancelled: true,
+            mustWaitForNewUserRequest: true,
+            mustStopNow: true,
+            message: 'Workspace switched. Stop now and wait for a new user request before doing any remote work.'
+          } : switching ? {
+            mustStopNow: true,
+            message: 'Workspace switched. Stop now and wait for a new user request.'
+          } : {})
         }) }]
       };
     }

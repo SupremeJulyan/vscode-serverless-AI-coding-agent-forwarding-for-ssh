@@ -50,13 +50,13 @@ test('local transfer validation rejects symlink escapes', async () => {
   await symlink(outsideFile, fileLink);
   await symlink(outside, dirLink, 'dir');
   await symlink(path.join(outside, 'missing'), danglingLink);
-  await assert.rejects(validateLocalUploadSource(root, fileLink), /符号链接|超出/);
+  await assert.rejects(validateLocalUploadSource(root, fileLink), /symbolic link|outside/);
   await assert.rejects(
     validateLocalDownloadTarget(root, path.join(dirLink, 'target.bin')),
-    /符号链接|超出/
+    /symbolic link|outside/
   );
   await assert.rejects(
     validateLocalDownloadTarget(root, danglingLink),
-    /符号链接|超出/
+    /symbolic link|outside/
   );
 });

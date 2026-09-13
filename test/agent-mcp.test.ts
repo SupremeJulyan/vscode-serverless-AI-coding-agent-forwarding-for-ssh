@@ -3,7 +3,7 @@ import * as http from 'node:http';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { AgentMcpServer } from '../src/agent-mcp';
+import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
 
 async function freePort(): Promise<number> {
   const server = http.createServer();
@@ -36,14 +36,28 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       workspaceRoot: '/srv/project',
       host: 'dev'
     }),
-    currentFile: async (input) => ({ ...input, path: '/srv/project/README.md', dirty: false }),
+    currentFile: async (input) => ({
+      ...input, mountName: 'project', path: '/srv/project/README.md', relative: 'README.md',
+      size: 12, modified: 123, dirty: false, exists: true
+    }),
     list: async (input) => {
       if (input.path === 'forbidden') throw new Error('路径越界');
       return { ...input, entries: [] };
     },
     read: async (input) => ({ ...input, content: 'hello', truncated: false }),
     edit: async (input) => ({ ...input, replacements: input.edits.length }),
-    write: async (input) => ({ ...input, bytes: input.content.length }),
+    write: async (input) => {
+      if (input.path === '../outside.txt') {
+        throw new AgentToolError(
+          'WORKSPACE_BOUNDARY_VIOLATION', 'Path is outside the workspace.', {
+            nonRetryable: true,
+            mustStopNow: true,
+            prohibitedFallback: 'safs exec'
+          }
+        );
+      }
+      return { ...input, bytes: input.content.length };
+    },
     delete: async (input) => ({ ...input, deleted: true }),
     chmod: async (input) => ({ ...input, changed: true }),
     move: async (input) => ({ ...input, moved: true }),
@@ -96,7 +110,10 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       name: 'current_remote_file', arguments: {}
     });
     const currentFileText = (currentFile.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
-    assert.equal(JSON.parse(currentFileText).path, '/srv/project/README.md');
+    assert.deepEqual(JSON.parse(currentFileText), {
+      path: '/srv/project/README.md', relative: 'README.md', size: 12,
+      modified: 123, dirty: false, exists: true
+    });
     const route = await client.callTool({
       name: 'get_remote_workspace', arguments: {}
     });
@@ -105,9 +122,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       workspace: {
         workspaceRoot: '/srv/project',
         host: 'dev'
-      },
-      localFilesystemAllowed: false,
-      localShellAllowed: false
+      }
     });
     const listed = await client.callTool({
       name: 'remote_list', arguments: { path: '.', limit: 10 }
@@ -176,10 +191,21 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     assert.deepEqual(JSON.parse(rejectedText), {
       code: 'REMOTE_TOOL_ERROR', message: '路径越界'
     });
+    const boundaryRejected = await client.callTool({
+      name: 'remote_write', arguments: { path: '../outside.txt', content: 'blocked' }
+    });
+    assert.equal(boundaryRejected.isError, true);
+    assert.deepEqual(JSON.parse((boundaryRejected.content as any[])[0].text), {
+      nonRetryable: true,
+      mustStopNow: true,
+      prohibitedFallback: 'safs exec',
+      code: 'WORKSPACE_BOUNDARY_VIOLATION',
+      message: 'Path is outside the workspace.'
+    });
     assert.deepEqual(audited.map((entry) => entry.toolName), [
       'current_remote_file', 'get_remote_workspace', 'remote_list',
       'remote_read', 'remote_edit', 'remote_download', 'remote_upload', 'remote_delete',
-      'remote_chmod', 'remote_move', 'remote_search', 'remote_list'
+      'remote_chmod', 'remote_move', 'remote_search', 'remote_list', 'remote_write'
     ]);
     assert.ok(audited.every((entry) => entry.agentName === 'codex'));
     const large = await client.callTool({ name: 'run_remote_command', arguments: { command: 'large' } });

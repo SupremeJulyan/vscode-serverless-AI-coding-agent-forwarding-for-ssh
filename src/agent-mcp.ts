@@ -70,6 +70,18 @@ export interface AgentMcpCallbacks {
   log?(message: string): void;
 }
 
+/** A structured operation error whose recovery hints are safe to expose to Agents. */
+export class AgentToolError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly details: Record<string, unknown> = {}
+  ) {
+    super(message);
+    this.name = 'AgentToolError';
+  }
+}
+
 export class AgentMcpServer {
   private readonly outputs = new RemoteOutputStore();
   private httpServer: http.Server | undefined;
@@ -109,13 +121,17 @@ export class AgentMcpServer {
     });
     // 业务错误作为 MCP tool result 返回，使固定路由器能原样透传；
     // 只有 HTTP/转发层故障才应被标记为 REMOTE_UNAVAILABLE。
-    const toolError = (error: unknown) => ({
-      isError: true,
-      content: [{ type: 'text' as const, text: JSON.stringify({
-        code: 'REMOTE_TOOL_ERROR',
-        message: error instanceof Error ? error.message : String(error)
-      }) }]
-    });
+    const toolError = (error: unknown) => {
+      const structured = error instanceof AgentToolError ? error : undefined;
+      return {
+        isError: true,
+        content: [{ type: 'text' as const, text: JSON.stringify({
+          ...(structured?.details ?? {}),
+          code: structured?.code ?? 'REMOTE_TOOL_ERROR',
+          message: error instanceof Error ? error.message : String(error)
+        }) }]
+      };
+    };
     const trackedTools = new Set([
       'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many',
       'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move',
@@ -164,6 +180,11 @@ export class AgentMcpServer {
       workspaceRoot: info.workspaceRoot,
       host: info.host
     });
+    const publicCurrentFile = (value: unknown): unknown => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      const { mountName: _mountName, ...publicValue } = value as Record<string, unknown>;
+      return publicValue;
+    };
     const outputScope = async () => {
       const workspace = await this.callbacks.currentWorkspace();
       if (!workspace) throw new Error('No active workspace for retained output.');
@@ -184,9 +205,7 @@ export class AgentMcpServer {
             return invoke(name, input, async () => {
               const current = await this.callbacks.currentWorkspace();
               return current ? {
-                workspace: publicFolder(current),
-                localFilesystemAllowed: false,
-                localShellAllowed: false
+                workspace: publicFolder(current)
               } : { workspace: null };
             });
           case 'switch_remote_workspace':
@@ -194,7 +213,9 @@ export class AgentMcpServer {
               throw new Error('Workspace switching is only available through the SAFS router');
             });
           case 'current_remote_file':
-            return invoke(name, input, () => this.callbacks.currentFile(input));
+            return invoke(name, input, async () => publicCurrentFile(
+              await this.callbacks.currentFile(input)
+            ));
           case 'remote_list':
             return invoke(name, input, () => {
               if (!input.paths) return this.callbacks.list(input);

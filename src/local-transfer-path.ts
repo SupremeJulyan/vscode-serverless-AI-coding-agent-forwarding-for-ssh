@@ -36,7 +36,7 @@ async function assertNoLinkedTargetComponent(root: string, target: string): Prom
     try {
       const entry = await lstat(current);
       if (entry.isSymbolicLink()) {
-        throw new Error(`本地下载目标包含符号链接：${current}`);
+        throw new Error(`Local download target contains a symbolic link: ${current}`);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -48,23 +48,23 @@ async function assertNoLinkedTargetComponent(root: string, target: string): Prom
 
 /** Existing upload sources must resolve inside the automatically selected local staging root. */
 export async function validateLocalUploadSource(root: string, source: string): Promise<string> {
-  if (!path.isAbsolute(source)) throw new Error('本地上传源必须是绝对路径');
+  if (!path.isAbsolute(source)) throw new Error('Local upload source must be an absolute path.');
   const realRoot = await realpath(root);
   const realSource = await realpath(source);
   if (!isLocalPathInside(realRoot, realSource)) {
-    throw new Error(`本地上传源超出 Agent 工作目录：${source}`);
+    throw new Error(`Local upload source is outside the Agent staging root: ${source}`);
   }
   return path.resolve(source);
 }
 
 /** Download targets must be lexical descendants of root and contain no linked component. */
 export async function validateLocalDownloadTarget(root: string, target: string): Promise<string> {
-  if (!path.isAbsolute(target)) throw new Error('本地下载目标必须是绝对路径');
+  if (!path.isAbsolute(target)) throw new Error('Local download target must be an absolute path.');
   await realpath(root);
   const lexicalRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
   if (!isLocalPathInside(lexicalRoot, resolvedTarget)) {
-    throw new Error(`本地下载目标超出 Agent 工作目录：${target}`);
+    throw new Error(`Local download target is outside the Agent staging root: ${target}`);
   }
   await assertNoLinkedTargetComponent(lexicalRoot, resolvedTarget);
   return resolvedTarget;

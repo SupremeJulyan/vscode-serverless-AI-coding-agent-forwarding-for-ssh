@@ -4,7 +4,7 @@ import test from 'node:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AgentMcpServer } from '../src/agent-mcp';
+import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
 import { AgentHttpRouter } from '../src/agent-http-router';
 import { cliConfigPath, writeCliConnection } from '../src/cli-integration';
 import { bundledNativeCli, nativeCliPlatform } from '../src/native-cli';
@@ -52,7 +52,14 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     move: async () => { operations.push('move'); return { status: 'ok' }; },
     upload: async () => { operations.push('upload'); return { status: 'ok' }; },
     download: async () => { operations.push('download'); return { status: 'ok' }; },
-    run: async () => {
+    run: async (input: { command: string }) => {
+      if (input.command === 'blocked-write') {
+        throw new AgentToolError(
+          'WORKSPACE_BOUNDARY_VIOLATION', 'outside workspace', {
+            nonRetryable: true, mustStopNow: true, prohibitedFallback: 'safs exec'
+          }
+        );
+      }
       runs += 1;
       return { stdout: 'native-out', stderr: 'native-err', exitCode: 7 };
     },
@@ -108,6 +115,16 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     assert.equal(run.exitCode, 7);
     assert.equal(run.stdout, 'native-out');
     assert.equal(run.stderr, 'native-err');
+    assert.equal(runs, 1);
+    const blockedRun = await executeCaptured({ command: executable, args: [
+      '--config', config, 'exec', '--binding', bindingId, '--', 'blocked-write'
+    ] });
+    assert.equal(blockedRun.exitCode, 1);
+    assert.equal(blockedRun.stdout, '');
+    assert.match(
+      blockedRun.stderr,
+      /WORKSPACE_BOUNDARY_VIOLATION: outside workspace/
+    );
     assert.equal(runs, 1);
     const currentFile = await executeCaptured({ command: executable, args: [
       '--config', config, 'current-file', '--binding', bindingId
@@ -253,7 +270,7 @@ test('native CLI applies the connection-file request timeout', async () => {
   }
 });
 
-test('native CLI and stdio MCP bridge bypass proxy variables for loopback', async () => {
+test('native CLI bypasses proxy variables for loopback', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-no-proxy-'));
   let proxyHits = 0;
   const proxy = http.createServer((_request, response) => {
@@ -293,32 +310,6 @@ test('native CLI and stdio MCP bridge bypass proxy variables for loopback', asyn
     assert.equal(workspaces.exitCode, 0, workspaces.stderr);
     assert.deepEqual(JSON.parse(workspaces.stdout), { workspaces: [] });
 
-    const initialize = await executeCaptured({
-      command: executable,
-      args: [
-        '--config', config, 'mcp-bridge', '--agent', 'proxy-test', '--platform', 'mac'
-      ],
-      env: proxyEnvironment,
-      stdin: [
-        {
-          jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-            protocolVersion: '2025-03-26', capabilities: {},
-            clientInfo: { name: 'proxy-test', version: '1.0.0' }
-          }
-        },
-        { jsonrpc: '2.0', method: 'notifications/initialized', params: {} },
-        { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }
-      ].map((message) => JSON.stringify(message)).join('\n') + '\n'
-    });
-    assert.equal(initialize.exitCode, 0, initialize.stderr);
-    const responses = initialize.stdout.trim().split('\n').map((line) => JSON.parse(line));
-    assert.equal(responses.length, 2);
-    assert.equal(responses[0].id, 1);
-    assert.equal(responses[0].result.serverInfo.name, 'safs-http-router');
-    assert.equal(responses[1].id, 2);
-    assert.ok(responses[1].result.tools.some((tool: { name: string }) =>
-      tool.name === 'get_remote_workspace'
-    ));
     assert.equal(proxyHits, 0);
   } finally {
     await router.stop();

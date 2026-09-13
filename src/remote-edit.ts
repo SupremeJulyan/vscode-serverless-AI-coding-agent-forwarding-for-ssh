@@ -15,17 +15,17 @@ export function textSha256(value: string | Uint8Array): string {
 export function applyRemoteTextEdits(
   content: string, edits: RemoteTextEdit[]
 ): { content: string; replacements: number } {
-  if (edits.length === 0) throw new Error('remote_edit 至少需要一项 edit');
+  if (edits.length === 0) throw new Error('remote_edit requires at least one edit.');
   if (edits.length > maxRemoteEdits) {
-    throw new Error(`remote_edit 一次最多接受 ${maxRemoteEdits} 项 edit`);
+    throw new Error(`remote_edit accepts at most ${maxRemoteEdits} edits.`);
   }
   let updated = content;
   for (const [index, edit] of edits.entries()) {
-    if (!edit.oldText) throw new Error(`remote_edit edits[${index}].oldText 不能为空`);
+    if (!edit.oldText) throw new Error(`remote_edit edits[${index}].oldText must not be empty.`);
     const first = updated.indexOf(edit.oldText);
-    if (first < 0) throw new Error(`remote_edit edits[${index}] 未找到精确匹配`);
+    if (first < 0) throw new Error(`remote_edit edits[${index}] did not match.`);
     if (updated.indexOf(edit.oldText, first + 1) >= 0) {
-      throw new Error(`remote_edit edits[${index}] 匹配到多处，请提供更多上下文使其唯一`);
+      throw new Error(`remote_edit edits[${index}] matched more than once; include more context to make it unique.`);
     }
     updated = updated.slice(0, first) + edit.newText
       + updated.slice(first + edit.oldText.length);

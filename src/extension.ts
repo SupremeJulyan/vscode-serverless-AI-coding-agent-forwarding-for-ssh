@@ -29,7 +29,7 @@ import { closeSsh2ExecSessions, executeSsh2Command, Ssh2Terminal } from './ssh2-
 import {
   passwordValueOffset
 } from './authentication';
-import { AgentMcpServer } from './agent-mcp';
+import { AgentMcpServer, AgentToolError } from './agent-mcp';
 import {
   AgentHttpRouter, AgentPlatformLabel, agentTaggedMcpUrl
 } from './agent-http-router';
@@ -107,6 +107,7 @@ const directoryHistoryKey = platformStateKey('directoryHistory');
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
 const agentInterfaceHybridMigrationKey = platformStateKey('agentInterfaceHybridMigrationV1');
+const aiForwardUpdates = new Map<string, Promise<void>>();
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
 const addSshConfigAction = 'Add SSH Config';
@@ -2214,27 +2215,27 @@ async function mountAndFolder(mountName: string): Promise<{
 }> {
   const config = await readConfig();
   const mount = config.mounts.find((candidate) => candidate.name === mountName);
-      if (!mount) throw new Error(`远程目录不存在：${mountName}`);
+  if (!mount) throw new Error(`Remote mount does not exist: ${mountName}`);
   return { mount, folder: await ensureFolder(mount) };
 }
 
 async function forwardedMountName(requested?: string): Promise<string> {
   const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
   if (requested) {
-    if (!enabled.has(requested)) throw new Error(`Agent 转发未开启：${requested}`);
+    if (!enabled.has(requested)) throw new Error(`Agent forwarding is not enabled: ${requested}`);
     return requested;
   }
   const current = currentRemoteLocation()?.mountName;
   if (current && enabled.has(current)) return current;
   if (enabled.size === 1) return [...enabled][0];
-  if (enabled.size === 0) throw new Error('Agent 转发未开启');
-  throw new Error('有多个 Agent 转发目标，请提供 mountName');
+  if (enabled.size === 0) throw new Error('Agent forwarding is not enabled.');
+  throw new Error('Multiple Agent forwarding targets are enabled; provide mountName.');
 }
 
 function windowBoundMountName(boundMountName: string, requested?: string): string {
   if (requested && requested !== boundMountName) {
     throw new Error(
-      `MCP 服务已绑定远程窗口“${boundMountName}”，不能访问“${requested}”`
+      `This MCP backend is bound to mount "${boundMountName}" and cannot access "${requested}".`
     );
   }
   return boundMountName;
@@ -2244,8 +2245,19 @@ function forwardedWindowMountName(
   context: vscode.ExtensionContext, boundMountName: string, requested?: string
 ): string {
   const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
-  if (!enabled.has(boundMountName)) throw new Error(`Agent 转发未开启：${boundMountName}`);
+  if (!enabled.has(boundMountName)) {
+    throw new Error(`Agent forwarding is not enabled: ${boundMountName}`);
+  }
   return windowBoundMountName(boundMountName, requested);
+}
+
+function agentWorkspaceBoundaryError(message: string): AgentToolError {
+  return new AgentToolError('WORKSPACE_BOUNDARY_VIOLATION', message, {
+    nonRetryable: true,
+    mustStopNow: true,
+    prohibitedFallback: 'safs exec',
+    action: 'Report the boundary rejection to the user. Do not retry the file operation through safs exec.'
+  });
 }
 
 /** Resolve an Agent file-transfer path without allowing it to leave this window's workspace. */
@@ -2255,7 +2267,7 @@ function transferRemotePath(folder: RemoteFolder, value: string): string {
     ? path.posix.normalize(value)
     : path.posix.resolve(workspaceRoot, value);
   if (!isRemotePathInsideRoot(workspaceRoot, resolved)) {
-    throw new Error(`传输路径超出当前工作区：${value}`);
+    throw agentWorkspaceBoundaryError(`Transfer path is outside workspaceRoot: ${value}`);
   }
   return resolved;
 }
@@ -2269,7 +2281,7 @@ async function ensureRemoteTransferDirectory(
   session: SftpSession, realWorkspaceRoot: string, remoteDir: string
 ): Promise<string> {
   if (!isRemotePathInsideRoot(realWorkspaceRoot, remoteDir)) {
-    throw new Error(`上传目录超出当前工作区：${remoteDir}`);
+    throw agentWorkspaceBoundaryError(`Upload directory is outside workspaceRoot: ${remoteDir}`);
   }
   const relative = path.posix.relative(realWorkspaceRoot, remoteDir);
   let current = realWorkspaceRoot;
@@ -2284,14 +2296,14 @@ async function ensureRemoteTransferDirectory(
       stat = await session.stat(candidate);
     }
     if (stat.type === 'symbolic-link') {
-      throw new Error(`上传目录包含符号链接，拒绝写入：${candidate}`);
+      throw new Error(`Upload directory contains a symbolic link: ${candidate}`);
     }
     if (stat.type !== 'directory') {
-      throw new Error(`上传目录路径被非目录占用：${candidate}`);
+      throw new Error(`Upload directory component is not a directory: ${candidate}`);
     }
     current = await session.realpath(candidate);
     if (!isRemotePathInsideRoot(realWorkspaceRoot, current)) {
-      throw new Error(`上传目录通过符号链接超出当前工作区：${candidate}`);
+      throw agentWorkspaceBoundaryError(`Upload directory escapes workspaceRoot through a symbolic link: ${candidate}`);
     }
   }
   return current;
@@ -2302,19 +2314,19 @@ async function verifyRemoteTransferFileDestination(
 ): Promise<void> {
   const realParent = await session.realpath(path.posix.dirname(remotePath));
   if (!isRemotePathInsideRoot(realWorkspaceRoot, realParent)) {
-    throw new Error(`上传文件父目录超出当前工作区：${remotePath}`);
+    throw agentWorkspaceBoundaryError(`Upload parent directory is outside workspaceRoot: ${remotePath}`);
   }
   try {
     const stat = await session.stat(remotePath);
     if (stat.type === 'symbolic-link') {
-      throw new Error(`上传目标是符号链接，拒绝覆盖：${remotePath}`);
+      throw new Error(`Upload target is a symbolic link and cannot be replaced: ${remotePath}`);
     }
     if (stat.type === 'directory') {
-      throw new Error(`上传目标是目录，无法覆盖：${remotePath}`);
+      throw new Error(`Upload target is a directory and cannot be replaced: ${remotePath}`);
     }
     const realPath = await session.realpath(remotePath);
     if (!isRemotePathInsideRoot(realWorkspaceRoot, realPath)) {
-      throw new Error(`上传目标超出当前工作区：${remotePath}`);
+      throw agentWorkspaceBoundaryError(`Upload target is outside workspaceRoot: ${remotePath}`);
     }
   } catch (error) {
     if (!isMissingRemoteError(error)) throw error;
@@ -2362,7 +2374,7 @@ async function remoteRead(input: RemoteReadOptions & { mountName: string }): Pro
   const session = await pool.get(folder.hostName);
   const resolved = await session.statResolved(requestedPath);
   if (resolved.stat.type !== 'file') {
-    throw new Error(`remote_read 只能读取普通文件：${input.path}`);
+    throw new Error(`remote_read requires a regular file: ${input.path}`);
   }
   return { path: resolved.path, ...await readTextRange(resolved.stat.size,
     (offset, length) => session.readFileRange(resolved.path, offset, length), input) };
@@ -2378,7 +2390,7 @@ async function remoteWrite(input: {
     ? path.posix.normalize(input.path)
     : path.posix.resolve(workspaceRoot, input.path);
   if (!isRemotePathInsideRoot(workspaceRoot, remotePath)) {
-    throw new Error(`写入路径超出当前工作区：${input.path}`);
+    throw agentWorkspaceBoundaryError(`Write path is outside workspaceRoot: ${input.path}`);
   }
   const session = await pool.get(folder.hostName);
   let securedPath: string;
@@ -2391,7 +2403,7 @@ async function remoteWrite(input: {
     securedPath = path.posix.join(parent, path.posix.basename(remotePath));
   }
   if (!isRemotePathInsideRoot(workspaceRoot, securedPath)) {
-    throw new Error(`写入路径通过符号链接超出当前工作区：${input.path}`);
+    throw agentWorkspaceBoundaryError(`Write path escapes workspaceRoot through a symbolic link: ${input.path}`);
   }
   const uri = vscode.Uri.parse(folderUri(folder, remotePath));
   const content = new TextEncoder().encode(input.content);
@@ -2406,19 +2418,19 @@ async function remoteEdit(input: {
   const session = await pool.get(folder.hostName);
   const entry = await verifiedRemoteEntry(folder, session, input.path);
   if (entry.stat.type !== 'file') {
-    throw new Error(`remote_edit 只能修改普通文件：${input.path}`);
+    throw new Error(`remote_edit requires a regular file: ${input.path}`);
   }
   if (entry.stat.size > maxRemoteEditFileBytes) {
-    throw new Error(`remote_edit 文件不能超过 ${maxRemoteEditFileBytes} 字节：${input.path}`);
+    throw new Error(`remote_edit source exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
   }
   const data = await session.readFile(entry.remotePath);
   if (data.length > maxRemoteEditFileBytes) {
-    throw new Error(`remote_edit 文件不能超过 ${maxRemoteEditFileBytes} 字节：${input.path}`);
+    throw new Error(`remote_edit source exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
   }
   const beforeHash = textSha256(data);
   if (input.expectedHash && input.expectedHash.toLowerCase() !== beforeHash) {
     throw new Error(
-      `remote_edit 文件已变化，expectedHash=${input.expectedHash.toLowerCase()}，` +
+      `remote_edit source changed; expectedHash=${input.expectedHash.toLowerCase()}, ` +
       `actualHash=${beforeHash}`
     );
   }
@@ -2426,12 +2438,12 @@ async function remoteEdit(input: {
   try {
     content = new TextDecoder('utf-8', { fatal: true }).decode(data);
   } catch {
-    throw new Error(`remote_edit 只支持有效的 UTF-8 文本：${input.path}`);
+    throw new Error(`remote_edit requires valid UTF-8 text: ${input.path}`);
   }
   const edited = applyRemoteTextEdits(content, input.edits);
   const encoded = new TextEncoder().encode(edited.content);
   if (encoded.length > maxRemoteEditFileBytes) {
-    throw new Error(`remote_edit 修改结果不能超过 ${maxRemoteEditFileBytes} 字节：${input.path}`);
+    throw new Error(`remote_edit result exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
   }
   const uri = vscode.Uri.parse(folderUri(folder, entry.remotePath));
   await provider.writeFile(uri, encoded, { create: false, overwrite: true });
@@ -2451,21 +2463,21 @@ async function verifiedRemoteEntry(
   const workspaceRoot = currentWorkspacePath(folder);
   const remotePath = transferRemotePath(folder, value);
   if (!options.allowWorkspaceRoot && remotePath === workspaceRoot) {
-    throw new Error(`不能操作当前工作区根目录：${value}`);
+    throw new Error(`The workspace root itself cannot be modified: ${value}`);
   }
   const realParent = await session.realpath(path.posix.dirname(remotePath));
   if (!isRemotePathInsideRoot(workspaceRoot, realParent)) {
-    throw new Error(`目标父目录通过符号链接超出当前工作区：${value}`);
+    throw agentWorkspaceBoundaryError(`Target parent escapes workspaceRoot through a symbolic link: ${value}`);
   }
   const stat = await session.stat(remotePath);
   if (stat.type === 'symbolic-link') {
     if (!options.allowSymbolicLink) {
-      throw new Error(`不允许对符号链接执行该操作：${value}`);
+      throw new Error(`This operation does not accept a symbolic link: ${value}`);
     }
   } else {
     const realPath = await session.realpath(remotePath);
     if (!isRemotePathInsideRoot(workspaceRoot, realPath)) {
-      throw new Error(`目标通过符号链接超出当前工作区：${value}`);
+      throw agentWorkspaceBoundaryError(`Target escapes workspaceRoot through a symbolic link: ${value}`);
     }
   }
   return { remotePath, stat };
@@ -2477,18 +2489,18 @@ async function verifiedRemoteDestination(
   const workspaceRoot = currentWorkspacePath(folder);
   const remotePath = transferRemotePath(folder, value);
   if (remotePath === workspaceRoot) {
-    throw new Error(`不能覆盖当前工作区根目录：${value}`);
+    throw new Error(`The workspace root itself cannot be replaced: ${value}`);
   }
   const realParent = await session.realpath(path.posix.dirname(remotePath));
   if (!isRemotePathInsideRoot(workspaceRoot, realParent)) {
-    throw new Error(`目标父目录通过符号链接超出当前工作区：${value}`);
+    throw agentWorkspaceBoundaryError(`Target parent escapes workspaceRoot through a symbolic link: ${value}`);
   }
   try {
     const stat = await session.stat(remotePath);
     if (stat.type !== 'symbolic-link') {
       const realPath = await session.realpath(remotePath);
       if (!isRemotePathInsideRoot(workspaceRoot, realPath)) {
-        throw new Error(`已有目标通过符号链接超出当前工作区：${value}`);
+        throw agentWorkspaceBoundaryError(`Existing target escapes workspaceRoot through a symbolic link: ${value}`);
       }
     }
   } catch (error) {
@@ -2555,14 +2567,14 @@ async function executeRemoteCommand(
     ? path.posix.normalize(input.remoteCwd)
     : path.posix.resolve(workspaceRoot, input.remoteCwd ?? '.');
   if (!isRemotePathInsideRoot(workspaceRoot, requestedCwd)) {
-    throw new Error(`远程工作目录超出当前工作区：${input.remoteCwd}`);
+    throw agentWorkspaceBoundaryError(`remoteCwd is outside workspaceRoot: ${input.remoteCwd}`);
   }
   const session = await pool.get(mount.host);
   const [realWorkspaceRoot, remoteCwd] = await Promise.all([
     session.realpath(workspaceRoot), session.realpath(requestedCwd)
   ]);
   if (!isRemotePathInsideRoot(realWorkspaceRoot, remoteCwd)) {
-    throw new Error(`远程工作目录通过符号链接超出当前工作区：${requestedCwd}`);
+    throw agentWorkspaceBoundaryError(`remoteCwd escapes workspaceRoot through a symbolic link: ${requestedCwd}`);
   }
   // 命令输出上限：Agent 上下文 token 保护。超限截断并标记 truncated: true，
   // 避免单次 head/cat/grep 把几十万 token 灌进会话。
@@ -2597,10 +2609,10 @@ async function executeRemoteCommand(
     bridgeOutput?.appendLine(
       `[工作区边界拦截] 拒绝远程命令：${policy.redactedCommand}（目标：${target}）`
     );
-    throw new Error(
+    throw agentWorkspaceBoundaryError(
       boundaryViolation.kind === 'working-directory'
-        ? `远程命令不能把工作目录切换到当前工作区之外：${target}`
-        : `远程命令不能写入当前工作区之外：${target}；请使用 SAFS 结构化文件命令，不能通过 safs exec 绕过工作区边界。`
+        ? `The command cannot change its working directory outside workspaceRoot: ${target}`
+        : `The command cannot write outside workspaceRoot: ${target}. Use a structured SAFS file operation and do not bypass it with exec.`
     );
   }
   if (!policy.allowed) {
@@ -2608,7 +2620,7 @@ async function executeRemoteCommand(
       `[高危指令拦截] 拒绝执行：${policy.redactedCommand}（规则：${policy.matched}）`
     );
     throw new Error(
-      `高危指令已被 SAFS 拦截（规则：${policy.matched}）：${policy.redactedCommand}`
+      `SAFS denied this high-risk command (rule: ${policy.matched}): ${policy.redactedCommand}`
     );
   }
   if (policy.matched) {
@@ -2698,7 +2710,7 @@ async function executeRemoteCommand(
           : await runSystemSsh();
       }
       if (timedOut) {
-        throw new Error(`远程命令执行超时（${commandTimeoutMs}ms）`);
+        throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
       }
       return {
         remoteCwd,
@@ -2737,7 +2749,8 @@ async function remoteSearch(input: RemoteSearchOptions & {
     captureForMcp: input.captureForMcp,
     command: search.command
   });
-  return { ...searchResult(result, search.mode), mode: search.mode, excludeDirs: search.excludeDirs };
+  const { remoteCwd: _remoteCwd, ...publicResult } = result;
+  return { ...searchResult(publicResult, search.mode), mode: search.mode };
 }
 
 // ---- Tree View ----
@@ -3219,8 +3232,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
             completed: await visualUpload(
               sources, mountName, remoteDirectory, realWorkspaceRoot, timeoutMs
             ),
-            remoteDirectory,
-            localRoot: localPathForAgent(stagingRoot, input.agentPlatform)
+            remoteDirectory
           };
         },
         download: async (input) => {
@@ -3238,15 +3250,16 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
           const requestedPath = transferRemotePath(folder, input.remotePath);
           const resolved = await session.statResolved(requestedPath);
           if (!isRemotePathInsideRoot(realWorkspaceRoot, resolved.path)) {
-            throw new Error(`下载路径通过符号链接超出当前工作区：${input.remotePath}`);
+            throw agentWorkspaceBoundaryError(
+              `Download path escapes workspaceRoot through a symbolic link: ${input.remotePath}`
+            );
           }
           const uri = vscode.Uri.parse(remoteUri(mountName, resolved.path));
           const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
           return {
             completed: await visualDownload(uri, localPath, timeoutMs, stagingRoot),
             remotePath: resolved.path,
-            localPath: localPathForAgent(localPath, input.agentPlatform),
-            localRoot: localPathForAgent(stagingRoot, input.agentPlatform)
+            localPath: localPathForAgent(localPath, input.agentPlatform)
           };
         },
         activity: {
@@ -3507,8 +3520,67 @@ async function configureAgentInterface(
   return { cliExecutable: executable };
 }
 
-async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): Promise<void> {
+async function askAgentNameAndPlatform(
+  title: string, allowedPlatforms: AgentPlatformLabel[] = ['wsl', 'mac', 'linux', 'win']
+): Promise<{ agentName: string; platform: AgentPlatformLabel } | undefined> {
+  const agentName = await vscode.window.showInputBox({
+    title,
+    prompt: '请输入使用 SAFS 转发的 Agent 名',
+    placeHolder: '例如：Codex、Claude、MyAgent',
+    ignoreFocusOut: true,
+    validateInput: (value) => !value.trim()
+      ? '请输入 Agent 名'
+      : value.trim().length > 100
+        ? 'Agent 名最多 100 个字符'
+        : /[\u0000-\u001f\u007f]/.test(value)
+          ? 'Agent 名不能包含控制字符'
+          : undefined
+  });
+  if (agentName === undefined) return undefined;
+  const platformOptions: Array<{
+    label: string; description: string; value: AgentPlatformLabel;
+  }> = [
+    { label: 'WSL', description: 'Agent 运行在 Windows Subsystem for Linux', value: 'wsl' },
+    { label: 'mac', description: 'Agent 运行在 macOS', value: 'mac' },
+    { label: 'linux', description: 'Agent 运行在 Linux', value: 'linux' },
+    { label: 'win', description: 'Agent 运行在 Windows', value: 'win' }
+  ];
+  const platform = await vscode.window.showQuickPick<{
+    label: string; description: string; value: AgentPlatformLabel;
+  }>(platformOptions.filter((candidate) => allowedPlatforms.includes(candidate.value)), {
+    title: 'SAFS：选择 Agent 所在平台',
+    placeHolder: '选择 wsl、mac、linux 或 win',
+    ignoreFocusOut: true
+  });
+  if (!platform) return undefined;
+  return { agentName: agentName.trim(), platform: platform.value };
+}
+
+async function copyAgentForwardingInstallPrompt(
+  context: vscode.ExtensionContext
+): Promise<void> {
+  if (agentInterface() === 'cli') {
+    await vscode.env.clipboard.writeText(nativeCliUsagePrompt());
+    void vscode.window.showInformationMessage(
+      'SAFS：CLI 规则安装提示已复制，请粘贴到 Agent。'
+    );
+    return;
+  }
+  const answer = await askAgentNameAndPlatform('SAFS：为我的Agent安装转发功能');
+  if (!answer) return;
+  const router = await ensureAgentHttpRouter(context);
+  const url = agentTaggedMcpUrl(router.url, answer.agentName, answer.platform);
+  await vscode.env.clipboard.writeText(streamableHttpMcpInstallPrompt(url));
+  void vscode.window.showInformationMessage(
+    'SAFS：安装提示词已复制，请粘贴到 Agent。'
+  );
+}
+
+async function updateAiForwardEnabled(
+  mount: MountConfig, enabledValue: boolean
+): Promise<void> {
   let cliExecutable: string | undefined;
+  let changed = false;
   bridgeOutput?.info(
     `[Agent 转发] ${enabledValue ? '启用' : '关闭'} ${mount.name}`
   );
@@ -3519,6 +3591,11 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
       : 'SAFS：正在关闭 Agent 转发'
   }, async () => {
     const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
+    if (enabled.has(mount.name) === enabledValue) {
+      agentTrace('Preference', `挂载 ${mount.name} Agent 转发状态未变化，忽略重复操作`);
+      return;
+    }
+    changed = true;
     if (enabledValue) enabled.add(mount.name);
     else enabled.delete(mount.name);
     await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
@@ -3546,11 +3623,15 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
       await stopAgentHttpRouterLeadership();
     }
   });
+  if (!changed) return;
   if (enabledValue) {
     if (cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
     }
-    await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
+    // Installation input is intentionally coupled only to the parent tree
+    // node's disabled -> enabled transition. Startup, mode changes and other
+    // windows prepare transports silently and must never display this prompt.
+    await copyAgentForwardingInstallPrompt(vscodeContext);
     return;
   }
   const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
@@ -3562,6 +3643,19 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
       ? 'SAFS：所有 Agent 转发已关闭。'
       : 'SAFS：Agent 转发已关闭，其他挂载不受影响。'
   );
+}
+
+async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): Promise<void> {
+  const previous = aiForwardUpdates.get(mount.name) ?? Promise.resolve();
+  const operation = previous.catch(() => undefined).then(
+    () => updateAiForwardEnabled(mount, enabledValue)
+  );
+  aiForwardUpdates.set(mount.name, operation);
+  try {
+    await operation;
+  } finally {
+    if (aiForwardUpdates.get(mount.name) === operation) aiForwardUpdates.delete(mount.name);
+  }
 }
 
 async function prepareAgentCwd(mount: MountConfig): Promise<void> {
@@ -3871,41 +3965,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await addSshConfig(context);
     tree.refresh();
   });
-  const askAgentNameAndPlatform = async (
-    title: string, allowedPlatforms: AgentPlatformLabel[] = ['wsl', 'mac', 'linux', 'win']
-  ): Promise<{ agentName: string; platform: AgentPlatformLabel } | undefined> => {
-    const agentName = await vscode.window.showInputBox({
-      title,
-      prompt: '请输入使用 SAFS 转发的 Agent 名（已安装直接按 Esc 跳过）',
-      placeHolder: '例如：Codex、Claude、MyAgent',
-      ignoreFocusOut: true,
-      validateInput: (value) => !value.trim()
-        ? '请输入 Agent 名'
-        : value.trim().length > 100
-          ? 'Agent 名最多 100 个字符'
-          : /[\u0000-\u001f\u007f]/.test(value)
-            ? 'Agent 名不能包含控制字符'
-            : undefined
-    });
-    if (agentName === undefined) return undefined;
-    const platformOptions: Array<{
-      label: string; description: string; value: AgentPlatformLabel;
-    }> = [
-      { label: 'WSL', description: 'Agent 运行在 Windows Subsystem for Linux', value: 'wsl' },
-      { label: 'mac', description: 'Agent 运行在 macOS', value: 'mac' },
-      { label: 'linux', description: 'Agent 运行在 Linux', value: 'linux' },
-      { label: 'win', description: 'Agent 运行在 Windows', value: 'win' }
-    ];
-    const platform = await vscode.window.showQuickPick<{
-      label: string; description: string; value: AgentPlatformLabel;
-    }>(platformOptions.filter((candidate) => allowedPlatforms.includes(candidate.value)), {
-      title: 'SAFS：选择 Agent 所在平台',
-      placeHolder: '选择 wsl、mac、linux 或 win',
-      ignoreFocusOut: true
-    });
-    if (!platform) return undefined;
-    return { agentName: agentName.trim(), platform: platform.value };
-  };
   command('copyStreamableHttpUrl', async () => {
     const answer = await askAgentNameAndPlatform('SAFS：复制 Streamable HTTP URL');
     if (!answer) return;
@@ -3915,30 +3974,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.env.clipboard.writeText(url);
     void vscode.window.showInformationMessage(
       'SAFS：URL 已复制；代理异常请用规则模式或 CLI。'
-    );
-  });
-  command('installAgentForwarding', async () => {
-    startAgentHttpRouterLeadership(context);
-    const router = await ensureAgentHttpRouter(context);
-    if (cliEnabled()) {
-      const executable = await installGlobalCli(context, cliRouterUrl(router.url));
-      bridgeOutput?.info(`[Agent CLI] 安装完成：${executable}`);
-    }
-    if (agentInterface() === 'cli') {
-      await vscode.env.clipboard.writeText(nativeCliUsagePrompt());
-      void vscode.window.showInformationMessage(
-        'SAFS：CLI 规则安装提示已复制，请粘贴到 Agent。'
-      );
-      return;
-    }
-    const answer =
-      await askAgentNameAndPlatform('SAFS：为我的Agent安装转发功能');
-    if (!answer) return;
-    const url = agentTaggedMcpUrl(router.url, answer.agentName, answer.platform);
-    const promptText = streamableHttpMcpInstallPrompt(url);
-    await vscode.env.clipboard.writeText(promptText);
-    void vscode.window.showInformationMessage(
-      'SAFS：安装提示词已复制，请粘贴到 Agent。'
     );
   });
   command('uninstallAgentForwarding', async () => {
@@ -4113,7 +4148,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (result.cliExecutable) {
         bridgeOutput?.info(`[Agent CLI] 接口准备完成：${result.cliExecutable}`);
       }
-      await vscode.commands.executeCommand(`${commandPrefix}.installAgentForwarding`);
     });
   }));
   // Agent MCP: keep one in-extension fixed HTTP router alive, then start the

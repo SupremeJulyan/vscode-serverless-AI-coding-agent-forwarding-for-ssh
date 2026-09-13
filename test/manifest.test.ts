@@ -134,9 +134,13 @@ test('shows separate Agent forwarding actions for enabled and disabled mounts', 
 test('packages Agent integration without the legacy JS stdio router or Codex plugin', async () => {
   await access(new URL('../src/agent-http-router.ts', import.meta.url));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  const nativeCliSource = await readFile(
+    new URL('../native-cli/src/main.rs', import.meta.url), 'utf8'
+  );
   const vscodeIgnore = await readFile(new URL('../.vscodeignore', import.meta.url), 'utf8');
   assert.equal(extensionSource.includes('mcp-router.cjs'), false);
   assert.equal(extensionSource.includes("'--', 'node'"), false);
+  assert.equal(nativeCliSource.includes('mcp-bridge'), false);
   assert.equal(/^bin\/\*\*$/m.test(vscodeIgnore), false);
   for (const executable of [
     'linux-x64/safs', 'linux-arm64/safs', 'darwin-x64/safs', 'darwin-arm64/safs',
@@ -217,7 +221,8 @@ test('SAFS MCP is opt-in for remote context instead of mandatory in every worksp
   assert.ok(tools.includes('userConfirmed: z.literal(true).optional()'));
   assert.ok(tools.includes('Never select in the same turn as asking'));
   assert.ok(router.includes('mustWaitForNewUserRequest: true'));
-  assert.ok(tools.includes('No VS Code Quick Pick or focused-window fallback is used'));
+  assert.ok(tools.includes('Use exactly one of two forms'));
+  assert.ok(tools.includes('receiving an explicit user choice in a later turn'));
   const extension = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extension.includes('callback((options.input ?? {}) as T)'));
   assert.ok(direct.includes('currentFile(input)'));
@@ -293,18 +298,24 @@ test('uses only the unified cross-platform config path', async () => {
   assert.deepEqual(matches, ['**/.safs/config.json']);
 });
 
-test('declares both the install and uninstall forwarding commands', async () => {
+test('shows the install prompt only after enabling a parent mount', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
   const install = commands.find((item) => item.command === 'safs.installAgentForwarding');
   const uninstall = commands.find((item) => item.command === 'safs.uninstallAgentForwarding');
-  assert.equal(install?.title, 'SAFS: 为我的Agent安装转发功能');
+  assert.equal(install, undefined);
   assert.equal(uninstall?.title, 'SAFS: 为我的Agent卸载转发功能');
-  assert.ok(manifest.activationEvents?.includes('onCommand:safs.installAgentForwarding'));
+  assert.equal(
+    manifest.activationEvents?.includes('onCommand:safs.installAgentForwarding'), false
+  );
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.uninstallAgentForwarding'));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  assert.equal(extensionSource.includes("command('installAgentForwarding'"), false);
+  assert.equal(extensionSource.includes('.installAgentForwarding`'), false);
+  assert.ok(extensionSource.includes('await copyAgentForwardingInstallPrompt(vscodeContext)'));
+  assert.ok(extensionSource.includes('if (!changed) return'));
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
   assert.ok(extensionSource.includes('为我的Agent卸载转发功能'));
   assert.ok(extensionSource.includes('卸载提示词'));
