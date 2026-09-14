@@ -8,7 +8,8 @@ import {
 } from './agent-discovery';
 import {
   type AgentToolProfile, configureAgentMcpResources, hybridAgentMcpInstructions,
-  hybridCliInstructions, registerAgentMcpTools, routedAgentMcpInstructions
+  hybridCliInstructions, registerAgentMcpTools, routedAgentMcpInstructions,
+  terminalAgentMcpInstructions, terminalCliInstructions
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
 
@@ -185,6 +186,22 @@ export class AgentHttpRouter {
     return this.discover();
   }
 
+  private terminalWorkspaces(): DiscoveredAgentWorkspace[] {
+    return this.workspaces().filter((workspace) => workspace.terminalCommandOnly === true);
+  }
+
+  private activeToolProfile(): AgentToolProfile {
+    return this.terminalWorkspaces().length > 0 ? 'terminal'
+      : (this.options.toolProfile?.() ?? 'full');
+  }
+
+  private terminalWorkspace(): DiscoveredAgentWorkspace | undefined {
+    const candidates = this.terminalWorkspaces();
+    if (candidates.length === 1) return candidates[0];
+    const focused = candidates.filter((workspace) => workspace.focused);
+    return focused.length === 1 ? focused[0] : undefined;
+  }
+
   private bindingKey(agentName?: string): string {
     return agentName ?? '<unknown>';
   }
@@ -219,7 +236,8 @@ export class AgentHttpRouter {
   private publicWorkspace(workspace: DiscoveredAgentWorkspace): Record<string, unknown> {
     return {
       workspaceRoot: workspace.workspaceRoot,
-      host: workspace.host
+      host: workspace.host,
+      ...(workspace.terminalCommandOnly ? { terminalCommandOnly: true } : {})
     };
   }
 
@@ -310,6 +328,33 @@ export class AgentHttpRouter {
     name: string, input: Record<string, unknown>, agentName?: string,
     source: AgentActivitySource = 'mcp'
   ): Promise<any> {
+    if (source === 'mcp' && name === 'run_remote_command'
+        && this.activeToolProfile() === 'terminal') {
+      const candidates = this.terminalWorkspaces();
+      const workspace = this.terminalWorkspace();
+      if (!workspace) {
+        return this.toolError(
+          candidates.length > 1 ? 'TERMINAL_TARGET_AMBIGUOUS' : 'TERMINAL_TARGET_UNAVAILABLE',
+          candidates.length > 1
+            ? 'Multiple SAFS terminal targets are active. Keep only one enabled, or focus its VS Code window.'
+            : 'No SAFS terminal target is active. Enable Use Current Terminal in Agent Activity.'
+        );
+      }
+      try {
+        return await this.forward(workspace, 'run_remote_command', {
+          command: input.command,
+          mountName: workspace.mountName
+        }, agentName, source);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.options.log?.(`终端工具失败，mount=${workspace.mountName}：${detail}`);
+        return this.toolError(
+          'REMOTE_UNAVAILABLE',
+          `The selected SAFS terminal is currently unavailable: ${detail}`,
+          { mountName: workspace.mountName }
+        );
+      }
+    }
     if (name === 'cli_list_workspaces') {
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
@@ -408,7 +453,7 @@ export class AgentHttpRouter {
       }
       const selectedWorkspace = workspace!;
       const bindingId = randomUUID().replace(/-/g, '').slice(0, 16);
-      const hybridMcp = source === 'mcp' && this.options.toolProfile?.() === 'hybrid';
+      const hybridMcp = source === 'mcp' && this.activeToolProfile() === 'hybrid';
       this.bindings.set(bindingId, {
         instanceId: selectedWorkspace.instanceId,
         host: selectedWorkspace.host,
@@ -435,6 +480,9 @@ export class AgentHttpRouter {
             agentName: bindingAgentName,
             selectedAutomatically: !switching,
             ...(recoveredLogicalWorkspace ? { recoveredLogicalWorkspace: true } : {}),
+            ...(selectedWorkspace.terminalCommandOnly ? {
+              cliInstructions: terminalCliInstructions
+            } : {}),
             localFilesystemAllowed: false,
             localShellAllowed: false
           } : {}),
@@ -476,7 +524,22 @@ export class AgentHttpRouter {
         );
     }
     const { bindingId: _bindingId, ...publicInput } = input;
-    const args = { ...publicInput, mountName: workspace.mountName };
+    let args: Record<string, unknown> = { ...publicInput, mountName: workspace.mountName };
+    if (workspace.terminalCommandOnly) {
+      if (source !== 'cli' || name !== 'run_remote_command') {
+        return this.toolError(
+          'TERMINAL_COMMAND_ONLY',
+          'This workspace is in terminal-only mode. File, search, transfer, retained-output, and isolated SSH tools are disabled. Use run_remote_command through MCP or safs exec through CLI.'
+        );
+      }
+      if (publicInput.remoteCwd !== undefined) {
+        return this.toolError(
+          'TERMINAL_CWD_FIXED',
+          'The working directory is fixed to the selected terminal directory; omit --cwd.'
+        );
+      }
+      args = { command: publicInput.command, mountName: workspace.mountName };
+    }
     const effectiveAgentName = cliBindingRequest ? binding.agentName : agentName;
     try {
       return await this.forward(
@@ -494,13 +557,13 @@ export class AgentHttpRouter {
   }
 
   private createProtocolServer(agentName?: string): McpServer {
-    const profile = this.options.toolProfile?.();
+    const profile = this.activeToolProfile();
     const server = new McpServer(
       { name: 'safs-http-router', version: '1.0.0' },
       {
-        instructions: profile === 'hybrid'
-          ? hybridAgentMcpInstructions
-          : routedAgentMcpInstructions
+        instructions: profile === 'terminal'
+          ? terminalAgentMcpInstructions
+          : profile === 'hybrid' ? hybridAgentMcpInstructions : routedAgentMcpInstructions
       }
     );
     configureAgentMcpResources(server);
@@ -556,6 +619,21 @@ export class AgentHttpRouter {
           const operations = (input as { operations?: unknown }).operations;
           if (!Array.isArray(operations) || operations.length === 0 || operations.length > 50) {
             response.status(400).json({ ok: false, error: 'CLI batch requires 1 to 50 operations' });
+            return;
+          }
+          const terminalBatch = operations.some((operation) => {
+            if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return false;
+            const args = (operation as { arguments?: unknown }).arguments;
+            if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+            const bindingId = (args as { bindingId?: unknown }).bindingId;
+            return typeof bindingId === 'string'
+              && this.workspace(bindingId)?.terminalCommandOnly === true;
+          });
+          if (terminalBatch) {
+            response.json({ ok: false, result: {
+              code: 'TERMINAL_COMMAND_ONLY',
+              message: 'CLI batch is disabled in terminal-only mode. Run one safs exec command instead.'
+            } });
             return;
           }
           const results: Record<string, unknown>[] = [];

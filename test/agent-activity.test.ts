@@ -96,6 +96,10 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   assert.equal(html.includes("orb.textContent = kind"), false);
   assert.match(html, /全部类型/);
   assert.match(html, /type: 'clear'/);
+  assert.match(html, /Agent 工具：工作区模式/);
+  assert.match(html, /终端专用模式/);
+  assert.match(html, /使用当前终端/);
+  assert.match(html, /toggleTerminalTarget/);
   assert.match(html, /prefers-reduced-motion/);
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script);

@@ -36,12 +36,25 @@ export const hybridAgentMcpInstructions = [
   'A successful switch cancels the previous task, so stop and wait for a new user request.'
 ].join(' ');
 
-export type AgentToolProfile = 'full' | 'core' | 'hybrid';
+export const terminalAgentMcpInstructions = [
+  'Only the selected visible SAFS terminal is available.',
+  'Use run_remote_command for remote commands. It runs in the terminal directory shown as workspaceRoot and inherits that terminal\'s current user and environment.',
+  'SAFS file, search, transfer, workspace-selection, and retained-output tools are disabled until terminal mode is stopped in Agent Activity.'
+].join(' ');
+
+export const terminalCliInstructions = [
+  'This binding is in SAFS terminal-only mode.',
+  'Use only safs exec --binding <bindingId> -- <command>. Do not pass --cwd.',
+  'All SAFS file, search, transfer, batch, and retained-output commands are disabled until terminal mode is stopped in Agent Activity.'
+].join(' ');
+
+export type AgentToolProfile = 'full' | 'core' | 'hybrid' | 'terminal';
 const extendedTools = new Set(['current_remote_file', 'remote_delete', 'remote_chmod',
   'remote_move', 'remote_upload', 'remote_download']);
 const hybridTools = new Set<AgentMcpToolName>([
   'get_remote_workspace', 'switch_remote_workspace'
 ]);
+const terminalTools = new Set<AgentMcpToolName>(['run_remote_command']);
 
 export type AgentMcpToolName =
   | 'get_remote_workspace'
@@ -83,7 +96,9 @@ const textReadSchema = {
   lineCount: z.number().int().min(1).optional().describe('Line count used only with startLine; defaults to 100.')
 };
 
-function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
+function toolDefinitions(
+  routed: boolean, profile?: AgentToolProfile
+): AgentMcpToolDefinition[] {
   const binding: Record<string, z.ZodTypeAny> = routed
     ? { bindingId: z.string().min(1).describe('Binding returned by get_remote_workspace or switch_remote_workspace.') }
     : {};
@@ -240,13 +255,17 @@ function toolDefinitions(routed: boolean): AgentMcpToolDefinition[] {
     },
     {
       name: 'run_remote_command',
-      title: 'Run a remote SSH command',
-      description: routed
-        ? 'Runs a task command such as a build or test on the bound SSH host. The default working directory is workspaceRoot; relative remoteCwd starts there and every remoteCwd must remain inside it. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.'
-        : 'Runs a task command such as a build or test on the selected SSH host. The default working directory is workspaceRoot; relative remoteCwd starts there and every remoteCwd must remain inside it. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.',
-      inputSchema: {
-        ...binding, command: z.string().min(1), remoteCwd: z.string().optional()
-      },
+      title: profile === 'terminal'
+        ? 'Run a command in the selected SAFS terminal'
+        : 'Run a remote SSH command',
+      description: profile === 'terminal'
+        ? 'Runs one command in the visible SAFS terminal selected from Agent Activity. The working directory is the terminal directory published as workspaceRoot and cannot be overridden. The command inherits the terminal\'s current user privileges and exported environment. Returns workspaceRoot, exitCode, stdout, stderr, and truncated. A nonzero exitCode means the command failed.'
+        : routed
+          ? 'Runs a task command such as a build or test on the bound SSH host. The default working directory is workspaceRoot; relative remoteCwd starts there and every remoteCwd must remain inside it. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.'
+          : 'Runs a task command such as a build or test on the selected SSH host. The default working directory is workspaceRoot; relative remoteCwd starts there and every remoteCwd must remain inside it. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.',
+      inputSchema: profile === 'terminal'
+        ? { command: z.string().min(1) }
+        : { ...binding, command: z.string().min(1), remoteCwd: z.string().optional() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
     }
   ];
@@ -282,9 +301,10 @@ export function registerAgentMcpTools(
     invoke(name: AgentMcpToolName, input: Record<string, unknown>): Promise<any>;
   }
 ): void {
-  for (const definition of toolDefinitions(options.routed)) {
+  for (const definition of toolDefinitions(options.routed, options.profile)) {
     if (options.profile === 'core' && extendedTools.has(definition.name)) continue;
     if (options.profile === 'hybrid' && !hybridTools.has(definition.name)) continue;
+    if (options.profile === 'terminal' && !terminalTools.has(definition.name)) continue;
     server.registerTool(
       definition.name,
       {

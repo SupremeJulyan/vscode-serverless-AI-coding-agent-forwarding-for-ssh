@@ -9,7 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   type AgentToolProfile, configureAgentMcpResources, directAgentMcpInstructions,
-  registerAgentMcpTools
+  registerAgentMcpTools, terminalAgentMcpInstructions
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
 
@@ -50,6 +50,9 @@ export interface AgentMcpCallbacks {
   }): Promise<unknown>;
   run(input: {
     command: string; mountName?: string; remoteCwd?: string; agentName?: string;
+  }): Promise<unknown>;
+  runTerminal?(input: {
+    command: string; mountName?: string; agentName?: string; source?: AgentActivitySource;
   }): Promise<unknown>;
   request?(agentName?: string): void;
   audit?(entry: {
@@ -107,9 +110,12 @@ export class AgentMcpServer {
   private createProtocolServer(
     agentName?: string, source: AgentActivitySource = 'mcp'
   ): McpServer {
+    const profile = this.callbacks.toolProfile?.();
     const server = new McpServer(
       { name: 'safs', version: '1.0.0' },
-      { instructions: directAgentMcpInstructions }
+      { instructions: profile === 'terminal'
+        ? terminalAgentMcpInstructions
+        : directAgentMcpInstructions }
     );
     configureAgentMcpResources(server);
     // 紧凑 JSON：结果只回传必要字段，缩进空白会白白消耗模型 token。
@@ -195,7 +201,7 @@ export class AgentMcpServer {
     };
     registerAgentMcpTools(server, {
       routed: false,
-      profile: this.callbacks.toolProfile?.(),
+      profile,
       invoke: (name, input) => {
         switch (name) {
           case 'get_remote_workspace':
@@ -271,9 +277,22 @@ export class AgentMcpServer {
               ...input, agentName
             } as Parameters<AgentMcpCallbacks['search']>[0])));
           case 'run_remote_command':
-            return invoke(name, input, () => capture(() => this.callbacks.run({
-              ...input, agentName
-            } as Parameters<AgentMcpCallbacks['run']>[0])));
+            return invoke(name, input, () => {
+              if (profile !== 'terminal') {
+                return capture(() => this.callbacks.run({
+                  ...input, agentName
+                } as Parameters<AgentMcpCallbacks['run']>[0]));
+              }
+              if (!this.callbacks.runTerminal) {
+                throw new Error('No SAFS terminal is selected for Agent command forwarding.');
+              }
+              return this.callbacks.runTerminal({
+                command: input.command as string,
+                ...(typeof input.mountName === 'string' ? { mountName: input.mountName } : {}),
+                agentName,
+                source
+              });
+            });
         }
       }
     });

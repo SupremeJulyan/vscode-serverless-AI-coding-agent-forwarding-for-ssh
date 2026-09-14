@@ -15,6 +15,8 @@ export interface AgentWorkspaceRecord {
   workspaceUri: string;
   mountName: string;
   workspaceRoot: string;
+  /** This window currently exposes only command execution in its selected visible terminal. */
+  terminalCommandOnly?: true;
   /** Local empty directory used as cwd by an Agent started in this VS Code window. */
   agentCwd?: string;
   host: string;

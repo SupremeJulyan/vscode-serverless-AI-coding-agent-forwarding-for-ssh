@@ -114,6 +114,14 @@ Agent 根据提示词自行判断边界。远程文件的读取、搜索、创�
 操作。顶部动画显示执行中、成功或失败状态，下方时间线按最新操作优先排列，并可按
 操作类型和状态筛选。连续的读取、列目录和搜索会自动折叠。
 
+面板中的 **使用当前终端** 会切换到终端专用模式。SAFS 先从当前聚焦的远程终端读取
+实际目录，并把它作为 Agent 的 `workspaceRoot`；命令继承该终端当前的用户权限和环境变量
+（例如手动执行 `sudo su - user` 后）。此时 MCP 只保留 `run_remote_command` 一个工具，
+文件、搜索、传输、工作区切换和长输出续读工具全部关闭。CLI 是所有窗口共用的全局程序，
+因此仍保留 `bind`/`workspaces`/`switch` 用于路由，但绑定到该窗口后只放行 `safs exec`，
+并禁止用 `--cwd` 覆盖终端目录。该模式只在当前窗口会话内有效；终端关闭或点击
+**退出专用模式** 后恢复原来的 Agent 工具。转发期间不要在该终端中同时操作前台程序。
+
 活动视图仅保留当前窗口最近 200 条脱敏记录；文件正文、Diff、命令输出不会写入记录，
 命令和错误只保存经过脱敏的短摘要。“清空”不会删除
 `~/.safs/mcp_logs` 中的审计日志。普通 SSH 终端和 VS Code 原生 Language Model Tools
@@ -172,7 +180,7 @@ CLI 语法或参数错误会直接附带当前子命令的正确 Usage，不需�
 | 设置 | 默认值 | 用途 |
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | 切换文件时，让已打开的远程终端自动 `cd` 到对应目录 |
-| `safs.terminalAutoReconnect` | `true` | 远程终端意外结束后自动重连 |
+| `safs.terminalAutoReconnect` | `true` | 远程终端意外结束后自动重连；瞬时网络错误会有限退避重试 |
 | `safs.agentInterface` | `mcp` | 选择纯 MCP、混合或纯 CLI 接口；后两者会安装全局 CLI |
 | `safs.agentMcpToolProfile` | `full` | 改为 `core` 可减少 Agent 工具定义的上下文开销 |
 | `safs.agentMcpTimeoutMs` | `120000` | Agent 命令、搜索和传输的超时；`0` 表示关闭 |

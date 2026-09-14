@@ -55,6 +55,28 @@ test('hybrid profile exposes only workspace binding and switching', async () => 
   }
 });
 
+test('terminal profile exposes exactly one command tool without binding or cwd inputs', async () => {
+  const server = new McpServer({ name: 'test', version: '1' });
+  registerAgentMcpTools(server, {
+    routed: true,
+    profile: 'terminal',
+    invoke: async () => ({ content: [] })
+  });
+  const client = new Client({ name: 'test', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(a);
+  await client.connect(b);
+  try {
+    const { tools } = await client.listTools();
+    assert.deepEqual(tools.map((tool) => tool.name), ['run_remote_command']);
+    assert.deepEqual(Object.keys(tools[0].inputSchema.properties ?? {}), ['command']);
+    assert.deepEqual(tools[0].inputSchema.required, ['command']);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test('full MCP tool contracts document overloaded inputs and bounded transfers', async () => {
   const server = new McpServer({ name: 'test', version: '1' });
   registerAgentMcpTools(server, {

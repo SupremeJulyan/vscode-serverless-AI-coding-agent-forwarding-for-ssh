@@ -15,6 +15,9 @@ import {
   ssh2RemoteCommand
 } from './ssh-command';
 import { CommandOutputMarkerStripper } from './command-output-marker';
+import {
+  TerminalCommandOutputCapture, terminalForwardingCommand
+} from './terminal-command-forwarding';
 
 async function connectConfig(
   host: HostConfig, password?: string
@@ -236,6 +239,13 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   /** 待 shell 通道就绪后补发的输入（live-sync 的 cd 可能早于连接完成）。 */
   private pendingInput = '';
   private shellOpenTimer?: NodeJS.Timeout;
+  private forwardedCommand?: {
+    capture: TerminalCommandOutputCapture;
+    resolve(result: Ssh2CommandResult): void;
+    reject(error: Error): void;
+    signal?: AbortSignal;
+    abort(): void;
+  };
 
   constructor(
     private readonly host: HostConfig,
@@ -312,7 +322,10 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
       });
       stream.stderr.on('data', (chunk: Buffer) => {
         const data = this.stderrDecoder.write(chunk);
-        if (data) this.writeEmitter.fire(data);
+        if (data) {
+          this.captureForwardedCommandOutput(data);
+          this.writeEmitter.fire(data);
+        }
       });
       // ssh2 仅在服务器返回 exit-status / exit-signal（正常/主动结束会话）时
       // 触发 exit 事件；连接被远端切断/掉线时不会触发，而是直接 close 且无退出码。
@@ -343,8 +356,66 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
 
   private handleOutput(data: string): void {
     if (!data) return;
+    this.captureForwardedCommandOutput(data);
     for (const remoteCwd of this.cwdTracker.push(data)) this.onCwd?.(remoteCwd);
     this.writeEmitter.fire(data);
+  }
+
+  /** Execute through this visible PTY, preserving sudo/su identity and the live environment. */
+  executeForwardedCommand(
+    command: string, remoteCwd: string | undefined, signal?: AbortSignal,
+    maxOutputBytes = 1024 * 1024
+  ): Promise<Ssh2CommandResult> {
+    if (this.closed || !this.stream) {
+      return Promise.reject(new Error('所选 SAFS 终端尚未连接或已经关闭'));
+    }
+    if (this.forwardedCommand) {
+      return Promise.reject(new Error('所选 SAFS 终端正在执行另一条 Agent 命令'));
+    }
+    if (signal?.aborted) {
+      return Promise.reject(new Error('Remote terminal command was cancelled'));
+    }
+    const executionId = randomBytes(12).toString('hex');
+    const plan = terminalForwardingCommand(command, remoteCwd, executionId);
+    return new Promise<Ssh2CommandResult>((resolve, reject) => {
+      const abort = () => {
+        this.stream?.write('\x03');
+        this.finishForwardedCommand(undefined, new Error('Remote terminal command was cancelled'));
+      };
+      this.forwardedCommand = {
+        capture: new TerminalCommandOutputCapture(
+          plan.startMarker, plan.endMarkerPrefix, maxOutputBytes
+        ),
+        resolve,
+        reject,
+        signal,
+        abort
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      this.stream?.write(`${plan.commandLine}\r`);
+    });
+  }
+
+  private captureForwardedCommandOutput(data: string): void {
+    const forwarded = this.forwardedCommand;
+    if (!forwarded) return;
+    try {
+      const result = forwarded.capture.push(data);
+      if (result) this.finishForwardedCommand(result);
+    } catch (error) {
+      this.finishForwardedCommand(
+        undefined, error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  }
+
+  private finishForwardedCommand(result?: Ssh2CommandResult, error?: Error): void {
+    const forwarded = this.forwardedCommand;
+    if (!forwarded) return;
+    this.forwardedCommand = undefined;
+    forwarded.signal?.removeEventListener('abort', forwarded.abort);
+    if (error) forwarded.reject(error);
+    else if (result) forwarded.resolve(result);
   }
 
   private probeRemoteShell(): Promise<string | undefined> {
@@ -419,6 +490,9 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   private finish(code: number | undefined): void {
     if (this.closed) return;
     this.closed = true;
+    this.finishForwardedCommand(
+      undefined, new Error('Remote terminal closed before the Agent command completed')
+    );
     if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
     this.shellOpenTimer = undefined;
     this.password = undefined;

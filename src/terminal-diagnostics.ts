@@ -1,6 +1,9 @@
 import type { CommandPlan, PlatformKind } from './platform';
 
 const sshConnectionDropPatterns = [
+  /connection lost before handshake/i,
+  /timed out while waiting for handshake/i,
+  /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH)\b/i,
   /connection reset by peer/i,
   /connection (?:closed|terminated) (?:by remote|remotely)/i,
   /connection unexpectedly closed/i,
@@ -10,6 +13,11 @@ const sshConnectionDropPatterns = [
   /no route to host/i,
   /network is unreachable/i
 ];
+
+/** Errors that are safe to retry because authentication has not permanently failed. */
+export function isTransientTerminalConnectionFailure(value: string): boolean {
+  return sshConnectionDropPatterns.some((pattern) => pattern.test(value));
+}
 
 export function shouldRecoverTerminalExit(input: {
   processExit: boolean;
@@ -28,13 +36,19 @@ export function shouldRecoverTerminalExit(input: {
   if (input.autoReconnect) return true;
   if (input.cleanExit) return false;
   return input.exitCode !== 0
-    || sshConnectionDropPatterns.some((pattern) => pattern.test(input.diagnosticText));
+    || isTransientTerminalConnectionFailure(input.diagnosticText);
 }
 
 export function nextAutoReconnectAttempt(
   previousAttempts: number, terminalLifetimeMs: number, stableLifetimeMs: number
 ): number {
   return terminalLifetimeMs >= stableLifetimeMs ? 1 : previousAttempts + 1;
+}
+
+/** Give gateways time to release the previous SSH session before reconnecting. */
+export function terminalReconnectDelayMs(attempt: number): number {
+  const normalized = Math.max(1, Math.floor(attempt));
+  return Math.min(1_000 * 2 ** (normalized - 1), 4_000);
 }
 
 const ansiPattern = /[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;

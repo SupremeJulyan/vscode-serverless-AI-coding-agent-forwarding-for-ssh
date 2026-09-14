@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -645,7 +645,7 @@
         "safs.terminalAutoReconnect": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "远程终端进程结束后自动重连（默认 `true`）。稳定运行超过 `60` 秒的终端结束时会重开同一目录；重连后的终端若在 `60` 秒内再次结束，则视为用户主动退出并停止重连。手动在 VS Code 中关闭终端或窗口不会触发重连。"
+          "markdownDescription": "远程终端进程结束后自动重连（默认 `true`）。稳定运行超过 `60` 秒的终端结束时会重开同一目录；普通错误在重连后再次退出即停止，握手丢失、连接重置或超时等瞬时网络错误最多退避重试 `3` 次。手动在 VS Code 中关闭终端或窗口不会触发重连。"
         }
       }
     },

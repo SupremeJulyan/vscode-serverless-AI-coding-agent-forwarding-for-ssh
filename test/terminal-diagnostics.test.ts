@@ -6,8 +6,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import {
-  cleanTerminalDiagnostic, decodeTerminalDiagnostic, nextAutoReconnectAttempt,
-  shouldRecoverTerminalExit, terminalDiagnosticPlan
+  cleanTerminalDiagnostic, decodeTerminalDiagnostic, isTransientTerminalConnectionFailure,
+  nextAutoReconnectAttempt, shouldRecoverTerminalExit, terminalDiagnosticPlan,
+  terminalReconnectDelayMs
 } from '../src/terminal-diagnostics';
 
 const plan = {
@@ -98,6 +99,23 @@ test('automatic reconnect attempts accumulate only for short-lived terminals', (
   assert.equal(nextAutoReconnectAttempt(1, 59_999, 60_000), 2);
   assert.equal(nextAutoReconnectAttempt(2, 60_000, 60_000), 1);
   assert.equal(nextAutoReconnectAttempt(2, 10 * 60_000, 60_000), 1);
+});
+
+test('classifies retryable network failures without retrying authentication failures', () => {
+  assert.equal(isTransientTerminalConnectionFailure('Connection lost before handshake'), true);
+  assert.equal(isTransientTerminalConnectionFailure('read ECONNRESET'), true);
+  assert.equal(isTransientTerminalConnectionFailure('Connection timed out'), true);
+  assert.equal(
+    isTransientTerminalConnectionFailure('All configured authentication methods failed'),
+    false
+  );
+});
+
+test('backs off terminal reconnects with a bounded delay', () => {
+  assert.equal(terminalReconnectDelayMs(1), 1_000);
+  assert.equal(terminalReconnectDelayMs(2), 2_000);
+  assert.equal(terminalReconnectDelayMs(3), 4_000);
+  assert.equal(terminalReconnectDelayMs(4), 4_000);
 });
 
 test('Unix wrapper mirrors stderr, persists it, and preserves the SSH exit code', {

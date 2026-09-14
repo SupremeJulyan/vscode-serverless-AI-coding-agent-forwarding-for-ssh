@@ -25,7 +25,9 @@ import {
   CommandPlan, createPlatformAdapter, platformExtensionStateKey
 } from './platform';
 import { executeCaptured, missingExecutableName, resolveExecutable } from './process';
-import { closeSsh2ExecSessions, executeSsh2Command, Ssh2Terminal } from './ssh2-terminal';
+import {
+  closeSsh2ExecSessions, executeSsh2Command, type Ssh2CommandResult, Ssh2Terminal
+} from './ssh2-terminal';
 import {
   passwordValueOffset
 } from './authentication';
@@ -82,8 +84,12 @@ import { proxyEnvironmentWarning } from './proxy-environment';
 import { testLoopbackProxy } from './proxy-diagnostic';
 import { remoteShortcutKeys } from './shortcut-hint';
 import {
-  cleanTerminalDiagnostic, decodeTerminalDiagnostic, nextAutoReconnectAttempt,
-  shouldRecoverTerminalExit, terminalDiagnosticPlan
+  TerminalCommandOutputCapture, terminalForwardingCommand
+} from './terminal-command-forwarding';
+import {
+  cleanTerminalDiagnostic, decodeTerminalDiagnostic, isTransientTerminalConnectionFailure,
+  nextAutoReconnectAttempt, shouldRecoverTerminalExit, terminalDiagnosticPlan,
+  terminalReconnectDelayMs
 } from './terminal-diagnostics';
 import { shouldUseBuiltinSshTerminal } from './terminal-routing';
 import {
@@ -115,8 +121,10 @@ const addTerminalLinkMountAction = '添加 SSH 配置';
 const openTerminalLinkConfigAction = '打开配置';
 const terminalCredentialTtlMs = 5 * 60 * 1000;
 const logClearIntervalMs = 24 * 60 * 60 * 1000;
-/** 稳定终端断开后只自动恢复一次；短时间内再次退出视为用户主动结束。 */
+/** 普通退出只恢复一次，避免认证失败等永久错误触发反复登录。 */
 const maxTerminalAutoReconnectAttempts = 1;
+/** 握手丢失、连接重置等瞬时网络错误允许有限退避重试。 */
+const maxTransientTerminalAutoReconnectAttempts = 3;
 /** 存活达到该时长的终端视为稳定连接，后续断开重新从第 1 次重连计数。 */
 const terminalAutoReconnectStableMs = 60_000;
 
@@ -144,6 +152,11 @@ let safsStatusBar: vscode.StatusBarItem | undefined;
 let forwardingFocusStatusBar: vscode.StatusBarItem | undefined;
 let syncStatusBar: vscode.StatusBarItem | undefined;
 let focusedAgentSource: { name: string } | undefined;
+/** Session-only opt-in target for executing Agent commands in a visible SAFS terminal. */
+let agentCommandTerminal: vscode.Terminal | undefined;
+/** Fixed workspace root captured from the selected terminal when terminal-only mode starts. */
+let agentCommandTerminalCwd: string | undefined;
+const busyAgentCommandTerminals = new WeakSet<vscode.Terminal>();
 let refreshTree: () => void = () => undefined;
 const openingTerminalIds = new Set<string>();
 let lastReadConfig: BridgeConfig | undefined;
@@ -151,6 +164,7 @@ const managedRemoteTerminals = new Map<vscode.Terminal, {
   mount: MountConfig;
   remoteCwd: string;
   retryWithSystemSsh?: boolean;
+  connectionError?: string;
   hostKeyRetries?: number;
   startedAt: number;
   /** 内置 ssh2 终端实例：live-sync 用它安全补发 cd（shell 就绪前入队）。 */
@@ -547,7 +561,9 @@ function routerMcpToolProfile(): 'full' | 'core' | 'hybrid' {
 
 // The window server is an internal execution backend for both public MCP and CLI.
 // Keep every operation registered here; only the stable router trims Agent-visible schemas.
-function backendMcpToolProfile(): 'full' { return 'full'; }
+function backendMcpToolProfile(): 'full' | 'terminal' {
+  return agentCommandTerminal && agentCommandTerminalCwd ? 'terminal' : 'full';
+}
 
 function cliRouterUrl(url: string): string {
   const tagged = new URL(url);
@@ -851,23 +867,42 @@ async function openDirectoryItem(requested: MountConfig): Promise<void> {
   );
 }
 
-async function openRemoteDirectory(): Promise<void> {
+interface SelectedRemoteDirectory {
+  mount: MountConfig;
+  folder: RemoteFolder;
+  resolved: string;
+  previousPath?: string;
+}
+
+/**
+ * Resolve a directory inside the current SAFS mount, or let local/empty windows
+ * choose a configured connection first.
+ */
+async function selectRemoteDirectory(
+  mountPlaceHolder: string
+): Promise<SelectedRemoteDirectory | undefined> {
   const location = currentRemoteLocation();
-  if (!location) {
-    throw new Error('当前窗口不是 SAFS 远程工作区');
-  }
-  const config = await readConfig();
-  const mount = config.mounts.find((candidate) => candidate.name === location.mountName);
+  let mount: MountConfig | undefined;
+  if (location) {
+    const config = await readConfig();
+    mount = config.mounts.find((candidate) => candidate.name === location.mountName);
     if (!mount) throw new Error(`远程目录配置不存在：${location.mountName}`);
+  } else {
+    mount = await selectMount(mountPlaceHolder);
+  }
+  if (!mount) return undefined;
   const folder = await ensureFolder(mount);
   const session = await pool.get(folder.hostName);
+  const currentPath = location?.mountName === mount.name
+    ? location.remotePath
+    : folder.remoteRoot;
   const requested = await promptRemoteDirectory(
-    session, folder.remoteRoot, location.remotePath, mount.name
+    session, folder.remoteRoot, currentPath, mount.name
   );
-  if (requested === undefined) return;
+  if (requested === undefined) return undefined;
   const candidate = requested.trim().startsWith('/')
     ? path.posix.normalize(requested.trim())
-    : path.posix.resolve(location.remotePath, requested.trim());
+    : path.posix.resolve(currentPath, requested.trim());
   if (!isRemotePathInsideRoot(folder.remoteRoot, candidate)) {
     throw new Error(`远程目录必须位于挂载根目录 ${folder.remoteRoot} 内`);
   }
@@ -878,6 +913,13 @@ async function openRemoteDirectory(): Promise<void> {
   if ((await session.stat(resolved)).type !== 'directory') {
     throw new Error(`远程路径不是目录：${resolved}`);
   }
+  return { mount, folder, resolved, previousPath: location?.remotePath };
+}
+
+async function openRemoteDirectory(): Promise<void> {
+  const selected = await selectRemoteDirectory('选择要打开的远程连接');
+  if (!selected) return;
+  const { mount, folder, resolved } = selected;
   const forwarding = vscodeContext.globalState
     .get<string[]>(aiForwardMountsKey, []).includes(mount.name);
   agentTrace('Open', `准备在新窗口打开 ${mount.name}:${resolved}，Agent 转发=${forwarding ? '启用' : '关闭'}`);
@@ -896,37 +938,14 @@ async function openRemoteDirectory(): Promise<void> {
 }
 
 async function switchRemoteDirectory(): Promise<void> {
-  const location = currentRemoteLocation();
-  if (!location) {
-    throw new Error('当前窗口不是 SAFS 远程工作区');
-  }
-  const config = await readConfig();
-  const mount = config.mounts.find((candidate) => candidate.name === location.mountName);
-    if (!mount) throw new Error(`远程目录配置不存在：${location.mountName}`);
-  const folder = await ensureFolder(mount);
-  const session = await pool.get(folder.hostName);
-  const requested = await promptRemoteDirectory(
-    session, folder.remoteRoot, location.remotePath, mount.name
-  );
-  if (requested === undefined) return;
-  const candidate = requested.trim().startsWith('/')
-    ? path.posix.normalize(requested.trim())
-    : path.posix.resolve(location.remotePath, requested.trim());
-  if (!isRemotePathInsideRoot(folder.remoteRoot, candidate)) {
-    throw new Error(`远程目录必须位于挂载根目录 ${folder.remoteRoot} 内`);
-  }
-  const resolved = await session.realpath(candidate);
-  if (!isRemotePathInsideRoot(folder.remoteRoot, resolved)) {
-    throw new Error(`远程目录必须位于挂载根目录 ${folder.remoteRoot} 内`);
-  }
-  if ((await session.stat(resolved)).type !== 'directory') {
-    throw new Error(`远程路径不是目录：${resolved}`);
-  }
+  const selected = await selectRemoteDirectory('选择要切换的远程连接');
+  if (!selected) return;
+  const { mount, folder, resolved, previousPath } = selected;
   const localRoot = localRootForFolder(folder);
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, resolved);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, resolved);
   await recordDirectoryHistory(vscodeContext, mount.name, resolved);
-  agentTrace('Open', `切换远程目录：${location.remotePath} -> ${resolved}`);
+  agentTrace('Open', `切换远程目录：${previousPath ?? '<local>'} -> ${resolved}`);
   await vscode.commands.executeCommand(
     'vscode.openFolder', vscode.Uri.parse(folderUri(folder, resolved))
   );
@@ -1684,6 +1703,260 @@ function currentRemoteLocation(): { mountName: string; remotePath: string } | un
 
 // ---- openTerminal (aligned with main) ----
 
+function agentCommandTerminalState(): { enabled: boolean; label?: string } {
+  const terminal = agentCommandTerminal;
+  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+  if (!terminal || !info || !agentCommandTerminalCwd) return { enabled: false };
+  return { enabled: true, label: `${terminal.name} · ${agentCommandTerminalCwd}` };
+}
+
+async function refreshAgentCommandTerminalState(): Promise<void> {
+  await agentActivityView?.updateTerminalTarget();
+}
+
+async function toggleAgentCommandTerminal(): Promise<void> {
+  if (agentCommandTerminal) {
+    const name = agentCommandTerminal.name;
+    agentCommandTerminal = undefined;
+    agentCommandTerminalCwd = undefined;
+    await refreshAgentCommandTerminalState();
+    await publishAgentWorkspace(vscodeContext);
+    bridgeOutput?.info(`[Agent 终端转发] 已停止使用 ${name}`);
+    void vscode.window.showInformationMessage('SAFS：已退出终端专用模式，Agent 工具已恢复。');
+    return;
+  }
+  const terminal = vscode.window.activeTerminal;
+  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+  if (!terminal || !info) {
+    void vscode.window.showWarningMessage('SAFS：请先聚焦一个已连接的 SAFS 远程终端。');
+    return;
+  }
+  const location = currentRemoteLocation();
+  if (!location || location.mountName !== info.mount.name) {
+    void vscode.window.showWarningMessage('SAFS：所选终端不属于当前远程工作区。');
+    return;
+  }
+  if (!info.pty && !terminal.shellIntegration) {
+    void vscode.window.showWarningMessage(
+      'SAFS：终端缺少命令集成，无法安全转发。'
+    );
+    return;
+  }
+  const confirmed = await vscode.window.showWarningMessage(
+    `Agent 命令将显示在“${terminal.name}”中，并继承该终端当前的用户权限和环境。` +
+      '开启后 MCP 只保留一个终端命令工具，CLI 只放行 safs exec；所有 SAFS 文件、搜索和传输操作都会关闭。',
+    { modal: true },
+    '使用此终端'
+  );
+  if (confirmed !== '使用此终端') return;
+  let terminalCwd: string;
+  try {
+    terminalCwd = await probeAgentCommandTerminalCwd(terminal, info);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    bridgeOutput?.error(`[Agent 终端转发] 无法确定终端目录：${detail}`);
+    void vscode.window.showErrorMessage(`SAFS：无法确定当前终端目录：${detail}`);
+    return;
+  }
+  agentCommandTerminal = terminal;
+  agentCommandTerminalCwd = terminalCwd;
+  await refreshAgentCommandTerminalState();
+  await publishAgentWorkspace(vscodeContext);
+  bridgeOutput?.warn(
+    `[Agent 终端转发] 已启用终端专用模式：${terminal.name}；mount=${info.mount.name}；cwd=${terminalCwd}`
+  );
+  terminal.show(false);
+}
+
+async function executeWithTerminalShellIntegration(
+  terminal: vscode.Terminal, command: string, remoteCwd: string | undefined,
+  signal: AbortSignal | undefined, maxOutputBytes: number
+): Promise<Ssh2CommandResult> {
+  const integration = terminal.shellIntegration;
+  if (!integration) {
+    throw new Error('所选 SAFS 终端的 Shell Integration 已失效，请停止终端转发或重新选择');
+  }
+  const executionId = randomBytes(12).toString('hex');
+  const plan = terminalForwardingCommand(command, remoteCwd, executionId);
+  const capture = new TerminalCommandOutputCapture(
+    plan.startMarker, plan.endMarkerPrefix, maxOutputBytes
+  );
+  if (signal?.aborted) throw new Error('Remote terminal command was cancelled');
+  return new Promise<Ssh2CommandResult>((resolve, reject) => {
+    let settled = false;
+    const finish = (result?: Ssh2CommandResult, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      if (error) reject(error);
+      else if (result) resolve(result);
+    };
+    const abort = () => {
+      terminal.sendText('\x03', false);
+      finish(undefined, new Error('Remote terminal command was cancelled'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    let execution: vscode.TerminalShellExecution;
+    try {
+      execution = integration.executeCommand(plan.commandLine);
+    } catch (error) {
+      finish(undefined, error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    void (async () => {
+      try {
+        for await (const data of execution.read()) {
+          const result = capture.push(data);
+          if (result) {
+            finish(result);
+            return;
+          }
+        }
+        finish(undefined, new Error(
+          '所选 SAFS 终端未返回完整执行结果；sudo/su 后的子 Shell 可能没有 Shell Integration'
+        ));
+      } catch (error) {
+        finish(undefined, error instanceof Error ? error : new Error(String(error)));
+      }
+    })();
+  });
+}
+
+async function probeAgentCommandTerminalCwd(
+  terminal: vscode.Terminal,
+  info: NonNullable<ReturnType<typeof managedRemoteTerminals.get>>
+): Promise<string> {
+  if (busyAgentCommandTerminals.has(terminal)) {
+    throw new Error('所选终端正在执行另一条 Agent 命令');
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  busyAgentCommandTerminals.add(terminal);
+  try {
+    const result = info.pty
+      ? await info.pty.executeForwardedCommand('pwd -P', undefined, controller.signal, 16_384)
+      : await executeWithTerminalShellIntegration(
+          terminal, 'pwd -P', undefined, controller.signal, 16_384
+        );
+    if (result.exitCode !== 0) throw new Error(`pwd -P 退出码为 ${result.exitCode}`);
+    const cwd = result.stdout.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).at(-1);
+    if (!cwd || !path.posix.isAbsolute(cwd)) {
+      throw new Error('终端没有返回有效的绝对路径');
+    }
+    return path.posix.normalize(cwd);
+  } finally {
+    clearTimeout(timeout);
+    busyAgentCommandTerminals.delete(terminal);
+  }
+}
+
+async function executeWithAgentCommandTerminal(
+  mountName: string, command: string, remoteCwd: string,
+  signal: AbortSignal | undefined, maxOutputBytes: number
+): Promise<Ssh2CommandResult | undefined> {
+  const terminal = agentCommandTerminal;
+  if (!terminal) return undefined;
+  const info = managedRemoteTerminals.get(terminal);
+  if (!info) {
+    agentCommandTerminal = undefined;
+    agentCommandTerminalCwd = undefined;
+    await refreshAgentCommandTerminalState();
+    await publishAgentWorkspace(vscodeContext);
+    return undefined;
+  }
+  if (info.mount.name !== mountName) {
+    throw new Error(
+      `所选 SAFS 终端属于 ${info.mount.name}，不能执行 ${mountName} 工作区的 Agent 命令`
+    );
+  }
+  if (busyAgentCommandTerminals.has(terminal)) {
+    throw new Error('所选 SAFS 终端正在执行另一条 Agent 命令，请稍后重试');
+  }
+  busyAgentCommandTerminals.add(terminal);
+  terminal.show(true);
+  bridgeOutput?.appendLine(
+    `[Agent 终端转发] $ ${redactSensitiveText(command)} (terminal: ${terminal.name}; cwd: ${remoteCwd})`
+  );
+  try {
+    const result = info.pty
+      ? await info.pty.executeForwardedCommand(command, remoteCwd, signal, maxOutputBytes)
+      : await executeWithTerminalShellIntegration(
+          terminal, command, remoteCwd, signal, maxOutputBytes
+        );
+    bridgeOutput?.appendLine(
+      `[Agent 终端转发] [${result.exitCode === 0 ? '完成' : `失败: exit ${result.exitCode}`}] ${
+        redactSensitiveText(command)
+      }`
+    );
+    return result;
+  } finally {
+    busyAgentCommandTerminals.delete(terminal);
+  }
+}
+
+async function executeTerminalOnlyCommand(input: {
+  command: string; mountName: string; agentName?: string; source?: 'mcp' | 'cli';
+}): Promise<Record<string, unknown>> {
+  if (!input.command?.trim()) throw new Error('Remote command must not be empty.');
+  const terminal = agentCommandTerminal;
+  const terminalCwd = agentCommandTerminalCwd;
+  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+  if (!terminal || !terminalCwd || !info) {
+    throw new AgentToolError(
+      'TERMINAL_TARGET_UNAVAILABLE',
+      'No SAFS terminal is selected. Enable Use Current Terminal in Agent Activity.'
+    );
+  }
+  if (info.mount.name !== input.mountName) {
+    throw new AgentToolError(
+      'TERMINAL_TARGET_MISMATCH',
+      `The selected terminal belongs to ${info.mount.name}, not ${input.mountName}.`
+    );
+  }
+  const responseBudget = Math.max(
+    4096,
+    Math.min(1024 * 1024, settings().get<number>('agentMcpMaxOutputBytes', 8192))
+  );
+  const source = input.source ?? 'mcp';
+  const policy = evaluateMcpCommandPolicy(
+    input.command, source, readMcpCommandPolicySettings(settings())
+  );
+  appendMcpCommandLog({
+    source: policy.auditSource,
+    agentName: input.agentName,
+    mountName: info.mount.name,
+    remoteCwd: terminalCwd,
+    command: input.command
+  }).catch((error) => bridgeOutput?.appendLine(
+    `[MCP 命令日志] 写入失败：${error instanceof Error ? error.message : String(error)}`
+  ));
+  if (!policy.allowed) {
+    throw new Error(
+      `SAFS denied this high-risk command (rule: ${policy.matched}): ${policy.redactedCommand}`
+    );
+  }
+  const controller = new AbortController();
+  const commandTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+  let timedOut = false;
+  const timeout = commandTimeoutMs > 0 ? setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, commandTimeoutMs) : undefined;
+  try {
+    const result = await executeWithAgentCommandTerminal(
+      info.mount.name, input.command, terminalCwd, controller.signal, responseBudget
+    );
+    if (timedOut) throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
+    if (!result) throw new Error('The selected SAFS terminal is no longer available.');
+    return { workspaceRoot: terminalCwd, ...result };
+  } catch (error) {
+    if (timedOut) throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function createTerminalDiagnostic(
   context: vscode.ExtensionContext, mountName: string, command: string
 ): Promise<{ file: string; command: string } | undefined> {
@@ -1846,24 +2119,31 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
       autoReconnectFails.get(key) ?? 0, lifetimeMs, terminalAutoReconnectStableMs
     );
     autoReconnectFails.set(key, fails);
-    if (fails > maxTerminalAutoReconnectAttempts) {
+    const transientFailure = isTransientTerminalConnectionFailure(
+      `${reopen.connectionError ?? ''}\n${diagnosticText}`
+    );
+    const maxAttempts = transientFailure
+      ? maxTransientTerminalAutoReconnectAttempts
+      : maxTerminalAutoReconnectAttempts;
+    if (fails > maxAttempts) {
       autoReconnectFails.delete(key);
       bridgeOutput?.error(
         `[终端] 已停止自动重连；mount=${reopen.mount.name}；cwd=${remoteCwd}；` +
-        '重连后的终端在 60 秒内再次退出'
+        `连续失败 ${fails - 1} 次`
       );
       void vscode.window.showErrorMessage(
         'SAFS：远程终端再次退出，已停止自动重连。'
       );
       return;
     }
+    const delayMs = terminalReconnectDelayMs(fails);
     bridgeOutput?.info(
-      `[终端] 安排自动重连；mount=${reopen.mount.name}；cwd=${remoteCwd}；attempt=${
-        fails
-      }/${maxTerminalAutoReconnectAttempts}`
+      `[终端] 安排自动重连；mount=${reopen.mount.name}；cwd=${remoteCwd}；` +
+      `attempt=${fails}/${maxAttempts}；delay=${delayMs}ms`
     );
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
     await openTerminal(
-      vscodeContext, reopen.mount, remoteCwd, undefined, true, false, reopen.hostKeyRetries ?? 0
+      vscodeContext, reopen.mount, remoteCwd, undefined, false, false, reopen.hostKeyRetries ?? 0
     );
     return;
   }
@@ -2019,11 +2299,12 @@ async function openTerminal(
             bridgeOutput?.error(
               `[终端] 内置 ssh2 终端 ${mount.name} 失败：${error.stack ?? error.message}`
             );
+            const entry = managedRemoteTerminals.get(created);
+            if (entry) entry.connectionError = error.message;
             // Server rejected the pty/shell negotiation (gateway appliance):
             // mark this terminal for a system-ssh retry instead of the
             // built-in ssh2 transport.
             if (builtinSshFallbackPattern.test(error.message)) {
-              const entry = managedRemoteTerminals.get(created);
               if (entry) entry.retryWithSystemSsh = true;
             }
           },
@@ -2647,6 +2928,39 @@ async function executeRemoteCommand(
       `[高危指令放行] 已按配置执行：${policy.redactedCommand}（规则：${policy.matched}）`
     );
   }
+  // Explicit, session-only terminal forwarding applies only to Agent task commands.
+  // Searches keep their isolated execution path and file operations remain on SFTP.
+  if (source !== 'remote_search' && agentCommandTerminal) {
+    const controller = new AbortController();
+    const cancellation = token?.onCancellationRequested(() => controller.abort());
+    const commandTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+    let timedOut = false;
+    const timeout = commandTimeoutMs > 0
+      ? setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, commandTimeoutMs)
+      : undefined;
+    try {
+      const result = await executeWithAgentCommandTerminal(
+        mount.name, input.command, remoteCwd, controller.signal, maxOutputBytes
+      );
+      if (timedOut) throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
+      if (result) {
+        return {
+          remoteCwd,
+          ...(retainOutput ? { responseBudget } : {}),
+          ...result
+        };
+      }
+    } catch (error) {
+      if (timedOut) throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      cancellation?.dispose();
+    }
+  }
   const resolved = resolveMount(await readConfig(), mount);
   const outputMarker = `__SAFS_COMMAND_OUTPUT_${randomBytes(16).toString('hex')}__`;
   let credentials: AskpassCredentials | undefined;
@@ -3220,10 +3534,13 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
           const mount = config.mounts.find((candidate) => candidate.name === location.mountName);
           if (!mount) return null;
           const folder = await ensureFolder(mount);
-          const workspacePath = currentWorkspacePath(folder);
+          const editorWorkspacePath = currentWorkspacePath(folder);
+          const workspacePath = agentCommandTerminal && agentCommandTerminalCwd
+            ? agentCommandTerminalCwd
+            : editorWorkspacePath;
           return {
             name: mount.name,
-            workspaceUri: folderUri(folder, workspacePath),
+            workspaceUri: folderUri(folder, editorWorkspacePath),
             workspaceRoot: workspacePath,
             host: mount.host
           };
@@ -3314,7 +3631,9 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
             return agentActivityStore.start({
               ...entry,
               mountName: boundMountName,
-              workspaceRoot: currentWorkspacePath(folder)
+              workspaceRoot: entry.toolName === 'run_remote_command' && agentCommandTerminalCwd
+                ? agentCommandTerminalCwd
+                : currentWorkspacePath(folder)
             });
           },
           succeed: (id, result) => agentActivityStore.succeed(id, result),
@@ -3325,6 +3644,12 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
         }),
         run: async (input) => executeRemoteCommand(context, {
           ...input, captureForMcp: true, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
+        }),
+        runTerminal: async (input) => executeTerminalOnlyCommand({
+          command: input.command,
+          agentName: input.agentName,
+          source: input.source,
+          mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         request: (agentName) => {
           updateSafsStatusBar(vscode.window.state.focused, agentName);
@@ -3367,19 +3692,23 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     return;
   }
   const folder = await ensureFolder(mount);
-  const workspacePath = currentWorkspacePath(folder);
+  const editorWorkspacePath = currentWorkspacePath(folder);
+  const terminalCommandOnly = agentCommandTerminal !== undefined
+    && agentCommandTerminalCwd !== undefined;
+  const workspacePath = terminalCommandOnly ? agentCommandTerminalCwd! : editorWorkspacePath;
   await agentWorkspacePublisher.publish({
     focused: vscode.window.state.focused,
     execution: 'remote',
-    workspaceUri: folderUri(folder, workspacePath),
+    workspaceUri: folderUri(folder, editorWorkspacePath),
     mountName: mount.name,
     workspaceRoot: workspacePath,
-    agentCwd: vscode.Uri.parse(folderUri(folder, workspacePath)).fsPath,
+    agentCwd: vscode.Uri.parse(folderUri(folder, editorWorkspacePath)).fsPath,
     host: mount.host,
-    mcpUrl: mcp.url
+    mcpUrl: mcp.url,
+    ...(terminalCommandOnly ? { terminalCommandOnly: true } : {})
   });
   updateSafsStatusBar(vscode.window.state.focused);
-  const state = `published:${mount.name}:${workspacePath}:${mcp.url}:${vscode.window.state.focused}`;
+  const state = `published:${mount.name}:${workspacePath}:${mcp.url}:${vscode.window.state.focused}:${terminalCommandOnly}`;
   if (lastAgentDiscoveryState !== state) {
     lastAgentDiscoveryState = state;
     agentTrace(
@@ -3768,7 +4097,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.workspaceState, platformStateKey('agentActivity')
   );
   await agentActivityStore.initialize();
-  agentActivityView = new AgentActivityViewProvider(agentActivityStore);
+  agentActivityView = new AgentActivityViewProvider(agentActivityStore, {
+    terminalTarget: agentCommandTerminalState,
+    toggleTerminalTarget: toggleAgentCommandTerminal
+  });
   context.subscriptions.push(output, bridgeOutput, agentActivityView);
   await recoverTerminalDiagnostics(context);
   // 独立、高优先级 ID：避免长焦点文案被底栏布局整项挤掉，也不复用
@@ -4144,6 +4476,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Terminal lifecycle
   context.subscriptions.push(vscode.window.onDidCloseTerminal((terminal) => {
+    if (terminal === agentCommandTerminal) {
+      agentCommandTerminal = undefined;
+      agentCommandTerminalCwd = undefined;
+      void refreshAgentCommandTerminalState();
+      void publishAgentWorkspace(context);
+      bridgeOutput?.info('[Agent 终端转发] 所选终端已关闭，已退出终端专用模式');
+    }
     void suggestReopeningClosedTerminal(terminal).catch((error) =>
       logAsyncFailure('终端退出处理失败', error)
     );
@@ -4224,6 +4563,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export async function deactivate(): Promise<void> {
   agentTrace('Deactivate', '扩展停用，清理发现记录、MCP 和连接池');
+  agentCommandTerminal = undefined;
+  agentCommandTerminalCwd = undefined;
   await agentActivityStore?.flush();
   agentActivityStore?.dispose();
   if (agentWorkspaceHeartbeat) clearInterval(agentWorkspaceHeartbeat);

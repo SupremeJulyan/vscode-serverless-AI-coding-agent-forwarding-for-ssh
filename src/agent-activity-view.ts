@@ -4,11 +4,24 @@ import { AgentActivityStore } from './agent-activity';
 
 export const agentActivityViewId = 'safs.agentActivity';
 
+export interface AgentTerminalTargetState {
+  enabled: boolean;
+  label?: string;
+}
+
+export interface AgentActivityViewActions {
+  terminalTarget(): AgentTerminalTargetState;
+  toggleTerminalTarget(): Promise<void>;
+}
+
 export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private readonly changeSubscription: { dispose(): void };
 
-  constructor(private readonly store: AgentActivityStore) {
+  constructor(
+    private readonly store: AgentActivityStore,
+    private readonly actions?: AgentActivityViewActions
+  ) {
     this.changeSubscription = store.onDidChange((events) => {
       void this.view?.webview.postMessage({ type: 'state', events });
     });
@@ -28,6 +41,7 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
         await view.webview.postMessage({
           type: 'state', events: this.store.snapshot(), initial: true
         });
+        await this.updateTerminalTarget();
       } else if (type === 'clear') {
         const selected = await vscode.window.showWarningMessage(
           '确定清空当前窗口的 Agent 活动记录吗？',
@@ -35,7 +49,16 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
           '清空'
         );
         if (selected === '清空') await this.store.clear();
+      } else if (type === 'toggleTerminalTarget') {
+        await this.actions?.toggleTerminalTarget();
       }
+    });
+  }
+
+  async updateTerminalTarget(): Promise<void> {
+    await this.view?.webview.postMessage({
+      type: 'terminalTarget',
+      ...(this.actions?.terminalTarget() ?? { enabled: false })
     });
   }
 
@@ -108,6 +131,13 @@ export function activityViewHtml(webview: vscode.Webview): string {
     @keyframes pulse { from { transform: scale(.8); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
     @keyframes wave { to { stroke-dashoffset: -6; } }
     .controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 5px; margin-bottom: 8px; }
+    .terminal-target {
+      display: grid; grid-template-columns: 1fr auto; gap: 7px; align-items: center;
+      margin-bottom: 8px; padding: 7px 8px; border: 1px solid var(--vscode-widget-border);
+      border-radius: 6px; background: var(--vscode-editor-background);
+    }
+    .terminal-target.active { border-color: var(--vscode-testing-iconPassed, #2ea043); }
+    .terminal-target-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     select { min-width: 0; padding: 2px 4px; }
     .empty-state {
       padding: 18px 8px; text-align: center; color: var(--vscode-descriptionForeground);
@@ -152,6 +182,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
     </div>
     <div><div id="statusTitle" class="status-title">等待 Agent 操作</div><div id="statusDetail" class="status-detail">当前远程窗口</div></div>
   </section>
+  <section id="terminalTarget" class="terminal-target">
+    <span id="terminalTargetLabel" class="terminal-target-label">Agent 工具：工作区模式</span>
+    <button id="terminalTargetButton" type="button" title="切换为仅允许在当前 SAFS 终端执行命令">使用当前终端</button>
+  </section>
   <div class="controls">
     <select id="category" aria-label="按操作类型筛选">
       <option value="all">全部类型</option><option value="read">读取/搜索</option>
@@ -173,6 +207,9 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const orb = document.getElementById('orb');
     const categoryFilter = document.getElementById('category');
     const statusFilter = document.getElementById('eventStatus');
+    const terminalTarget = document.getElementById('terminalTarget');
+    const terminalTargetLabel = document.getElementById('terminalTargetLabel');
+    const terminalTargetButton = document.getElementById('terminalTargetButton');
     let events = [];
     let statusTimer;
     const seenStatus = new Map();
@@ -336,11 +373,21 @@ export function activityViewHtml(webview: vscode.Webview): string {
       render();
     }
     window.addEventListener('message', function(event) {
-      if (event.data && event.data.type === 'state') acceptState(event.data);
+      if (!event.data) return;
+      if (event.data.type === 'state') acceptState(event.data);
+      if (event.data.type === 'terminalTarget') {
+        const enabled = event.data.enabled === true;
+        terminalTarget.className = 'terminal-target' + (enabled ? ' active' : '');
+        terminalTargetLabel.textContent = enabled
+          ? '终端专用模式 → ' + (event.data.label || 'SAFS 终端')
+          : 'Agent 工具：工作区模式';
+        terminalTargetButton.textContent = enabled ? '退出专用模式' : '使用当前终端';
+      }
     });
     categoryFilter.addEventListener('change', render);
     statusFilter.addEventListener('change', render);
     document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
+    terminalTargetButton.addEventListener('click', function() { vscode.postMessage({ type: 'toggleTerminalTarget' }); });
     vscode.postMessage({ type: 'ready' });
   </script>
 </body>

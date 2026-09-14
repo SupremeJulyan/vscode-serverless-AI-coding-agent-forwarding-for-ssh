@@ -69,7 +69,7 @@ function record(
   instanceId: string, mcpUrl: string,
   workspace: {
     mountName?: string; workspaceRoot?: string; host?: string; focused?: boolean;
-    agentCwd?: string;
+    agentCwd?: string; terminalCommandOnly?: true;
   } = {}
 ): DiscoveredAgentWorkspace {
   const updatedAt = new Date().toISOString();
@@ -82,6 +82,7 @@ function record(
     workspaceUri: 'safs://a/srv/a',
     mountName: workspace.mountName ?? 'A',
     workspaceRoot: workspace.workspaceRoot ?? '/srv/a',
+    terminalCommandOnly: workspace.terminalCommandOnly,
     agentCwd: workspace.agentCwd,
     host: workspace.host ?? 'dev',
     mcpUrl,
@@ -182,6 +183,113 @@ test('hybrid mode exposes two MCP tools and reuses their binding through CLI', a
     assert.deepEqual(switchedValue.workspace, {
       host: 'other', workspaceRoot: '/srv/other'
     });
+  } finally {
+    await client.close();
+    await Promise.allSettled([router.stop(), backend.stop()]);
+  }
+});
+
+test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plus exec', async () => {
+  const backend = new AgentMcpServer(0, 'terminal-backend', {
+    ...callbacks('terminal'),
+    toolProfile: () => 'terminal',
+    runTerminal: async (input) => ({
+      workspaceRoot: '/home/switched-user/project',
+      exitCode: 0,
+      stdout: `terminal:${input.command}`,
+      stderr: '',
+      truncated: false,
+      source: input.source
+    })
+  });
+  let workspaces: DiscoveredAgentWorkspace[] = [];
+  const router = new AgentHttpRouter(await freePort(), 'router-token', {
+    discover: () => workspaces
+  });
+  const client = new Client({ name: 'terminal-agent', version: '1.0.0' });
+  try {
+    await backend.start();
+    workspaces = [record('terminal-window', backend.url, {
+      workspaceRoot: '/home/switched-user/project',
+      agentCwd: '/local/project',
+      focused: false,
+      terminalCommandOnly: true
+    })];
+    await router.start();
+    await client.connect(new StreamableHTTPClientTransport(
+      new URL(agentTaggedMcpUrl(router.url, 'Codex'))
+    ));
+    assert.match(client.getInstructions() ?? '', /Only the selected visible SAFS terminal/);
+    const tools = await client.listTools();
+    assert.deepEqual(tools.tools.map((tool) => tool.name), ['run_remote_command']);
+    assert.deepEqual(
+      Object.keys(tools.tools[0].inputSchema.properties ?? {}),
+      ['command']
+    );
+    const executed = await client.callTool({
+      name: 'run_remote_command', arguments: { command: 'id -un' }
+    });
+    assert.deepEqual(JSON.parse((executed.content as any[])[0].text), {
+      workspaceRoot: '/home/switched-user/project',
+      exitCode: 0,
+      stdout: 'terminal:id -un',
+      stderr: '',
+      truncated: false,
+      source: 'mcp'
+    });
+    const cachedCommandAlias = await client.callTool({
+      name: 'run_remote_command',
+      arguments: { bindingId: 'cached-before-toggle', command: 'whoami', remoteCwd: '/ignored' }
+    });
+    assert.equal(
+      JSON.parse((cachedCommandAlias.content as any[])[0].text).stdout,
+      'terminal:whoami'
+    );
+
+    const cliUrl = new URL(router.url);
+    cliUrl.pathname = '/cli';
+    const invokeCli = async (name: string, args: Record<string, unknown>) => {
+      const response = await fetch(cliUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, arguments: args })
+      });
+      assert.equal(response.status, 200);
+      return response.json() as Promise<any>;
+    };
+    const bound = await invokeCli('get_remote_workspace', {
+      agentName: 'Codex', agentCwd: '/local/project'
+    });
+    assert.equal(bound.ok, true);
+    assert.equal(bound.result.workspace.terminalCommandOnly, true);
+    assert.match(bound.result.cliInstructions, /Use only safs exec/);
+    assert.match(bound.result.cliInstructions, /Do not pass --cwd/);
+    const bindingId = bound.result.bindingId;
+
+    const denied = await invokeCli('remote_read', { bindingId, path: 'README.md' });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.result.code, 'TERMINAL_COMMAND_ONLY');
+
+    const deniedBatch = await invokeCli('safs_cli_batch', {
+      operations: [{
+        name: 'run_remote_command', arguments: { bindingId, command: 'pwd' }
+      }]
+    });
+    assert.equal(deniedBatch.ok, false);
+    assert.equal(deniedBatch.result.code, 'TERMINAL_COMMAND_ONLY');
+
+    const wrongCwd = await invokeCli('run_remote_command', {
+      bindingId, command: 'pwd', remoteCwd: '/tmp'
+    });
+    assert.equal(wrongCwd.ok, false);
+    assert.equal(wrongCwd.result.code, 'TERMINAL_CWD_FIXED');
+
+    const cliExecuted = await invokeCli('run_remote_command', {
+      bindingId, command: 'pwd'
+    });
+    assert.equal(cliExecuted.ok, true);
+    assert.equal(cliExecuted.result.stdout, 'terminal:pwd');
+    assert.equal(cliExecuted.result.source, 'cli');
   } finally {
     await client.close();
     await Promise.allSettled([router.stop(), backend.stop()]);

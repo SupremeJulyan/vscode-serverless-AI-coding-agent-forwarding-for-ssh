@@ -32,7 +32,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.8.4');
+  assert.equal(manifest.version, '1.8.5');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -75,6 +75,17 @@ test('contributes a remote-directory switch command instead of relying on the lo
   ) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
   assert.ok(commands.some((item) => item.command === 'safs.switchRemoteDirectory'));
+});
+
+test('remote directory commands can select a connection from a local or empty window', async () => {
+  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  assert.ok(extensionSource.includes('mount = await selectMount(mountPlaceHolder)'));
+  assert.ok(extensionSource.includes(
+    "selectRemoteDirectory('选择要打开的远程连接')"
+  ));
+  assert.ok(extensionSource.includes(
+    "selectRemoteDirectory('选择要切换的远程连接')"
+  ));
 });
 
 test('declares every command referenced by a menu contribution', async () => {
