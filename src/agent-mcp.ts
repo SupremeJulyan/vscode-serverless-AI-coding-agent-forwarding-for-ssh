@@ -9,7 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   type AgentToolProfile, configureAgentMcpResources, directAgentMcpInstructions,
-  registerAgentMcpTools, terminalAgentMcpInstructions
+  registerAgentMcpTools, terminalAgentMcpInstructions, terminalMcpOnlyToolError
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
 
@@ -331,6 +331,17 @@ export class AgentMcpServer {
           input: input && typeof input === 'object' ? input as Record<string, unknown> : {},
           agentName
         });
+      }
+      // A connected Agent can cache tools from workspace mode. Give it the
+      // terminal-mode replacement instead of a generic "Tool not found".
+      if (method === 'tools/call' && typeof tool === 'string'
+          && this.callbacks.toolProfile?.() === 'terminal'
+          && tool !== 'run_remote_command') {
+        response.json({
+          jsonrpc: '2.0', id: request.body?.id ?? null,
+          result: terminalMcpOnlyToolError()
+        });
+        return;
       }
       const protocol = this.createProtocolServer(agentName, source);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });

@@ -11,7 +11,7 @@ export interface AgentTerminalTargetState {
 
 export interface AgentActivityViewActions {
   terminalTarget(): AgentTerminalTargetState;
-  toggleTerminalTarget(): Promise<void>;
+  setTerminalTarget(enabled: boolean): Promise<void>;
 }
 
 export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -49,8 +49,9 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
           '清空'
         );
         if (selected === '清空') await this.store.clear();
-      } else if (type === 'toggleTerminalTarget') {
-        await this.actions?.toggleTerminalTarget();
+      } else if (type === 'setTerminalTarget') {
+        const enabled = (message as { enabled?: unknown }).enabled;
+        if (typeof enabled === 'boolean') await this.actions?.setTerminalTarget(enabled);
       }
     });
   }
@@ -131,13 +132,24 @@ export function activityViewHtml(webview: vscode.Webview): string {
     @keyframes pulse { from { transform: scale(.8); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
     @keyframes wave { to { stroke-dashoffset: -6; } }
     .controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 5px; margin-bottom: 8px; }
-    .terminal-target {
-      display: grid; grid-template-columns: 1fr auto; gap: 7px; align-items: center;
+    .agent-mode {
+      display: grid; gap: 6px;
       margin-bottom: 8px; padding: 7px 8px; border: 1px solid var(--vscode-widget-border);
       border-radius: 6px; background: var(--vscode-editor-background);
     }
-    .terminal-target.active { border-color: var(--vscode-testing-iconPassed, #2ea043); }
-    .terminal-target-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mode-switch { display: grid; grid-template-columns: 1fr 1fr; }
+    .mode-switch button { border-radius: 0; }
+    .mode-switch button:first-child { border-radius: 4px 0 0 4px; }
+    .mode-switch button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+    .mode-switch button.active {
+      color: var(--vscode-button-foreground); background: var(--vscode-button-background);
+      border-color: var(--vscode-button-background);
+    }
+    .mode-switch button.active:hover { background: var(--vscode-button-hoverBackground); }
+    .agent-mode-detail {
+      color: var(--vscode-descriptionForeground); min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     select { min-width: 0; padding: 2px 4px; }
     .empty-state {
       padding: 18px 8px; text-align: center; color: var(--vscode-descriptionForeground);
@@ -182,9 +194,12 @@ export function activityViewHtml(webview: vscode.Webview): string {
     </div>
     <div><div id="statusTitle" class="status-title">等待 Agent 操作</div><div id="statusDetail" class="status-detail">当前远程窗口</div></div>
   </section>
-  <section id="terminalTarget" class="terminal-target">
-    <span id="terminalTargetLabel" class="terminal-target-label">Agent 工具：工作区模式</span>
-    <button id="terminalTargetButton" type="button" title="切换为仅允许在当前 SAFS 终端执行命令">使用当前终端</button>
+  <section class="agent-mode">
+    <div class="mode-switch" role="group" aria-label="Agent 工具模式">
+      <button id="workspaceModeButton" class="active" type="button" aria-pressed="true">工作区模式</button>
+      <button id="terminalModeButton" type="button" aria-pressed="false" title="仅允许在当前 SAFS 终端执行命令">终端模式</button>
+    </div>
+    <div id="agentModeDetail" class="agent-mode-detail">使用当前远程工作区</div>
   </section>
   <div class="controls">
     <select id="category" aria-label="按操作类型筛选">
@@ -207,9 +222,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const orb = document.getElementById('orb');
     const categoryFilter = document.getElementById('category');
     const statusFilter = document.getElementById('eventStatus');
-    const terminalTarget = document.getElementById('terminalTarget');
-    const terminalTargetLabel = document.getElementById('terminalTargetLabel');
-    const terminalTargetButton = document.getElementById('terminalTargetButton');
+    const workspaceModeButton = document.getElementById('workspaceModeButton');
+    const terminalModeButton = document.getElementById('terminalModeButton');
+    const agentModeDetail = document.getElementById('agentModeDetail');
+    let terminalModeEnabled = false;
     let events = [];
     let statusTimer;
     const seenStatus = new Map();
@@ -377,17 +393,25 @@ export function activityViewHtml(webview: vscode.Webview): string {
       if (event.data.type === 'state') acceptState(event.data);
       if (event.data.type === 'terminalTarget') {
         const enabled = event.data.enabled === true;
-        terminalTarget.className = 'terminal-target' + (enabled ? ' active' : '');
-        terminalTargetLabel.textContent = enabled
-          ? '终端专用模式 → ' + (event.data.label || 'SAFS 终端')
-          : 'Agent 工具：工作区模式';
-        terminalTargetButton.textContent = enabled ? '退出专用模式' : '使用当前终端';
+        terminalModeEnabled = enabled;
+        workspaceModeButton.classList.toggle('active', !enabled);
+        terminalModeButton.classList.toggle('active', enabled);
+        workspaceModeButton.setAttribute('aria-pressed', String(!enabled));
+        terminalModeButton.setAttribute('aria-pressed', String(enabled));
+        agentModeDetail.textContent = enabled
+          ? '当前终端：' + (event.data.label || 'SAFS 终端')
+          : '使用当前远程工作区';
       }
     });
     categoryFilter.addEventListener('change', render);
     statusFilter.addEventListener('change', render);
     document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
-    terminalTargetButton.addEventListener('click', function() { vscode.postMessage({ type: 'toggleTerminalTarget' }); });
+    workspaceModeButton.addEventListener('click', function() {
+      if (terminalModeEnabled) vscode.postMessage({ type: 'setTerminalTarget', enabled: false });
+    });
+    terminalModeButton.addEventListener('click', function() {
+      if (!terminalModeEnabled) vscode.postMessage({ type: 'setTerminalTarget', enabled: true });
+    });
     vscode.postMessage({ type: 'ready' });
   </script>
 </body>

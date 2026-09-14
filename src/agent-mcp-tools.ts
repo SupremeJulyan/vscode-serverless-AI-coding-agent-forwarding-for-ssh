@@ -48,6 +48,25 @@ export const terminalCliInstructions = [
   'All SAFS file, search, transfer, batch, and retained-output commands are disabled until terminal mode is stopped in Agent Activity.'
 ].join(' ');
 
+export const terminalMcpOnlyToolMessage =
+  'This SAFS window is in terminal mode. The requested tool is unavailable. ' +
+  'Use the only available MCP tool: run_remote_command.';
+
+export const terminalCliOnlyCommandMessage =
+  'This SAFS workspace is in terminal mode. The requested command is unavailable. ' +
+  "Use the only available CLI command: safs exec --binding <bindingId> -- 'COMMAND'. Do not pass --cwd.";
+
+export function terminalMcpOnlyToolError() {
+  return {
+    isError: true,
+    content: [{ type: 'text' as const, text: JSON.stringify({
+      code: 'TERMINAL_COMMAND_ONLY',
+      message: terminalMcpOnlyToolMessage,
+      allowedTool: 'run_remote_command'
+    }) }]
+  };
+}
+
 export type AgentToolProfile = 'full' | 'core' | 'hybrid' | 'terminal';
 const extendedTools = new Set(['current_remote_file', 'remote_delete', 'remote_chmod',
   'remote_move', 'remote_upload', 'remote_download']);

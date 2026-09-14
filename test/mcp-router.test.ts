@@ -226,6 +226,14 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
       Object.keys(tools.tools[0].inputSchema.properties ?? {}),
       ['command']
     );
+    const deniedMcp = await client.callTool({
+      name: 'remote_read', arguments: { path: 'README.md' }
+    });
+    assert.equal(deniedMcp.isError, true);
+    const deniedMcpValue = JSON.parse((deniedMcp.content as any[])[0].text);
+    assert.equal(deniedMcpValue.code, 'TERMINAL_COMMAND_ONLY');
+    assert.equal(deniedMcpValue.allowedTool, 'run_remote_command');
+    assert.match(deniedMcpValue.message, /only available MCP tool: run_remote_command/);
     const executed = await client.callTool({
       name: 'run_remote_command', arguments: { command: 'id -un' }
     });
@@ -269,6 +277,8 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
     const denied = await invokeCli('remote_read', { bindingId, path: 'README.md' });
     assert.equal(denied.ok, false);
     assert.equal(denied.result.code, 'TERMINAL_COMMAND_ONLY');
+    assert.equal(denied.result.allowedCommand, `safs exec --binding ${bindingId} -- 'COMMAND'`);
+    assert.match(denied.result.message, /only available CLI command: safs exec/);
 
     const deniedBatch = await invokeCli('safs_cli_batch', {
       operations: [{
@@ -277,6 +287,7 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
     });
     assert.equal(deniedBatch.ok, false);
     assert.equal(deniedBatch.result.code, 'TERMINAL_COMMAND_ONLY');
+    assert.match(deniedBatch.result.message, /only available CLI command: safs exec/);
 
     const wrongCwd = await invokeCli('run_remote_command', {
       bindingId, command: 'pwd', remoteCwd: '/tmp'

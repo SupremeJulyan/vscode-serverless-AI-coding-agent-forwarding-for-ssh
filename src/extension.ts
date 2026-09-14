@@ -1714,17 +1714,19 @@ async function refreshAgentCommandTerminalState(): Promise<void> {
   await agentActivityView?.updateTerminalTarget();
 }
 
-async function toggleAgentCommandTerminal(): Promise<void> {
-  if (agentCommandTerminal) {
+async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
+  if (!enabled) {
+    if (!agentCommandTerminal) return;
     const name = agentCommandTerminal.name;
     agentCommandTerminal = undefined;
     agentCommandTerminalCwd = undefined;
     await refreshAgentCommandTerminalState();
     await publishAgentWorkspace(vscodeContext);
     bridgeOutput?.info(`[Agent 终端转发] 已停止使用 ${name}`);
-    void vscode.window.showInformationMessage('SAFS：已退出终端专用模式，Agent 工具已恢复。');
+    void vscode.window.showInformationMessage('SAFS：已切换到工作区模式，Agent 工具已恢复。');
     return;
   }
+  if (agentCommandTerminalState().enabled) return;
   const terminal = vscode.window.activeTerminal;
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
   if (!terminal || !info) {
@@ -1746,9 +1748,9 @@ async function toggleAgentCommandTerminal(): Promise<void> {
     `Agent 命令将显示在“${terminal.name}”中，并继承该终端当前的用户权限和环境。` +
       '开启后 MCP 只保留一个终端命令工具，CLI 只放行 safs exec；所有 SAFS 文件、搜索和传输操作都会关闭。',
     { modal: true },
-    '使用此终端'
+    '切换到终端模式'
   );
-  if (confirmed !== '使用此终端') return;
+  if (confirmed !== '切换到终端模式') return;
   let terminalCwd: string;
   try {
     terminalCwd = await probeAgentCommandTerminalCwd(terminal, info);
@@ -4099,7 +4101,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await agentActivityStore.initialize();
   agentActivityView = new AgentActivityViewProvider(agentActivityStore, {
     terminalTarget: agentCommandTerminalState,
-    toggleTerminalTarget: toggleAgentCommandTerminal
+    setTerminalTarget: setAgentCommandTerminalMode
   });
   context.subscriptions.push(output, bridgeOutput, agentActivityView);
   await recoverTerminalDiagnostics(context);

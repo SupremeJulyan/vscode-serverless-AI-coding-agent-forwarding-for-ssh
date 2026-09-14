@@ -9,7 +9,8 @@ import {
 import {
   type AgentToolProfile, configureAgentMcpResources, hybridAgentMcpInstructions,
   hybridCliInstructions, registerAgentMcpTools, routedAgentMcpInstructions,
-  terminalAgentMcpInstructions, terminalCliInstructions
+  terminalAgentMcpInstructions, terminalCliInstructions, terminalCliOnlyCommandMessage,
+  terminalMcpOnlyToolError, terminalMcpOnlyToolMessage
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
 
@@ -527,9 +528,15 @@ export class AgentHttpRouter {
     let args: Record<string, unknown> = { ...publicInput, mountName: workspace.mountName };
     if (workspace.terminalCommandOnly) {
       if (source !== 'cli' || name !== 'run_remote_command') {
+        const cliCommand = `safs exec --binding ${bindingId} -- 'COMMAND'`;
         return this.toolError(
           'TERMINAL_COMMAND_ONLY',
-          'This workspace is in terminal-only mode. File, search, transfer, retained-output, and isolated SSH tools are disabled. Use run_remote_command through MCP or safs exec through CLI.'
+          source === 'cli'
+            ? terminalCliOnlyCommandMessage.replace('<bindingId>', bindingId)
+            : terminalMcpOnlyToolMessage,
+          source === 'cli'
+            ? { allowedCommand: cliCommand }
+            : { allowedTool: 'run_remote_command' }
         );
       }
       if (publicInput.remoteCwd !== undefined) {
@@ -632,7 +639,8 @@ export class AgentHttpRouter {
           if (terminalBatch) {
             response.json({ ok: false, result: {
               code: 'TERMINAL_COMMAND_ONLY',
-              message: 'CLI batch is disabled in terminal-only mode. Run one safs exec command instead.'
+              message: terminalCliOnlyCommandMessage,
+              allowedCommand: "safs exec --binding <bindingId> -- 'COMMAND'"
             } });
             return;
           }
@@ -694,6 +702,17 @@ export class AgentHttpRouter {
           agentName ? `，agent=${agentName}` : '，agent=<unknown>'
         }`
       );
+      // Agent may retain an earlier tools/list result after the window switches
+      // modes. Return an actionable tool result instead of the SDK's generic
+      // "Tool not found" error for such stale calls.
+      if (method === 'tools/call' && typeof tool === 'string'
+          && this.activeToolProfile() === 'terminal' && tool !== 'run_remote_command') {
+        response.json({
+          jsonrpc: '2.0', id: request.body?.id ?? null,
+          result: terminalMcpOnlyToolError()
+        });
+        return;
+      }
       // 绑定工具由固定路由器本地完成；其它工具只在实际执行窗口记录，避免双份日志。
       if (method === 'tools/call' && typeof tool === 'string'
         && ['get_remote_workspace', 'switch_remote_workspace'].includes(tool)) {
