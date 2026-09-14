@@ -108,11 +108,32 @@ function typeFromFindLetter(letter: string): SftpFileType {
   }
 }
 
-function typeFromStatName(name: string): SftpFileType {
-  if (/^regular file/.test(name)) return 'file';
-  if (/^directory/.test(name)) return 'directory';
-  if (/^symbolic link/.test(name)) return 'symbolic-link';
-  return 'unknown';
+function typeFromStatMode(rawMode: string): SftpFileType {
+  const mode = parseInt(rawMode, 16);
+  if (!Number.isFinite(mode)) return 'unknown';
+  switch (mode & 0xf000) {
+    case 0x8000: return 'file';
+    case 0x4000: return 'directory';
+    case 0xa000: return 'symbolic-link';
+    default: return 'unknown';
+  }
+}
+
+/** Parse GNU/BusyBox `stat -c '%f|%s|%a|%Y'` output. `%f` is the raw
+ * hexadecimal mode, so unlike `%F` it is not translated by the remote
+ * locale (for example, `directory` becoming `目录`). */
+export function parsePortableStatLine(line: string): SftpFileStat | undefined {
+  const parts = line.trim().split('|');
+  if (parts.length < 4) return undefined;
+  const type = typeFromStatMode(parts[0]);
+  const size = Number(parts[1]);
+  const permissions = parseInt(parts[2], 8);
+  const mtime = Number(parts[3]) * 1000;
+  if (type === 'unknown' || !Number.isFinite(size) || !Number.isFinite(permissions)) {
+    return undefined;
+  }
+  const normalizedMtime = Number.isFinite(mtime) ? mtime : Date.now();
+  return { type, size, permissions, mtime: normalizedMtime, ctime: normalizedMtime };
 }
 
 const modeRe = /^([dls-])([rwxstST-]{9})(?:[+.@])?(?:\s|$)/;
@@ -377,7 +398,7 @@ export class ScpSession implements SftpSession {
     // 路径，stat 同路径）。非目录/缺失路径 cd 失败，走下方原有两步回退（报错语义
     // 与 stat() 一致）。
     const result = await this.exec(
-      `cd -- ${shellQuote(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && stat -c '%F|%s|%a|%Y' -- "$(pwd -P)"`,
+      `cd -- ${shellQuote(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && LC_ALL=C stat -c '%f|%s|%a|%Y' -- "$(pwd -P)"`,
       undefined,
       signal
     );
@@ -386,20 +407,10 @@ export class ScpSession implements SftpSession {
       const parent = lines[0]?.startsWith('P\t') ? lines[0].slice(2).trim() : undefined;
       const statLine = lines.slice(1).find((line) => line.trim().length > 0);
       if (parent && statLine) {
-        const parts = statLine.split('|');
-        if (parts.length >= 4) {
-          const mtime = Number(parts[3]) * 1000;
+        const stat = parsePortableStatLine(statLine);
+        if (stat) {
           this.rememberRealpath(remotePath, parent);
-          return {
-            path: parent,
-            stat: {
-              type: typeFromStatName(parts[0]),
-              size: Number(parts[1]),
-              permissions: parseInt(parts[2], 8),
-              mtime: Number.isFinite(mtime) ? mtime : Date.now(),
-              ctime: Number.isFinite(mtime) ? mtime : Date.now()
-            }
-          };
+          return { path: parent, stat };
         }
       }
     }
@@ -410,24 +421,15 @@ export class ScpSession implements SftpSession {
 
   async stat(remotePath: string, signal?: AbortSignal): Promise<SftpFileStat> {
     const result = await this.exec(
-      `stat -c '%F|%s|%a|%Y' -- ${shellQuote(remotePath)}`, undefined, signal
+      `LC_ALL=C stat -c '%f|%s|%a|%Y' -- ${shellQuote(remotePath)}`, undefined, signal
     );
     if (result.code === 0) {
-      const parts = result.stdout.toString().trim().split('|');
-      if (parts.length >= 4) {
-        const mtime = Number(parts[3]) * 1000;
-        return {
-          type: typeFromStatName(parts[0]),
-          size: Number(parts[1]),
-          permissions: parseInt(parts[2], 8),
-          mtime: Number.isFinite(mtime) ? mtime : Date.now(),
-          ctime: Number.isFinite(mtime) ? mtime : Date.now()
-        };
-      }
+      const parsed = parsePortableStatLine(result.stdout.toString());
+      if (parsed) return parsed;
     }
     // Fallback: ls -ld --time-style=long-iso
     const ls = await this.exec(
-      `ls -ld --time-style=long-iso -- ${shellQuote(remotePath)}`, undefined, signal
+      `LC_ALL=C ls -ld --time-style=long-iso -- ${shellQuote(remotePath)}`, undefined, signal
     );
     if (ls.code !== 0) {
       const stderr = ls.stderr.toString();
@@ -445,7 +447,7 @@ export class ScpSession implements SftpSession {
     // （P 行），再 find/ls 列举当前目录（网关上每条 exec 秒级，命令数减半
     // 收益显著）。空目录也能正确返回 []（旧实现会多跑一次 ls 回退）。
     const result = await this.exec(
-      `cd -- ${shellQuote(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && { find . -maxdepth 1 -mindepth 1 -printf '%f|%y|%s|%m|%T@\\n' 2>/dev/null || { echo L; ls -la --time-style=long-iso -- .; }; }`,
+      `cd -- ${shellQuote(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && { LC_ALL=C find . -maxdepth 1 -mindepth 1 -printf '%f|%y|%s|%m|%T@\\n' 2>/dev/null || { echo L; LC_ALL=C ls -la --time-style=long-iso -- .; }; }`,
       undefined,
       signal
     );
