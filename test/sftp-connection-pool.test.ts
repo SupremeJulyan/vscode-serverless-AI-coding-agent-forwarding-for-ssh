@@ -175,6 +175,38 @@ test('retries a connection-level failure once on a fresh session', async () => {
   assert.equal(pool.state('dev'), 'connected');
 });
 
+test('retries ECONNRESET during the initial connection', async () => {
+  let attempts = 0;
+  const pool = new SftpConnectionPool(async (hostName) => {
+    attempts += 1;
+    if (attempts === 1) {
+      // Some gateways reset the first TCP/SSH connection before a session is
+      // returned, so the per-operation retry wrapper does not exist yet.
+      const error = new Error('read ECONNRESET');
+      (error as NodeJS.ErrnoException).code = 'ECONNRESET';
+      throw error;
+    }
+    return fakeSession(hostName, () => undefined);
+  });
+
+  const session = await pool.get('dev');
+  assert.equal(session.isAlive(), true);
+  assert.equal(attempts, 2);
+  assert.equal(pool.state('dev'), 'connected');
+});
+
+test('recognizes connection error codes present only in the message', async () => {
+  let attempts = 0;
+  const pool = new SftpConnectionPool(async (hostName) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('read ECONNRESET');
+    return fakeSession(hostName, () => undefined);
+  });
+
+  await pool.get('dev');
+  assert.equal(attempts, 2);
+});
+
 test('does not retry non-connection errors', async () => {
   let attempts = 0;
   const pool = new SftpConnectionPool(async (hostName) => {

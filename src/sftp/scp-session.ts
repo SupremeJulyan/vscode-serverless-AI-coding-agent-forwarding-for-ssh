@@ -41,6 +41,16 @@ function missingPathDetail(stderr: string): string {
     : stderr.trim() || '远程命令执行失败';
 }
 
+/** Build a remote `cd` command while preserving the config contract that `.`
+ * means the SSH login directory. Some gateways start non-interactive exec
+ * channels in `/`, unlike their SFTP subsystem; bare `cd` consistently asks
+ * the login shell to use HOME. Accept `~` as the same explicit shorthand. */
+export function remoteDirectoryChangeCommand(remotePath: string): string {
+  const normalized = path.posix.normalize(remotePath).replace(/\/+$/, '');
+  if (normalized === '.' || remotePath === '~') return 'cd';
+  return `cd -- ${shellQuote(remotePath)}`;
+}
+
 /**
  * Some NSG gateways inject a fixed MOTD banner at the start of every SSH
  * channel, e.g.:
@@ -348,6 +358,22 @@ export class ScpSession implements SftpSession {
   async realpath(remotePath: string, signal?: AbortSignal): Promise<string> {
     const cached = this.cachedRealpath(remotePath);
     if (cached) return cached;
+    const loginDirectory = remoteDirectoryChangeCommand(remotePath) === 'cd';
+    if (loginDirectory) {
+      const homeResult = await this.exec('cd && pwd -P', undefined, signal);
+      if (homeResult.code === 0) {
+        const resolved = homeResult.stdout.toString().trim();
+        if (resolved) {
+          this.rememberRealpath(remotePath, resolved);
+          return resolved;
+        }
+      }
+      const stderr = homeResult.stderr.toString();
+      throw errno(
+        failureCode(stderr),
+        `无法确定 SSH 登录目录: ${missingPathDetail(stderr)}`
+      );
+    }
     // readlink -f canonicalizes files AND directories; the provider resolves
     // every path (including files) before reading/stat-ing it. Note: old
     // coreutils readlink -f still succeeds when only the final component is
@@ -366,7 +392,7 @@ export class ScpSession implements SftpSession {
     // `cd`+`pwd -P` for directories, then to a plain normalized path for
     // files that exist.
     const cdResult = await this.exec(
-      `cd -- ${shellQuote(remotePath)} && pwd -P`, undefined, signal
+      `${remoteDirectoryChangeCommand(remotePath)} && pwd -P`, undefined, signal
     );
     if (cdResult.code === 0) {
       const resolved = cdResult.stdout.toString().trim();
@@ -398,7 +424,7 @@ export class ScpSession implements SftpSession {
     // 路径，stat 同路径）。非目录/缺失路径 cd 失败，走下方原有两步回退（报错语义
     // 与 stat() 一致）。
     const result = await this.exec(
-      `cd -- ${shellQuote(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && LC_ALL=C stat -c '%f|%s|%a|%Y' -- "$(pwd -P)"`,
+      `${remoteDirectoryChangeCommand(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && LC_ALL=C stat -c '%f|%s|%a|%Y' -- "$(pwd -P)"`,
       undefined,
       signal
     );
@@ -447,7 +473,7 @@ export class ScpSession implements SftpSession {
     // （P 行），再 find/ls 列举当前目录（网关上每条 exec 秒级，命令数减半
     // 收益显著）。空目录也能正确返回 []（旧实现会多跑一次 ls 回退）。
     const result = await this.exec(
-      `cd -- ${shellQuote(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && { LC_ALL=C find . -maxdepth 1 -mindepth 1 -printf '%f|%y|%s|%m|%T@\\n' 2>/dev/null || { echo L; LC_ALL=C ls -la --time-style=long-iso -- .; }; }`,
+      `${remoteDirectoryChangeCommand(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && { LC_ALL=C find . -maxdepth 1 -mindepth 1 -printf '%f|%y|%s|%m|%T@\\n' 2>/dev/null || { echo L; LC_ALL=C ls -la --time-style=long-iso -- .; }; }`,
       undefined,
       signal
     );

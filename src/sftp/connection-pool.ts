@@ -19,7 +19,8 @@ export function isConnectionError(error: unknown): boolean {
     || code === 'ECONNREFUSED') {
     return true;
   }
-  return /socket hang up|connection (?:reset|closed|terminated)/i.test(error.message);
+  return /\b(?:ECONNRESET|EPIPE|ECONNABORTED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ECONNREFUSED)\b|socket hang up|connection (?:reset|closed|terminated)/i
+    .test(error.message);
 }
 
 /**
@@ -169,13 +170,25 @@ export class SftpConnectionPool {
   }
 
   async get(hostName: string, signal?: AbortSignal): Promise<SftpSession> {
-    return new RetryingSftpSession(this, hostName, await this.raw(hostName, signal));
+    let session: SftpSession;
+    try {
+      session = await this.raw(hostName, signal);
+    } catch (error) {
+      // The retrying session wrapper only exists after raw() succeeds. Cover
+      // transient TCP failures during the initial SSH/SFTP handshake here as
+      // well, so reopening the folder manually is not required.
+      if (!isConnectionError(error) || signal?.aborted) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (signal?.aborted) throw error;
+      session = await this.reconnect(hostName, signal);
+    }
+    return new RetryingSftpSession(this, hostName, session);
   }
 
   /** 使当前会话失效并返回新连接（供会话包装器在连接级错误后重试一次）。 */
-  async reconnect(hostName: string): Promise<SftpSession> {
+  async reconnect(hostName: string, signal?: AbortSignal): Promise<SftpSession> {
     await this.invalidate(hostName);
-    return this.raw(hostName);
+    return this.raw(hostName, signal);
   }
 
   /** 使当前会话失效（关闭并释放中继租约），状态置为 reconnecting。幂等。 */

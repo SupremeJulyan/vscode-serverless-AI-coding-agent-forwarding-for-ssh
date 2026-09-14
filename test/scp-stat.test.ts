@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parsePortableStatLine } from '../src/sftp/scp-session';
+import {
+  parsePortableStatLine, remoteDirectoryChangeCommand
+} from '../src/sftp/scp-session';
+
+test('SCP fallback resolves the default remote path through the login home', () => {
+  assert.equal(remoteDirectoryChangeCommand('.'), 'cd');
+  assert.equal(remoteDirectoryChangeCommand('./'), 'cd');
+  assert.equal(remoteDirectoryChangeCommand('~'), 'cd');
+  assert.equal(remoteDirectoryChangeCommand('/'), "cd -- '/'");
+  assert.equal(remoteDirectoryChangeCommand('/srv/project'), "cd -- '/srv/project'");
+});
 
 test('portable SCP stat parses locale-independent raw mode types', () => {
   assert.equal(parsePortableStatLine('41ed|4096|755|1720000000')?.type, 'directory');
