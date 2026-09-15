@@ -100,6 +100,8 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   assert.match(html, />终端模式<\/button>/);
   assert.match(html, /aria-pressed/);
   assert.match(html, /type: 'setTerminalTarget'/);
+  assert.match(html, /使用或刷新当前聚焦的 SAFS 终端/);
+  assert.equal(html.includes("if (!terminalModeEnabled) vscode.postMessage"), false);
   assert.match(html, /prefers-reduced-motion/);
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script);

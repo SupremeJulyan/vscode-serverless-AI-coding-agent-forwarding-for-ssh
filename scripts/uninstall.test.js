@@ -22,19 +22,43 @@ test('Windows PATH cleanup passes the directory through the environment', () => 
   assert.ok(!call[1].includes(directory));
 });
 
-test('Unix cleanup removes CLI files and managed profile entries', async () => {
+test('Unix cleanup removes CLI files, every global Skill, and managed profile entries', async () => {
   const home = await mkdtemp(path.join(tmpdir(), 'safs-uninstall-'));
   const bin = path.join(home, '.local', 'bin');
   await mkdir(bin, { recursive: true });
   await writeFile(path.join(bin, 'safs'), 'binary');
   await writeFile(path.join(bin, '.safs-connection.json'), '{}');
-  const skill = path.join(home, '.agents', 'skills', 'safs-cli');
-  await mkdir(skill, { recursive: true });
-  await writeFile(path.join(skill, 'SKILL.md'), 'installed');
+  const skills = ['.agents', '.claude', '.codex', '.copilot'].map((directory) =>
+    path.join(home, directory, 'skills', 'safs-cli'));
+  await Promise.all(skills.map(async (skill) => {
+    await mkdir(skill, { recursive: true });
+    await writeFile(path.join(skill, 'SKILL.md'), 'installed');
+  }));
   await writeFile(path.join(home, '.profile'), '# SAFS CLI PATH BEGIN\nmanaged\n# SAFS CLI PATH END\nkeep\n');
   await cleanup({ platform: 'linux', home });
   assert.equal(await readFile(path.join(home, '.profile'), 'utf8'), 'keep\n');
   await assert.rejects(readFile(path.join(bin, 'safs')), { code: 'ENOENT' });
   await assert.rejects(readFile(path.join(bin, '.safs-connection.json')), { code: 'ENOENT' });
-  await assert.rejects(readFile(path.join(skill, 'SKILL.md')), { code: 'ENOENT' });
+  for (const skill of skills) {
+    await assert.rejects(readFile(path.join(skill, 'SKILL.md')), { code: 'ENOENT' });
+  }
+});
+
+test('Windows cleanup removes its install root and every global Skill', async () => {
+  const home = await mkdtemp(path.join(tmpdir(), 'safs-uninstall-win-'));
+  const installRoot = path.join(home, 'AppData', 'Local', 'SAFS');
+  const executable = path.join(installRoot, 'bin', 'safs.exe');
+  const skills = ['.agents', '.claude', '.codex', '.copilot'].map((directory) =>
+    path.join(home, directory, 'skills', 'safs-cli'));
+  await mkdir(path.dirname(executable), { recursive: true });
+  await writeFile(executable, 'binary');
+  await Promise.all(skills.map(async (skill) => {
+    await mkdir(skill, { recursive: true });
+    await writeFile(path.join(skill, 'SKILL.md'), 'installed');
+  }));
+  await cleanup({ platform: 'win32', home, run: () => undefined });
+  await assert.rejects(readFile(executable), { code: 'ENOENT' });
+  for (const skill of skills) {
+    await assert.rejects(readFile(path.join(skill, 'SKILL.md')), { code: 'ENOENT' });
+  }
 });

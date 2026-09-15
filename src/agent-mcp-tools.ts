@@ -23,19 +23,6 @@ export const routedAgentMcpInstructions = workspaceInstructions + ' ' + [
   'Pass bindingId to subsequent tools. It stays pinned to the selected logical workspace and may follow its unique republished instance; on expiry stop and report, never silently select or switch to another workspace.'
 ].join(' ');
 
-export const hybridCliInstructions = [
-  'Run every remote operation through the global safs CLI and pass --binding <bindingId> using the bindingId from this result.',
-  'Use structured safs commands for every remote file operation. Never use local filesystem tools or safs exec to read, list, search, write, edit, move, delete, change permissions, upload, or download remote files.',
-  'Reserve safs exec for task commands such as builds and tests. If a structured file operation is rejected, report the error and do not retry it through safs exec.'
-].join(' ');
-
-export const hybridAgentMcpInstructions = [
-  'Use get_remote_workspace to bind the current SAFS workspace.',
-  'Use switch_remote_workspace only after the user explicitly chooses a candidate, whether for initial selection or a later change.',
-  'After either tool returns a bindingId, follow the cliInstructions in that binding result; use safs --help for command syntax.',
-  'A successful switch cancels the previous task, so stop and wait for a new user request.'
-].join(' ');
-
 export const terminalAgentMcpInstructions = [
   'Only the selected visible SAFS terminal is available.',
   'Use run_remote_command for remote commands. It runs in the terminal directory shown as workspaceRoot and inherits that terminal\'s current user and environment.',
@@ -67,12 +54,9 @@ export function terminalMcpOnlyToolError() {
   };
 }
 
-export type AgentToolProfile = 'full' | 'core' | 'hybrid' | 'terminal';
+export type AgentToolProfile = 'full' | 'core' | 'terminal';
 const extendedTools = new Set(['current_remote_file', 'remote_delete', 'remote_chmod',
   'remote_move', 'remote_upload', 'remote_download']);
-const hybridTools = new Set<AgentMcpToolName>([
-  'get_remote_workspace', 'switch_remote_workspace'
-]);
 const terminalTools = new Set<AgentMcpToolName>(['run_remote_command']);
 
 export type AgentMcpToolName =
@@ -126,7 +110,7 @@ function toolDefinitions(
       name: 'get_remote_workspace',
       title: routed ? 'Bind a SAFS remote workspace' : 'Bind this SAFS remote workspace',
       description: routed
-        ? 'Initially binds a SAFS workspace. agentCwd is the absolute local cwd on the Agent machine, usually a SAFS placeholder; never pass a remote path or workspaceRoot. Resolution prefers an exact placeholder match, then the unique previously selected logical target, then one uniquely focused SAFS window. This tool never switches to a different target. If selection is ambiguous, show the returned candidates and wait for the user before calling switch_remote_workspace. Returns workspace and bindingId; hybrid mode also returns cliInstructions.'
+        ? 'Initially binds a SAFS workspace. agentCwd is the absolute local cwd on the Agent machine, usually a SAFS placeholder; never pass a remote path or workspaceRoot. Resolution prefers an exact placeholder match, then the unique previously selected logical target, then one uniquely focused SAFS window. This tool never switches to a different target. If selection is ambiguous, show them to the user and wait for an explicit choice before calling switch_remote_workspace. Returns workspace and bindingId.'
         : 'Returns the SAFS workspace served by this exact VS Code window for later remote tool calls.',
       inputSchema: routed ? {
         agentCwd: z.string().min(1).describe('Absolute current working directory on the Agent machine; not a remote path.')
@@ -322,7 +306,6 @@ export function registerAgentMcpTools(
 ): void {
   for (const definition of toolDefinitions(options.routed, options.profile)) {
     if (options.profile === 'core' && extendedTools.has(definition.name)) continue;
-    if (options.profile === 'hybrid' && !hybridTools.has(definition.name)) continue;
     if (options.profile === 'terminal' && !terminalTools.has(definition.name)) continue;
     server.registerTool(
       definition.name,

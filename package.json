@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.8.6",
+  "version": "1.8.7",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -546,22 +546,21 @@
         },
         "safs.agentInterface": {
           "type": "string",
-          "enum": ["mcp", "hybrid", "cli"],
+          "enum": ["mcp", "cli"],
           "enumDescriptions": [
-            "MCP (default): exposes the MCP tool profile selected below without installing the global CLI.",
-            "Hybrid: MCP exposes only workspace bind/switch tools; remote operations use the global SAFS CLI with the returned bindingId.",
-            "CLI only: exposes the global SAFS CLI without installing MCP."
+            "MCP (default): exposes the selected MCP tool profile and removes the mutually exclusive global CLI and SAFS Agent Skills.",
+            "CLI only: installs the global SAFS CLI and Agent Skill, then copies a prompt for unregistering the mutually exclusive MCP entry."
           ],
           "default": "mcp",
           "scope": "machine",
-          "description": "Agent entry point. mcp (default) exposes the selected MCP tool profile and does not install the global CLI; hybrid combines two MCP workspace tools with the global `safs` CLI; cli uses only the CLI. Switching to hybrid or cli installs or updates the bundled CLI. Reload VS Code windows and restart Agents after changing it."
+          "description": "Mutually exclusive Agent entry point. mcp removes the global CLI and SAFS Agent Skills; cli installs or updates the bundled global CLI and Skill, then copies an MCP unregister prompt. Reload VS Code windows and restart Agents after changing it."
         },
         "safs.agentMcpToolProfile": {
           "type": "string",
           "enum": ["full", "core"],
           "default": "full",
           "scope": "machine",
-          "description": "Tool profile used only in mcp mode. core exposes binding, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. hybrid always exposes only workspace bind and switch. Use the same setting in all windows and restart the Agent after changing it."
+          "description": "Tool profile used only in mcp mode. core exposes binding, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. Use the same setting in all windows and restart the Agent after changing it."
         },
         "safs.agentMcpMaxOutputBytes": {
           "type": "number",

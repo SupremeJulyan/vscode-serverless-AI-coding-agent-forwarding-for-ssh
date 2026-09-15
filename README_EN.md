@@ -66,7 +66,7 @@ The first time you open the configured remote home from a parent connection node
 
 MCP is the default mode:
 
-1. Click **Enable Agent Forwarding** beside the parent connection node in the SAFS view. The current window shows the installation input only once when that connection changes from disabled to enabled; you can also explicitly run `SAFS: Install Agent Forwarding for My Agent`. Opening other windows or changing interface mode does not show it again.
+1. Click **Enable Agent Forwarding** beside a parent connection node in the SAFS view. The installation prompt appears only when every connection's forwarding switch is off and you enable the first one; enabling more connections does not install again. After all switches are turned off, the next first enable prompts again. You can also explicitly run `SAFS: Install Agent Forwarding for My Agent` to repair the integration.
 2. Enter the Agent name when prompted. The extension copies an English installation prompt containing the local Streamable HTTP URL. Default MCP mode does not install the global CLI.
 3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself. The default mode loads the MCP tool set selected by `safs.agentMcpToolProfile`. SAFS does not detect or modify Agent configuration.
 4. Open the remote directory for that connection.
@@ -79,20 +79,18 @@ The warning includes a local connection test button. You can also run `safs.test
 
 > The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment.
 
-`safs.agentInterface` supports three modes:
+`safs.agentInterface` supports two modes:
 
-- `mcp` (default): every operation uses the MCP tool set selected by `safs.agentMcpToolProfile`, without installing the global CLI.
-- `hybrid`: switching to this mode installs or updates the global `safs` CLI. MCP only binds or switches workspaces; file and command operations use CLI.
-- `cli`: switching to this mode installs or updates the global `safs` CLI and does not require MCP installation. The Agent runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
+- `mcp` (default): every operation uses the MCP tool set selected by `safs.agentMcpToolProfile`. Switching to this mode uninstalls the global CLI and removes SAFS-managed Skills from the supported Agent user directories.
+- `cli`: switching to this mode installs or updates the global `safs` CLI and user-level Skill, then copies an MCP removal prompt. Paste it into the Agent, unregister MCP, and restart the Agent. The Agent then runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
 
-Changing modes does not automatically uninstall the other entry point, so different Agents can use MCP and CLI concurrently. Regardless of the current mode, run `SAFS: Install or Update Global CLI` from the Command Palette to install or repair CLI explicitly.
+MCP and CLI modes are mutually exclusive. Running `SAFS: Install or Update Global CLI` from the Command Palette switches to CLI mode when necessary, installs or repairs the CLI and Skill, and copies the MCP removal prompt.
 
 When the same host, mount, and remote root are republished, an existing binding automatically
 resumes on the unique new instance. Selection is requested again only when the target is gone or
 ambiguous.
 
-In hybrid mode, a successful bind returns only the target workspace, `bindingId`, and CLI
-instructions. Pure MCP returns only the target workspace and `bindingId`. Switching first lists
+In MCP mode, a successful bind returns the target workspace and `bindingId`. Switching first lists
 candidates and waits for an explicit user choice; after a successful switch, the Agent stops the
 current task and waits for a new user request.
 
@@ -126,7 +124,10 @@ inherit the terminal's current user privileges and exported environment, includi
 manual `sudo su - user`. MCP then keeps only `run_remote_command`: file, search, transfer,
 workspace-switching, and retained-output tools are disabled. The CLI is shared by every window,
 so it keeps `bind`/`workspaces`/`switch` for routing, but a binding to this window permits only
-`safs exec` and rejects `--cwd`. This mode is session-only and ends when the terminal closes or
+`safs exec` and rejects `--cwd`. A cwd reported by the terminal refreshes automatically. You can
+also click the selected **Terminal Mode** button again to refresh it or select the currently
+focused SAFS terminal, without switching through Workspace Mode first. Moving to a workspace that
+does not belong to the selected terminal safely clears the old target. This mode is session-only and ends when the terminal closes or
 you click **Exit Dedicated Mode**. Do not interact with a foreground program in the selected
 terminal while forwarding is active.
 
@@ -140,7 +141,7 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. Switching to hybrid or CLI mode installs the executable for the current extension environment; `SAFS: Install or Update Global CLI` does the same explicitly in any mode. The executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. In CLI-only mode, click **Enable Agent Forwarding** on the parent connection node or explicitly run `SAFS: Install Agent Forwarding for My Agent`. This installs the CLI's bundled SAFS Agent Skill globally at `~/.agents/skills/safs-cli`, without copying a prompt or downloading anything. After the Agent restarts, it loads the Skill on demand and starts with `safs bind --agent "<Agent name>"`. The uninstall command removes only that SAFS Skill. Use CLI-only mode when an Agent does not support MCP or when you want a CLI-only workflow. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
+CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. Switching to CLI mode installs the executable and the user-level `~/.agents/skills/safs-cli`; `SAFS: Install or Update Global CLI` also switches modes and installs or repairs both. The executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. When CLI mode is selected, or when Agent forwarding is enabled globally for the first time, the extension copies the MCP removal prompt. Paste it into the Agent, remove the user-level `safs` MCP registration, and restart the Agent. It can then load the Skill on demand and starts with `safs bind --agent "<Agent name>"`. Switching back to MCP mode, or running the forwarding uninstall command while in CLI mode, removes the global CLI and every SAFS-managed Skill under the `.agents`, `.claude`, `.codex`, and `.copilot` user directories. Use CLI mode when an Agent does not support MCP or when you want a CLI-only workflow. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
 
 You can also install a project-level Skill directly, following the Playwright CLI pattern:
 
@@ -203,7 +204,7 @@ Search for `SAFS` in VS Code Settings:
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | Automatically `cd` an open remote terminal when the active file changes |
 | `safs.terminalAutoReconnect` | `true` | Reconnect a remote terminal after an unexpected exit |
-| `safs.agentInterface` | `mcp` | Select MCP, hybrid, or CLI-only; the latter two install the global CLI |
+| `safs.agentInterface` | `mcp` | Select mutually exclusive MCP or CLI; switching cleans up the other entry point |
 | `safs.agentMcpToolProfile` | `full` | Change to `core` to reduce the Agent context used by tool definitions |
 | `safs.agentMcpTimeoutMs` | `120000` | Timeout for Agent commands, searches, and transfers; `0` disables it |
 | `safs.sftp.watchInterval` | `5` | Polling interval for remote file changes, in seconds |

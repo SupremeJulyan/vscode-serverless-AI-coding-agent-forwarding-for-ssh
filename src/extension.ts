@@ -1,9 +1,10 @@
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
-  ensureUnixCliPath, globalNativeCli, installNativeCli, removeGlobalNativeCliSkill,
+  ensureUnixCliPath, globalNativeCli, installNativeCli, removeNativeCli,
   nativeCliConnectionPath, nativeCliPlatform,
   parseNativeCliVersion,
-  streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt, windowsUserPathUpdatePlan
+  streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
+  windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from './native-cli';
 import { searchCommand, RemoteSearchOptions } from './remote-search';
 import { readTextRange, RemoteReadOptions } from './remote-read';
@@ -35,7 +36,7 @@ import { AgentMcpServer, AgentToolError } from './agent-mcp';
 import { AgentHttpRouter, agentTaggedMcpUrl } from './agent-http-router';
 import { AgentActivityStore } from './agent-activity';
 import { AgentActivityViewProvider, agentActivityViewId } from './agent-activity-view';
-import { type AgentInterface } from './agent-interface';
+import { normalizeAgentInterface, type AgentInterface } from './agent-interface';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent-discovery';
 import {
   ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory,
@@ -111,7 +112,8 @@ const directoryHistoryKey = platformStateKey('directoryHistory');
 const cliInstallKey = platformStateKey('cliInstall');
 const proxyEnvironmentCheckKey = platformStateKey('proxyEnvironmentCheckV1');
 const remoteShortcutHintKey = platformStateKey('remoteShortcutHintV1');
-const aiForwardUpdates = new Map<string, Promise<void>>();
+/** Serialize all mount toggles so only the first globally enabled mount installs integration. */
+let aiForwardUpdate: Promise<void> = Promise.resolve();
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
 const addSshConfigAction = 'Add SSH Config';
@@ -154,8 +156,10 @@ let syncStatusBar: vscode.StatusBarItem | undefined;
 let focusedAgentSource: { name: string } | undefined;
 /** Session-only opt-in target for executing Agent commands in a visible SAFS terminal. */
 let agentCommandTerminal: vscode.Terminal | undefined;
-/** Fixed workspace root captured from the selected terminal when terminal-only mode starts. */
+/** Live workspace root reported by the selected terminal in terminal-only mode. */
 let agentCommandTerminalCwd: string | undefined;
+/** Serialize terminal-target refreshes emitted by shell and workspace events. */
+let agentCommandTerminalRefresh: Promise<void> = Promise.resolve();
 const busyAgentCommandTerminals = new WeakSet<vscode.Terminal>();
 let refreshTree: () => void = () => undefined;
 const openingTerminalIds = new Set<string>();
@@ -543,20 +547,17 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
 }
 
 function agentInterface(): AgentInterface {
-  return settings().get<AgentInterface>('agentInterface', 'mcp');
+  return normalizeAgentInterface(settings().get<unknown>('agentInterface', 'mcp'));
 }
 
-function cliEnabled(): boolean { return agentInterface() !== 'mcp'; }
-
-function hybridMode(): boolean { return agentInterface() === 'hybrid'; }
+function cliEnabled(): boolean { return agentInterface() === 'cli'; }
 
 function selectedMcpToolProfile(): 'full' | 'core' {
   return settings().get<'full' | 'core'>('agentMcpToolProfile', 'full');
 }
 
-function routerMcpToolProfile(): 'full' | 'core' | 'hybrid' {
-  return hybridMode() ? 'hybrid'
-    : agentInterface() === 'cli' ? 'full' : selectedMcpToolProfile();
+function routerMcpToolProfile(): 'full' | 'core' {
+  return agentInterface() === 'cli' ? 'full' : selectedMcpToolProfile();
 }
 
 // The window server is an internal execution backend for both public MCP and CLI.
@@ -1714,6 +1715,33 @@ async function refreshAgentCommandTerminalState(): Promise<void> {
   await agentActivityView?.updateTerminalTarget();
 }
 
+async function applyAgentCommandTerminalCwd(
+  terminal: vscode.Terminal, cwd: string, forcePublish = false
+): Promise<void> {
+  if (terminal !== agentCommandTerminal || !path.posix.isAbsolute(cwd)) return;
+  const normalized = path.posix.normalize(cwd);
+  const info = managedRemoteTerminals.get(terminal);
+  if (!info || path.posix.normalize(info.remoteCwd) !== normalized) return;
+  const changed = normalized !== agentCommandTerminalCwd;
+  if (!changed && !forcePublish) return;
+  agentCommandTerminalCwd = normalized;
+  await refreshAgentCommandTerminalState();
+  await publishAgentWorkspace(vscodeContext);
+  if (changed) {
+    bridgeOutput?.info(`[Agent 终端转发] 工作区已刷新：${terminal.name}；cwd=${normalized}`);
+  }
+}
+
+function queueAgentCommandTerminalRefresh(
+  terminal: vscode.Terminal, cwd: string, forcePublish = false
+): void {
+  const operation = agentCommandTerminalRefresh.catch(() => undefined).then(
+    () => applyAgentCommandTerminalCwd(terminal, cwd, forcePublish)
+  );
+  agentCommandTerminalRefresh = operation;
+  void operation.catch((error) => logAsyncFailure('终端模式工作区刷新失败', error));
+}
+
 async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
   if (!enabled) {
     if (!agentCommandTerminal) return;
@@ -1726,7 +1754,6 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     void vscode.window.showInformationMessage('SAFS：已切换到工作区模式，Agent 工具已恢复。');
     return;
   }
-  if (agentCommandTerminalState().enabled) return;
   const terminal = vscode.window.activeTerminal;
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
   if (!terminal || !info) {
@@ -1744,13 +1771,17 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     );
     return;
   }
-  const confirmed = await vscode.window.showWarningMessage(
-    `Agent 命令将显示在“${terminal.name}”中，并继承该终端当前的用户权限和环境。` +
-      '开启后 MCP 只保留一个终端命令工具，CLI 只放行 safs exec；所有 SAFS 文件、搜索和传输操作都会关闭。',
-    { modal: true },
-    '切换到终端模式'
-  );
-  if (confirmed !== '切换到终端模式') return;
+  const refreshingSelectedTerminal = agentCommandTerminalState().enabled
+    && agentCommandTerminal === terminal;
+  if (!refreshingSelectedTerminal) {
+    const confirmed = await vscode.window.showWarningMessage(
+      `Agent 命令将显示在“${terminal.name}”中，并继承该终端当前的用户权限和环境。` +
+        '开启后 MCP 只保留一个终端命令工具，CLI 只放行 safs exec；所有 SAFS 文件、搜索和传输操作都会关闭。',
+      { modal: true },
+      '切换到终端模式'
+    );
+    if (confirmed !== '切换到终端模式') return;
+  }
   let terminalCwd: string;
   try {
     terminalCwd = await probeAgentCommandTerminalCwd(terminal, info);
@@ -1762,11 +1793,13 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
   }
   agentCommandTerminal = terminal;
   agentCommandTerminalCwd = terminalCwd;
+  info.remoteCwd = terminalCwd;
   await refreshAgentCommandTerminalState();
   await publishAgentWorkspace(vscodeContext);
-  bridgeOutput?.warn(
-    `[Agent 终端转发] 已启用终端专用模式：${terminal.name}；mount=${info.mount.name}；cwd=${terminalCwd}`
-  );
+  const action = refreshingSelectedTerminal ? '已刷新终端专用模式' : '已启用终端专用模式';
+  bridgeOutput?.warn(`[Agent 终端转发] ${action}：${terminal.name}；mount=${
+    info.mount.name
+  }；cwd=${terminalCwd}`);
   terminal.show(false);
 }
 
@@ -1901,13 +1934,29 @@ async function executeTerminalOnlyCommand(input: {
 }): Promise<Record<string, unknown>> {
   if (!input.command?.trim()) throw new Error('Remote command must not be empty.');
   const terminal = agentCommandTerminal;
-  const terminalCwd = agentCommandTerminalCwd;
+  let terminalCwd = agentCommandTerminalCwd;
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
   if (!terminal || !terminalCwd || !info) {
     throw new AgentToolError(
       'TERMINAL_TARGET_UNAVAILABLE',
       'No SAFS terminal is selected. Enable Use Current Terminal in Agent Activity.'
     );
+  }
+  const liveCwd = info.pty
+    ? info.remoteCwd
+    : reportedRemoteTerminalCwd(terminal, info);
+  if (path.posix.isAbsolute(liveCwd) && liveCwd !== terminalCwd) {
+    terminalCwd = path.posix.normalize(liveCwd);
+    agentCommandTerminalCwd = terminalCwd;
+    await refreshAgentCommandTerminalState();
+    await publishAgentWorkspace(vscodeContext);
+    if (agentCommandTerminal !== terminal || !agentCommandTerminalCwd) {
+      throw new AgentToolError(
+        'TERMINAL_TARGET_UNAVAILABLE',
+        'The selected terminal no longer belongs to the current SAFS workspace.'
+      );
+    }
+    terminalCwd = agentCommandTerminalCwd;
   }
   if (info.mount.name !== input.mountName) {
     throw new AgentToolError(
@@ -2313,7 +2362,10 @@ async function openTerminal(
           (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`),
           (reportedCwd) => {
             const entry = managedRemoteTerminals.get(created);
-            if (entry) entry.remoteCwd = reportedCwd;
+            if (entry) {
+              entry.remoteCwd = reportedCwd;
+              queueAgentCommandTerminalRefresh(created, reportedCwd);
+            }
           }
         );
         created = vscode.window.createTerminal({
@@ -3694,6 +3746,18 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     return;
   }
   const folder = await ensureFolder(mount);
+  const terminalInfo = agentCommandTerminal
+    ? managedRemoteTerminals.get(agentCommandTerminal)
+    : undefined;
+  if (agentCommandTerminal && (!terminalInfo || terminalInfo.mount.name !== mount.name)) {
+    const previous = agentCommandTerminal.name;
+    agentCommandTerminal = undefined;
+    agentCommandTerminalCwd = undefined;
+    await refreshAgentCommandTerminalState();
+    bridgeOutput?.info(
+      `[Agent 终端转发] 工作区已切换，停止使用不匹配的终端：${previous}`
+    );
+  }
   const editorWorkspacePath = currentWorkspacePath(folder);
   const terminalCommandOnly = agentCommandTerminal !== undefined
     && agentCommandTerminalCwd !== undefined;
@@ -3855,17 +3919,55 @@ async function installGlobalCli(
   return executable;
 }
 
+async function uninstallGlobalCli(context: vscode.ExtensionContext): Promise<string> {
+  const agentHome = os.homedir();
+  const nativePlatform = nativeCliPlatform(process.platform, process.arch);
+  const executable = globalNativeCli(agentHome, nativePlatform);
+  const binDirectory = path.dirname(executable);
+  let pathError: Error | undefined;
+  if (nativePlatform.startsWith('win32-')) {
+    const result = await executeCaptured(windowsUserPathRemovePlan(binDirectory));
+    if (result.exitCode !== 0) {
+      pathError = new Error('无法从用户级 PATH 移除 SAFS CLI：' + result.stderr.trim());
+    }
+  }
+  await removeNativeCli(agentHome, nativePlatform);
+  context.environmentVariableCollection.delete('PATH');
+  const samePath = (entry: string) => process.platform === 'win32'
+    ? entry.toLocaleLowerCase() === binDirectory.toLocaleLowerCase()
+    : entry === binDirectory;
+  process.env.PATH = (process.env.PATH?.split(path.delimiter) ?? [])
+    .filter((entry) => !samePath(entry)).join(path.delimiter);
+  cliVersionChecks.clear();
+  await context.globalState.update(cliInstallKey, undefined);
+  if (pathError) throw pathError;
+  return executable;
+}
+
+async function installGlobalCliSkill(executable: string): Promise<void> {
+  const result = await executeCaptured({
+    command: executable,
+    args: ['install', '--skills', '-g']
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`SAFS Agent Skill 安装失败：${result.stderr.trim() || `exit ${result.exitCode}`}`);
+  }
+  bridgeOutput?.info(`[Agent CLI] ${result.stdout.trim()}`);
+}
+
 async function configureAgentInterface(
   context: vscode.ExtensionContext
 ): Promise<{ cliExecutable?: string }> {
   const router = await ensureAgentHttpRouter(context);
   if (!cliEnabled()) {
+    const removed = await uninstallGlobalCli(context);
     bridgeOutput?.appendLine(
-      `[Agent MCP] Streamable HTTP 路由已就绪：${router.url}；SAFS 不探测或修改 Agent 配置。`
+      `[Agent MCP] Streamable HTTP 路由已就绪：${router.url}；已移除互斥的 CLI 和 Skill：${removed}`
     );
     return {};
   }
   const executable = await installGlobalCli(context, cliRouterUrl(router.url));
+  await installGlobalCliSkill(executable);
   bridgeOutput?.appendLine(`[Agent CLI] 已安装用户级 safs 命令；接口=${agentInterface()}。`);
   return { cliExecutable: executable };
 }
@@ -3893,16 +3995,9 @@ async function installAgentForwardingIntegration(
 ): Promise<void> {
   if (agentInterface() === 'cli') {
     if (!cliExecutable) throw new Error('SAFS CLI 尚未安装');
-    const result = await executeCaptured({
-      command: cliExecutable,
-      args: ['install', '--skills', '-g']
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(`SAFS Agent Skill 安装失败：${result.stderr.trim() || `exit ${result.exitCode}`}`);
-    }
-    bridgeOutput?.info(`[Agent CLI] ${result.stdout.trim()}`);
+    await vscode.env.clipboard.writeText(streamableHttpMcpUninstallPrompt());
     void vscode.window.showInformationMessage(
-      'SAFS：Agent Skill 已安装，请重启 Agent。'
+      'SAFS：MCP 卸载提示已复制，请粘贴到 Agent。'
     );
     return;
   }
@@ -3921,6 +4016,7 @@ async function updateAiForwardEnabled(
 ): Promise<void> {
   let cliExecutable: string | undefined;
   let changed = false;
+  let shouldInstallIntegration = false;
   bridgeOutput?.info(
     `[Agent 转发] ${enabledValue ? '启用' : '关闭'} ${mount.name}`
   );
@@ -3936,6 +4032,7 @@ async function updateAiForwardEnabled(
       return;
     }
     changed = true;
+    shouldInstallIntegration = enabledValue && enabled.size === 0;
     if (enabledValue) enabled.add(mount.name);
     else enabled.delete(mount.name);
     await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
@@ -3953,7 +4050,11 @@ async function updateAiForwardEnabled(
       await prepareAgentCwd(mount);
       agentTrace('Preference', '先启动固定 HTTP 路由，再启动当前窗口服务');
       startAgentHttpRouterLeadership(vscodeContext);
-      cliExecutable = (await configureAgentInterface(vscodeContext)).cliExecutable;
+      if (shouldInstallIntegration) {
+        cliExecutable = (await configureAgentInterface(vscodeContext)).cliExecutable;
+      } else {
+        await ensureAgentHttpRouter(vscodeContext);
+      }
       if (current?.mountName === mount.name) {
         const server = await ensureAgentMcpServer(vscodeContext);
         if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
@@ -3965,12 +4066,15 @@ async function updateAiForwardEnabled(
   });
   if (!changed) return;
   if (enabledValue) {
+    if (!shouldInstallIntegration) {
+      agentTrace('Preference', '已有其他挂载启用，跳过重复 Agent 集成安装');
+      return;
+    }
     if (cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
     }
-    // Agent integration installation is intentionally coupled only to the parent tree
-    // node's disabled -> enabled transition. Startup, mode changes and other
-    // windows prepare transports silently and must never install a Skill or display a prompt.
+    // Install once for the globally first enabled mount. Further mounts only
+    // publish another workspace until every forwarding switch is disabled again.
     await installAgentForwardingIntegration(vscodeContext, cliExecutable);
     return;
   }
@@ -3986,16 +4090,11 @@ async function updateAiForwardEnabled(
 }
 
 async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): Promise<void> {
-  const previous = aiForwardUpdates.get(mount.name) ?? Promise.resolve();
-  const operation = previous.catch(() => undefined).then(
+  const operation = aiForwardUpdate.catch(() => undefined).then(
     () => updateAiForwardEnabled(mount, enabledValue)
   );
-  aiForwardUpdates.set(mount.name, operation);
-  try {
-    await operation;
-  } finally {
-    if (aiForwardUpdates.get(mount.name) === operation) aiForwardUpdates.delete(mount.name);
-  }
+  aiForwardUpdate = operation;
+  await operation;
 }
 
 async function prepareAgentCwd(mount: MountConfig): Promise<void> {
@@ -4334,17 +4433,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage('SAFS：URL 已复制。');
   });
   command('installCli', async () => {
+    if (agentInterface() !== 'cli') {
+      await settings().update('agentInterface', 'cli', vscode.ConfigurationTarget.Global);
+      return;
+    }
     startAgentHttpRouterLeadership(context);
-    const router = await ensureAgentHttpRouter(context);
-    const executable = await installGlobalCli(context, cliRouterUrl(router.url));
+    const executable = (await configureAgentInterface(context)).cliExecutable;
+    if (!executable) throw new Error('SAFS CLI 尚未安装');
     bridgeOutput?.info(`[Agent CLI] 用户主动安装或更新完成：${executable}`);
-    void vscode.window.showInformationMessage('SAFS：全局 CLI 已安装或更新。');
+    await installAgentForwardingIntegration(context, executable);
   });
   command('installAgentForwarding', async () => {
-    // This explicit command is the only installation-prompt entry other than
-    // a parent mount's disabled -> enabled transition. It runs only in the
-    // window where the user invokes it; startup and configuration listeners
-    // prepare transports silently.
+    // This explicit command prepares the selected interface. MCP mode copies its
+    // install prompt; CLI mode copies the mutually exclusive MCP removal prompt.
     startAgentHttpRouterLeadership(context);
     const result = await configureAgentInterface(context);
     if (result.cliExecutable) {
@@ -4354,10 +4455,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('uninstallAgentForwarding', async () => {
     if (agentInterface() === 'cli') {
-      const removed = await removeGlobalNativeCliSkill(os.homedir());
-      bridgeOutput?.info(`[Agent CLI] 已移除全局 Agent Skill：${removed}`);
+      const removed = await uninstallGlobalCli(context);
+      bridgeOutput?.info(`[Agent CLI] 已移除全局 CLI 和 Agent Skill：${removed}`);
       void vscode.window.showInformationMessage(
-        'SAFS：Agent Skill 已移除，请重启 Agent。'
+        'SAFS：CLI 和 Skill 已移除。'
       );
       return;
     }
@@ -4518,10 +4619,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void updateSyncStatusBar().catch((error) =>
         logAsyncFailure('同步状态栏刷新失败', error)
       );
+      const terminal = agentCommandTerminal;
+      const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+      if (terminal && info) {
+        queueAgentCommandTerminalRefresh(
+          terminal, reportedRemoteTerminalCwd(terminal, info), true
+        );
+      }
     })
   );
 
-  // Interface changes never uninstall the other entry point; hybrid intentionally keeps both.
+  const refreshShellTerminalTarget = (terminal: vscode.Terminal) => {
+    if (terminal !== agentCommandTerminal) return;
+    const info = managedRemoteTerminals.get(terminal);
+    if (!info) return;
+    queueAgentCommandTerminalRefresh(
+      terminal, reportedRemoteTerminalCwd(terminal, info)
+    );
+  };
+  context.subscriptions.push(
+    vscode.window.onDidChangeTerminalShellIntegration(({ terminal }) =>
+      refreshShellTerminalTarget(terminal)),
+    vscode.window.onDidEndTerminalShellExecution(({ terminal }) =>
+      refreshShellTerminalTarget(terminal))
+  );
+
+  // MCP and CLI are mutually exclusive. Only explicit mode changes prompt the
+  // user to remove the Agent-side registration; startup repair stays silent.
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration('safs.agentInterface')) return;
     void guard(async () => {
@@ -4529,6 +4653,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const result = await configureAgentInterface(context);
       if (result.cliExecutable) {
         bridgeOutput?.info(`[Agent CLI] 接口准备完成：${result.cliExecutable}`);
+        await installAgentForwardingIntegration(context, result.cliExecutable);
+      } else {
+        void vscode.window.showInformationMessage('SAFS：CLI 和 Skill 已移除。');
       }
     });
   }));
@@ -4541,17 +4668,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       'Activate',
       `当前远程挂载=${current?.mountName ?? '<none>'}，启用列表=${[...enabled].join(',') || '<empty>'}`
     );
-    // CLI and hybrid modes need the user-level command even before a
-    // mount enables forwarding. This also repairs missing installs on reload.
+    // CLI mode needs the user-level command even before a mount enables
+    // forwarding. This also repairs missing installs on reload.
     if (cliEnabled()) {
       agentTrace('Activate', `${agentInterface()} 模式已启用，安装或更新用户级全局 safs 命令`);
       startAgentHttpRouterLeadership(context);
       await configureAgentInterface(context);
+    } else {
+      agentTrace('Activate', 'MCP 模式已启用，移除互斥的 CLI 和 Agent Skill');
+      await uninstallGlobalCli(context);
     }
     if (enabled.size > 0) {
       agentTrace('Activate', '启动或连接固定 HTTP MCP 路由器');
       startAgentHttpRouterLeadership(context);
-      await configureAgentInterface(context);
+      await ensureAgentHttpRouter(context);
       if (current && enabled.has(current.mountName)) {
         agentTrace('Activate', `挂载 ${current.mountName} 已启用，启动窗口动态 MCP 后端`);
         const config = await readConfig();

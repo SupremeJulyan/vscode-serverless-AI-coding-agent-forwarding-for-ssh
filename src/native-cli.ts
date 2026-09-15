@@ -54,12 +54,19 @@ export function streamableHttpMcpInstallPrompt(url: string): string {
   ].join('\n');
 }
 
-export function globalNativeCliSkill(home: string): string {
-  return path.join(home, '.agents', 'skills', 'safs-cli');
+export type NativeCliSkillTarget = 'agents' | 'claude' | 'codex' | 'copilot';
+
+export function globalNativeCliSkill(
+  home: string, target: NativeCliSkillTarget = 'agents'
+): string {
+  const directory = target === 'copilot' ? '.copilot' : `.${target}`;
+  return path.join(home, directory, 'skills', 'safs-cli');
 }
 
-export async function removeGlobalNativeCliSkill(home: string): Promise<string> {
-  const directory = globalNativeCliSkill(home);
+export async function removeGlobalNativeCliSkill(
+  home: string, target: NativeCliSkillTarget = 'agents'
+): Promise<string> {
+  const directory = globalNativeCliSkill(home, target);
   await rm(directory, { recursive: true, force: true });
   return directory;
 }
@@ -193,7 +200,7 @@ export async function ensureUnixCliPath(home: string): Promise<void> {
   await ensureUnixProfilePath(path.join(home, '.zprofile'));
 }
 
-/** Remove the global CLI files and Unix login-shell PATH entries. */
+/** Remove the global CLI, all supported global Skills, and Unix PATH entries. */
 export async function removeNativeCli(
   home: string, platform: NativeCliPlatform
 ): Promise<string> {
@@ -201,6 +208,9 @@ export async function removeNativeCli(
   await Promise.all([
     rm(executable, { force: true }),
     rm(nativeCliConnectionPath(executable), { force: true }),
+    ...(['agents', 'claude', 'codex', 'copilot'] as const).map((target) =>
+      rm(globalNativeCliSkill(home, target), { recursive: true, force: true })
+    ),
     ...(!platform.startsWith('win32-') ? [
       removeUnixProfilePath(path.join(home, '.profile')),
       removeUnixProfilePath(path.join(home, '.zprofile'))

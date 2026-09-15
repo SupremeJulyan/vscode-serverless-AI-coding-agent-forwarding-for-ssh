@@ -7,6 +7,12 @@ const { execFileSync } = require('node:child_process');
 
 const pathBegin = '# SAFS CLI PATH BEGIN';
 const pathEnd = '# SAFS CLI PATH END';
+const skillHomes = ['.agents', '.claude', '.codex', '.copilot'];
+
+function globalSkillDirectories(home) {
+  return skillHomes.map((directory) =>
+    path.join(home, directory, 'skills', 'safs-cli'));
+}
 
 function withoutSafsPathBlock(content) {
   const pattern = new RegExp(
@@ -52,10 +58,11 @@ async function cleanup(options = {}) {
     // Update PATH even if the files were already removed manually.
     let pathError;
     try { removeWindowsUserPath(binDirectory, options.run); } catch (error) { pathError = error; }
-    await fs.rm(installRoot, { recursive: true, force: true });
-    await fs.rm(path.join(home, '.agents', 'skills', 'safs-cli'), {
-      recursive: true, force: true
-    });
+    await Promise.all([
+      fs.rm(installRoot, { recursive: true, force: true }),
+      ...globalSkillDirectories(home).map((directory) =>
+        fs.rm(directory, { recursive: true, force: true }))
+    ]);
     if (pathError) throw pathError;
     return;
   }
@@ -64,9 +71,8 @@ async function cleanup(options = {}) {
   await Promise.all([
     fs.rm(path.join(binDirectory, 'safs'), { force: true }),
     fs.rm(path.join(binDirectory, '.safs-connection.json'), { force: true }),
-    fs.rm(path.join(home, '.agents', 'skills', 'safs-cli'), {
-      recursive: true, force: true
-    }),
+    ...globalSkillDirectories(home).map((directory) =>
+      fs.rm(directory, { recursive: true, force: true })),
     removeUnixProfileBlock(path.join(home, '.profile')),
     removeUnixProfileBlock(path.join(home, '.zprofile'))
   ]);

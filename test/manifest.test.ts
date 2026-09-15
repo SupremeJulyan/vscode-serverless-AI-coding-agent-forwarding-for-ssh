@@ -32,7 +32,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.8.6');
+  assert.equal(manifest.version, '1.8.7');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -47,7 +47,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
   assert.deepEqual(
     manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.enum,
-    ['mcp', 'hybrid', 'cli']
+    ['mcp', 'cli']
   );
 });
 
@@ -211,6 +211,10 @@ test('contributes the Agent activity Webview in the SAFS sidebar', async () => {
   assert.equal(activityIcon.includes('M8 2.75 L16 2.75'), false);
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes('registerWebviewViewProvider(agentActivityViewId'));
+  assert.ok(extensionSource.includes('onDidChangeTerminalShellIntegration'));
+  assert.ok(extensionSource.includes('onDidEndTerminalShellExecution'));
+  assert.ok(extensionSource.includes('queueAgentCommandTerminalRefresh'));
+  assert.ok(extensionSource.includes('工作区已切换，停止使用不匹配的终端'));
 });
 
 test('packages session-only remote shell integration scripts', async () => {
@@ -319,7 +323,7 @@ test('uses only the unified cross-platform config path', async () => {
   assert.deepEqual(matches, ['**/.safs/config.json']);
 });
 
-test('installs forwarding only after enabling a parent mount or an explicit command', async () => {
+test('installs forwarding only for the globally first enabled mount or an explicit command', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
@@ -339,13 +343,16 @@ test('installs forwarding only after enabling a parent mount or an explicit comm
   assert.ok(extensionSource.includes(
     'await installAgentForwardingIntegration(vscodeContext, cliExecutable)'
   ));
+  assert.ok(extensionSource.includes('enabledValue && enabled.size === 0'));
+  assert.ok(extensionSource.includes('if (!shouldInstallIntegration)'));
+  assert.ok(extensionSource.includes('let aiForwardUpdate: Promise<void>'));
   assert.ok(extensionSource.includes('if (!changed) return'));
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
-  assert.ok(extensionSource.includes('removeGlobalNativeCliSkill(os.homedir())'));
+  assert.ok(extensionSource.includes('await uninstallGlobalCli(context)'));
+  assert.ok(extensionSource.includes("args: ['install', '--skills', '-g']"));
+  assert.ok(extensionSource.includes('streamableHttpMcpUninstallPrompt()'));
   assert.ok(extensionSource.includes('卸载提示词'));
   assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
-  assert.equal(extensionSource.includes('hybridAgentInstallPrompt'), false);
-  assert.equal(extensionSource.includes('agentInterfaceHybridMigrationV1'), false);
   assert.equal(extensionSource.includes('legacyAgentInterfaceMigrationTarget'), false);
   assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
   assert.ok(extensionSource.includes('检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。'));

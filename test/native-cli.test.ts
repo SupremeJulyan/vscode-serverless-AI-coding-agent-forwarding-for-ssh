@@ -22,6 +22,10 @@ test('locates and removes the global SAFS Agent Skill', async () => {
   try {
     const skill = globalNativeCliSkill(home);
     assert.equal(skill, join(home, '.agents', 'skills', 'safs-cli'));
+    assert.equal(
+      globalNativeCliSkill(home, 'copilot'),
+      join(home, '.copilot', 'skills', 'safs-cli')
+    );
     await mkdir(skill, { recursive: true });
     await writeFile(join(skill, 'SKILL.md'), 'installed');
     assert.equal(await removeGlobalNativeCliSkill(home), skill);
@@ -132,18 +136,30 @@ test('adds the user CLI directory to the Unix login PATH idempotently', async ()
   } finally { await rm(home, { recursive: true, force: true }); }
 });
 
-test('removes CLI files and managed Unix PATH entries', async () => {
+test('removes CLI files, every global Skill, and managed Unix PATH entries', async () => {
   const home = await mkdtemp(join(tmpdir(), 'safs-native-remove-'));
   try {
     const executable = globalNativeCli(home, 'linux-x64');
     await import('node:fs/promises').then(fs => fs.mkdir(join(home, '.local', 'bin'), { recursive: true }));
     await writeFile(executable, 'native');
     await writeFile(nativeCliConnectionPath(executable), '{}');
+    const skills = ['agents', 'claude', 'codex', 'copilot'] as const;
+    for (const target of skills) {
+      const skill = globalNativeCliSkill(home, target);
+      await mkdir(skill, { recursive: true });
+      await writeFile(join(skill, 'SKILL.md'), 'installed');
+    }
     await writeFile(join(home, '.profile'), 'before\n# SAFS CLI PATH BEGIN\nmanaged\n# SAFS CLI PATH END\nafter\n');
     await writeFile(join(home, '.zprofile'), '# SAFS CLI PATH BEGIN\nmanaged\n# SAFS CLI PATH END\nkeep\n');
     await removeNativeCli(home, 'linux-x64');
     await assert.rejects(readFile(executable), { code: 'ENOENT' });
     await assert.rejects(readFile(nativeCliConnectionPath(executable)), { code: 'ENOENT' });
+    for (const target of skills) {
+      await assert.rejects(
+        readFile(join(globalNativeCliSkill(home, target), 'SKILL.md')),
+        { code: 'ENOENT' }
+      );
+    }
     assert.equal(await readFile(join(home, '.profile'), 'utf8'), 'before\nafter\n');
     assert.equal(await readFile(join(home, '.zprofile'), 'utf8'), 'keep\n');
     assert.equal(withoutSafsPathBlock('plain\n'), 'plain\n');

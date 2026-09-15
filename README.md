@@ -66,7 +66,7 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 默认使用 MCP 模式：
 
-1. 在 SAFS 视图中点击连接父节点旁的 **启用 Agent 转发**。安装输入框只会在该连接从关闭切换为开启时由当前窗口显示一次；也可以主动运行 `SAFS: 为我的Agent安装转发功能`。启动其他窗口或切换接口模式不会重复弹出。
+1. 在 SAFS 视图中点击连接父节点旁的 **启用 Agent 转发**。只有所有连接的转发开关都处于关闭状态时，首次开启任一连接才会显示安装提示；继续开启其他连接不会重复安装。全部关闭后再次首次开启时会重新提示。也可以主动运行 `SAFS: 为我的Agent安装转发功能` 进行修复。
 2. 按提示输入 Agent 名称，扩展会复制一段包含本机 Streamable HTTP URL 的英文安装提示词。默认 MCP 模式不会安装全局 CLI。
 3. 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。默认加载 `safs.agentMcpToolProfile` 选择的 MCP 工具集；SAFS 不会探测或修改 Agent 配置。
 4. 打开该连接的远程目录。
@@ -79,20 +79,18 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 > MCP 地址只监听 `127.0.0.1`。Agent 与运行 SAFS 的 VS Code 必须位于同一操作系统环境。
 
-`safs.agentInterface` 支持三种模式：
+`safs.agentInterface` 支持两种模式：
 
-- `mcp`（默认）：所有操作使用 MCP，加载 `safs.agentMcpToolProfile` 选择的完整或核心工具集，不安装全局 CLI。
-- `hybrid`：切换到该模式时安装或更新全局 `safs` CLI；MCP 只负责精确绑定或切换工作区，文件和命令操作通过 CLI 执行。
-- `cli`：切换到该模式时安装或更新全局 `safs` CLI，不要求安装 MCP；Agent 运行 `safs bind --agent "<Agent 名称>"` 后完全通过 CLI 操作。
+- `mcp`（默认）：所有操作使用 MCP，加载 `safs.agentMcpToolProfile` 选择的完整或核心工具集；切换到该模式会卸载全局 CLI，并清理 SAFS 安装到各 Agent 用户目录中的 Skill。
+- `cli`：切换到该模式时安装或更新全局 `safs` CLI 与用户级 Skill，同时复制 MCP 卸载提示词；将提示词粘贴给 Agent、完成注销并重启 Agent 后，运行 `safs bind --agent "<Agent 名称>"`，此后完全通过 CLI 操作。
 
-三种模式不会在切换时自动卸载另一入口，因此不同 Agent 可以同时分别使用 MCP 和 CLI。无论当前模式是什么，都可以通过命令面板运行 `SAFS: 安装或更新全局 CLI` 手动安装或修复 CLI。
+MCP 与 CLI 模式互斥。通过命令面板运行 `SAFS: 安装或更新全局 CLI` 会在需要时先切换到 CLI 模式，然后安装或修复 CLI 和 Skill，并复制 MCP 卸载提示词。
 
 同一主机、挂载和远程根目录重新发布时，已有绑定会自动续接到唯一的新实例，不需要再次
 确认；只有目标确实消失或存在歧义时才会要求重新选择工作区。
 
-混合模式的绑定结果只返回目标工作区、`bindingId` 和 CLI 操作说明；纯 MCP 模式只返回
-目标工作区和 `bindingId`。切换工作区必须先列出候选并等待用户明确选择，切换成功后
-Agent 会停止当前任务并等待新的用户请求。
+MCP 的绑定结果返回目标工作区和 `bindingId`。切换工作区必须先列出候选并等待用户明确
+选择，切换成功后 Agent 会停止当前任务并等待新的用户请求。
 
 无论使用哪种模式，SAFS 后端都会按绑定结果中的 `workspaceRoot` 校验写操作，无需依赖
 Agent 根据提示词自行判断边界。远程文件的读取、搜索、创建、修改、移动、删除和传输应
@@ -119,7 +117,9 @@ Agent 根据提示词自行判断边界。远程文件的读取、搜索、创�
 （例如手动执行 `sudo su - user` 后）。此时 MCP 只保留 `run_remote_command` 一个工具，
 文件、搜索、传输、工作区切换和长输出续读工具全部关闭。CLI 是所有窗口共用的全局程序，
 因此仍保留 `bind`/`workspaces`/`switch` 用于路由，但绑定到该窗口后只放行 `safs exec`，
-并禁止用 `--cwd` 覆盖终端目录。该模式只在当前窗口会话内有效；终端关闭或点击
+并禁止用 `--cwd` 覆盖终端目录。终端报告的当前目录会自动刷新；也可以再次点击已选中的
+**终端模式**，直接刷新当前终端或改选当前聚焦的 SAFS 终端，无需先切回工作区模式。切换到
+不属于该终端的工作区时会安全退出旧终端目标。该模式只在当前窗口会话内有效；终端关闭或点击
 **退出专用模式** 后恢复原来的 Agent 工具。转发期间不要在该终端中同时操作前台程序。
 
 活动视图仅保留当前窗口最近 200 条脱敏记录；文件正文、Diff、命令输出不会写入记录，
@@ -131,19 +131,8 @@ Agent 根据提示词自行判断边界。远程文件的读取、搜索、创�
 
 #### CLI 模式
 
-CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。切换到混合或 CLI 模式会安装当前扩展环境对应的程序；任意模式下也可以运行 `SAFS: 安装或更新全局 CLI` 主动安装或修复。扩展准备 CLI 时会读取其真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。纯 CLI 模式下，在目录树父连接节点点击 **启用 Agent 转发**，或主动运行 `SAFS: 为我的Agent安装转发功能`，会把 CLI 内置的 SAFS Agent Skill 安装到用户级 `~/.agents/skills/safs-cli`，无需复制提示词，也不会联网下载。重启 Agent 后，它会按需加载 Skill，并首先运行 `safs bind --agent "<Agent 名称>"`。卸载转发命令只移除该 SAFS Skill。仅当 Agent 不支持 MCP 或希望使用纯命令行工作流时选择 CLI 模式。原生 CLI 不再提供 stdio `mcp-bridge`；MCP 模式直接使用提示词中的 Streamable HTTP URL。
+CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。切换到 CLI 模式会安装当前扩展环境对应的程序与用户级 `~/.agents/skills/safs-cli`；运行 `SAFS: 安装或更新全局 CLI` 也会切换到该模式并主动安装或修复。扩展会读取 CLI 的真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。进入 CLI 模式或在全局首次开启 Agent 转发时，扩展会复制 MCP 卸载提示词；请粘贴给 Agent，注销用户级 `safs` MCP 后重启 Agent。之后在Agent 里`输入使用safs-cli`，或者`/safs-cli` 即可使用这Skill。
 
-也可以像 Playwright CLI 一样直接安装项目级 Skill：
-
-```sh
-safs install --skills
-```
-
-默认目标是当前项目的 `.agents/skills/safs-cli`；`-g` 安装到用户目录。针对特定 Agent 可使用 `--skills=claude`、`--skills=codex` 或 `--skills=copilot`。Skill 内容随二进制内置，因此安装和更新都不需要网络。
-
-CLI 安装是全局且与 Agent 无关的。`bind` 创建 binding 时才记录 Agent 名称；后续操作
-通过 `--binding` 自动沿用该名称，用于活动视图、日志和 binding 隔离，不参与本机路由认证。
-多个 Agent 因此可以共用同一个 `safs` 命令。
 
 `safs bind` 或 `safs switch` 返回的 `bindingId` 通过 `--binding` 显式传给后续命令，
 确保固定 CLI 入口后的每次操作仍指向用户选定的 VS Code 窗口。结构化 JSON 和写入内容
@@ -189,7 +178,7 @@ CLI 语法或参数错误会直接附带当前子命令的正确 Usage，不需�
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | 切换文件时，让已打开的远程终端自动 `cd` 到对应目录 |
 | `safs.terminalAutoReconnect` | `true` | 远程终端意外结束后自动重连；瞬时网络错误会有限退避重试 |
-| `safs.agentInterface` | `mcp` | 选择纯 MCP、混合或纯 CLI 接口；后两者会安装全局 CLI |
+| `safs.agentInterface` | `mcp` | 选择互斥的 MCP 或 CLI 接口；切换时清理另一入口 |
 | `safs.agentMcpToolProfile` | `full` | 改为 `core` 可减少 Agent 工具定义的上下文开销 |
 | `safs.agentMcpTimeoutMs` | `120000` | Agent 命令、搜索和传输的超时；`0` 表示关闭 |
 | `safs.sftp.watchInterval` | `5` | 轮询远程文件变化的间隔（秒） |

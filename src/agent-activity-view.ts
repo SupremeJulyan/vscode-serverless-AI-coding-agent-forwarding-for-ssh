@@ -197,7 +197,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
   <section class="agent-mode">
     <div class="mode-switch" role="group" aria-label="Agent 工具模式">
       <button id="workspaceModeButton" class="active" type="button" aria-pressed="true">工作区模式</button>
-      <button id="terminalModeButton" type="button" aria-pressed="false" title="仅允许在当前 SAFS 终端执行命令">终端模式</button>
+      <button id="terminalModeButton" type="button" aria-pressed="false" title="使用或刷新当前聚焦的 SAFS 终端">终端模式</button>
     </div>
     <div id="agentModeDetail" class="agent-mode-detail">使用当前远程工作区</div>
   </section>
@@ -410,7 +410,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       if (terminalModeEnabled) vscode.postMessage({ type: 'setTerminalTarget', enabled: false });
     });
     terminalModeButton.addEventListener('click', function() {
-      if (!terminalModeEnabled) vscode.postMessage({ type: 'setTerminalTarget', enabled: true });
+      vscode.postMessage({ type: 'setTerminalTarget', enabled: true });
     });
     vscode.postMessage({ type: 'ready' });
   </script>

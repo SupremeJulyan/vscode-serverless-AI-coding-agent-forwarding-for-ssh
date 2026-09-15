@@ -7,8 +7,8 @@ import {
   DiscoveredAgentWorkspace, agentDiscoveryDirectories, discoverAgentWorkspaces
 } from './agent-discovery';
 import {
-  type AgentToolProfile, configureAgentMcpResources, hybridAgentMcpInstructions,
-  hybridCliInstructions, registerAgentMcpTools, routedAgentMcpInstructions,
+  type AgentToolProfile, configureAgentMcpResources,
+  registerAgentMcpTools, routedAgentMcpInstructions,
   terminalAgentMcpInstructions, terminalCliInstructions, terminalCliOnlyCommandMessage,
   terminalMcpOnlyToolError, terminalMcpOnlyToolMessage
 } from './agent-mcp-tools';
@@ -454,7 +454,6 @@ export class AgentHttpRouter {
       }
       const selectedWorkspace = workspace!;
       const bindingId = randomUUID().replace(/-/g, '').slice(0, 16);
-      const hybridMcp = source === 'mcp' && this.activeToolProfile() === 'hybrid';
       this.bindings.set(bindingId, {
         instanceId: selectedWorkspace.instanceId,
         host: selectedWorkspace.host,
@@ -474,9 +473,6 @@ export class AgentHttpRouter {
         content: [{ type: 'text' as const, text: JSON.stringify({
           workspace: this.publicWorkspace(selectedWorkspace),
           bindingId,
-          ...(hybridMcp ? {
-            cliInstructions: hybridCliInstructions
-          } : {}),
           ...(source === 'cli' ? {
             agentName: bindingAgentName,
             selectedAutomatically: !switching,
@@ -570,7 +566,7 @@ export class AgentHttpRouter {
       {
         instructions: profile === 'terminal'
           ? terminalAgentMcpInstructions
-          : profile === 'hybrid' ? hybridAgentMcpInstructions : routedAgentMcpInstructions
+          : routedAgentMcpInstructions
       }
     );
     configureAgentMcpResources(server);
