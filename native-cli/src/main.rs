@@ -2,25 +2,44 @@ use serde_json::{json, Map, Value};
 use std::{
     env, fs,
     io::{self, Read},
+    path::{Path, PathBuf},
     process,
     time::Duration,
 };
 use url::Url;
 
-const HELP: &str = r#"Usage: safs COMMAND [options]
+const HELP: &str = r#"Usage: safs COMMAND [arguments] [options]
 
+SAFS is a token-efficient remote workspace CLI for coding agents.
+
+Setup:     install
 Workspace: bind, workspaces, switch, current-file
 Read:      list, read, read-many, search, find, output
 Write:     edit, write, delete, chmod, move, upload, download
 Execute:   exec, batch
 
-Run `safs COMMAND --help` for exact arguments and JSON examples.
-Global options: --compact, --verbose
+Examples:
+  safs bind --agent Codex
+  safs list src --binding ID
+  safs read README.md --binding ID --head 80
+  safs search TODO src --binding ID
+  safs exec "npm test" --binding ID
+
+Common path/query/command values accept concise positional arguments. The
+existing named options remain available for scripts. Run `safs COMMAND --help`.
+Global options: --compact, --verbose, --config FILE
 Version: safs --version
 "#;
 
 fn command_help(command: &str) -> Option<&'static str> {
     match command {
+        "install" => Some(
+            r#"Usage: safs install --skills[=agents|claude|codex|copilot] [-g]
+Installs or updates the bundled Agent Skill without network access.
+The default target is .agents/skills/safs-cli in the current project.
+Use -g or --global for the corresponding user-level skills directory.
+"#,
+        ),
         "bind" => Some(
             r#"Usage: safs bind --agent NAME [--cwd LOCAL_CWD]
 Matches the current cwd (or --cwd) to a SAFS placeholder. If none matches,
@@ -44,14 +63,15 @@ Returns the active remote editor file, or null when no remote file is open.
 "#,
         ),
         "list" => Some(
-            r#"Usage: safs list --binding ID [--path PATH] [--limit N] [--cursor CURSOR]
+            r#"Usage: safs list [PATH] --binding ID [--limit N] [--cursor CURSOR]
 Batch form: safs list --binding ID --input '{"paths":["src","test"],"limit":100}'
 "#,
         ),
         "read" => Some(
-            r#"Usage: safs read --binding ID --path PATH [selection]
+            r#"Usage: safs read PATH --binding ID [selection]
 Selection: --offset N [--length N] | --head N | --tail N |
            --start-line N [--line-count N]
+Named form: safs read --binding ID --path PATH
 "#,
         ),
         "read-many" => Some(
@@ -60,37 +80,38 @@ Example: --input '{"requests":[{"path":"a.txt"},{"path":"b.txt","head":20}],"max
 "#,
         ),
         "search" => Some(
-            r#"Usage: safs search --binding ID --query QUERY [--path PATH] [--mode content|files|count|names]
-       safs search --binding ID --name GLOB [--path PATH]
+            r#"Usage: safs search QUERY [PATH] --binding ID [--mode content|files|count|names]
+       safs find GLOB [PATH] --binding ID
+Named options --query, --name, and --path remain available.
 files returns paths of files whose CONTENT matches; names matches file BASENAMES.
 Advanced filters use --input JSON: fixedStrings, ignoreCase, contextLines, include,
 and excludeDirs.
 "#,
         ),
         "find" => Some(
-            r#"Usage: safs find --binding ID --name GLOB [--path PATH]
+            r#"Usage: safs find GLOB [PATH] --binding ID
 Finds files by basename. GLOB uses shell-style patterns such as '*.ts'.
 Equivalent to: safs search --binding ID --query GLOB --mode names
 "#,
         ),
         "edit" => Some(
-            r#"Usage: safs edit --binding ID --path PATH --input JSON|-
+            r#"Usage: safs edit PATH --binding ID --input JSON|-
 Example: --input '{"edits":[{"oldText":"old","newText":"new"}],"expectedHash":"SHA256"}'
 "#,
         ),
         "write" => Some(
-            r#"Usage: safs write --binding ID --path PATH (--file LOCAL_UTF8_FILE|- | --content TEXT)
+            r#"Usage: safs write PATH --binding ID (--file LOCAL_UTF8_FILE|- | --content TEXT)
 --content is convenient for short, non-sensitive text. Use --file - for multiline
 or sensitive content so it does not appear in command arguments.
 "#,
         ),
         "delete" => Some(
-            r#"Usage: safs delete --binding ID --path PATH [--input '{"recursive":true}']
+            r#"Usage: safs delete PATH --binding ID [--input '{"recursive":true}']
 recursive=true is required for a non-empty directory.
 "#,
         ),
         "chmod" => Some(
-            r#"Usage: safs chmod --binding ID --path PATH --mode MODE
+            r#"Usage: safs chmod PATH MODE --binding ID
 MODE is exactly three octal digits, for example 644 or 755.
 "#,
         ),
@@ -110,13 +131,14 @@ Example: --input '{"remotePath":"file","localPath":"/absolute/local/target"}'
 "#,
         ),
         "exec" => Some(
-            r#"Usage: safs exec --binding ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
+            r#"Usage: safs exec REMOTE_COMMAND --binding ID [--cwd REMOTE_CWD]
+       safs exec --binding ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
        safs exec --binding ID [--cwd REMOTE_CWD] --command 'REMOTE_COMMAND'
 The complete remote command must be passed as one shell argument.
 "#,
         ),
         "output" => Some(
-            r#"Usage: safs output --binding ID --id ID --stream stdout|stderr [--offset N] [--length N]
+            r#"Usage: safs output ID stdout|stderr --binding ID [--offset N] [--length N]
 Continues a retained, truncated command stream without rerunning the command.
 "#,
         ),
@@ -150,7 +172,11 @@ fn requested_help(args: &[String]) -> Option<Option<&str>> {
         // Skip option values so aliases such as `--command '--help'` and
         // `--content '-h'` remain data rather than triggering CLI help.
         if arg.starts_with("--")
-            && !matches!(arg.as_str(), "--compact" | "--verbose" | "--confirmed")
+            && !matches!(
+                arg.as_str(),
+                "--compact" | "--verbose" | "--confirmed" | "--skills" | "--global"
+            )
+            && !arg.starts_with("--skills=")
         {
             index += 2;
         } else {
@@ -185,6 +211,98 @@ fn usage_error(command: Option<&str>, error: String) -> String {
         "{error}\n\n{}",
         command.and_then(command_help).unwrap_or(HELP).trim_end()
     )
+}
+
+const SAFS_SKILL: &str = include_str!("../../skills/safs-cli/SKILL.md");
+const SAFS_COMMAND_REFERENCE: &str = include_str!("../../skills/safs-cli/references/commands.md");
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SkillTarget {
+    Agents,
+    Claude,
+    Codex,
+    Copilot,
+}
+
+fn parse_skill_target(value: &str) -> Result<SkillTarget, String> {
+    match value {
+        "agents" => Ok(SkillTarget::Agents),
+        "claude" => Ok(SkillTarget::Claude),
+        "codex" => Ok(SkillTarget::Codex),
+        "copilot" => Ok(SkillTarget::Copilot),
+        _ => Err(format!(
+            "Unsupported skill target: {value}. Use agents, claude, codex, or copilot"
+        )),
+    }
+}
+
+fn skill_install_options(args: &[String]) -> Result<Option<(SkillTarget, bool)>, String> {
+    if args.first().map(String::as_str) != Some("install") {
+        return Ok(None);
+    }
+    let mut target = None;
+    let mut global = false;
+    for arg in &args[1..] {
+        match arg.as_str() {
+            "--skills" => {
+                if target.replace(SkillTarget::Agents).is_some() {
+                    return Err("Pass --skills only once".into());
+                }
+            }
+            "-g" | "--global" => {
+                if global {
+                    return Err("Pass -g or --global only once".into());
+                }
+                global = true;
+            }
+            _ if arg.starts_with("--skills=") => {
+                let value = arg.trim_start_matches("--skills=");
+                let parsed = parse_skill_target(value)?;
+                if target.replace(parsed).is_some() {
+                    return Err("Pass --skills only once".into());
+                }
+            }
+            _ => return Err(format!("Invalid option for install: {arg}")),
+        }
+    }
+    Ok(Some((target.ok_or("--skills is required")?, global)))
+}
+
+fn user_home_directory() -> Result<PathBuf, String> {
+    let home = if cfg!(windows) {
+        env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"))
+    } else {
+        env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))
+    };
+    home.filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or("Cannot locate the user home directory".into())
+}
+
+fn skill_directory(base: &Path, target: SkillTarget, global: bool) -> PathBuf {
+    let agent_directory = match (target, global) {
+        (SkillTarget::Agents, _) => ".agents",
+        (SkillTarget::Claude, _) => ".claude",
+        (SkillTarget::Codex, _) => ".codex",
+        (SkillTarget::Copilot, false) => ".github",
+        (SkillTarget::Copilot, true) => ".copilot",
+    };
+    base.join(agent_directory).join("skills").join("safs-cli")
+}
+
+fn install_skill(base: &Path, target: SkillTarget, global: bool) -> Result<PathBuf, String> {
+    let directory = skill_directory(base, target, global);
+    let references = directory.join("references");
+    fs::create_dir_all(&references).map_err(|error| {
+        format!(
+            "Cannot create SAFS skill directory {}: {error}",
+            directory.display()
+        )
+    })?;
+    fs::write(directory.join("SKILL.md"), SAFS_SKILL)
+        .and_then(|_| fs::write(references.join("commands.md"), SAFS_COMMAND_REFERENCE))
+        .map_err(|error| format!("Cannot write SAFS skill: {error}"))?;
+    Ok(directory)
 }
 
 #[cfg(test)]
@@ -263,6 +381,7 @@ fn parse_request(
         _ => return Err("Unknown command; use --help".into()),
     };
     let mut remote_command = None;
+    let mut positional = Vec::new();
     while !args.is_empty() {
         if args[0] == "--" {
             args.remove(0);
@@ -286,7 +405,8 @@ fn parse_request(
             continue;
         }
         if !flag.starts_with("--") {
-            return Err(format!("Invalid option: {flag}"));
+            positional.push(flag);
+            continue;
         }
         if args.is_empty() {
             return Err(format!("{flag} requires a value"));
@@ -320,6 +440,25 @@ fn parse_request(
             Value::String(value)
         };
         values.insert(json_key.into(), value);
+    }
+    let positional_keys: &[&str] = match verb.as_str() {
+        "list" => &["path"],
+        "read" | "edit" | "write" | "delete" => &["path"],
+        "search" => &["query", "path"],
+        "find" => &["name", "path"],
+        "chmod" => &["path", "mode"],
+        "output" => &["id", "stream"],
+        "exec" => &["command"],
+        _ => &[],
+    };
+    if positional.len() > positional_keys.len() {
+        return Err(format!("Too many arguments for {verb}"));
+    }
+    for (key, value) in positional_keys.iter().zip(positional) {
+        if values.contains_key(*key) {
+            return Err(format!("Use either positional {key} or --{key}, not both"));
+        }
+        values.insert((*key).into(), Value::String(value));
     }
     if matches!(verb.as_str(), "search" | "find") {
         if let Some(name) = values.remove("name") {
@@ -705,6 +844,18 @@ fn run() -> Result<i32, String> {
         print!("{}", command.and_then(command_help).unwrap_or(HELP));
         return Ok(0);
     }
+    if let Some((target, global)) =
+        skill_install_options(&args).map_err(|error| usage_error(Some("install"), error))?
+    {
+        let base = if global {
+            user_home_directory()?
+        } else {
+            env::current_dir().map_err(|_| "Cannot determine current directory")?
+        };
+        let directory = install_skill(&base, target, global)?;
+        println!("Installed SAFS skill to {}", directory.display());
+        return Ok(0);
+    }
     let compact = args.iter().any(|arg| arg == "--compact");
     let verbose = args.iter().any(|arg| arg == "--verbose");
     args.retain(|arg| arg != "--compact" && arg != "--verbose");
@@ -810,6 +961,7 @@ mod tests {
             None
         );
         for command in [
+            "install",
             "bind",
             "workspaces",
             "switch",
@@ -832,6 +984,29 @@ mod tests {
         ] {
             assert!(command_help(command).unwrap().starts_with("Usage: safs "));
         }
+    }
+
+    #[test]
+    fn parses_agent_skill_installation_targets() {
+        assert_eq!(
+            skill_install_options(&strings(&["install", "--skills"])).unwrap(),
+            Some((SkillTarget::Agents, false))
+        );
+        assert_eq!(
+            skill_install_options(&strings(&["install", "--skills=codex", "--global"])).unwrap(),
+            Some((SkillTarget::Codex, true))
+        );
+        assert_eq!(
+            skill_directory(Path::new("/repo"), SkillTarget::Agents, false),
+            Path::new("/repo/.agents/skills/safs-cli")
+        );
+        assert_eq!(
+            skill_directory(Path::new("/home/user"), SkillTarget::Copilot, true),
+            Path::new("/home/user/.copilot/skills/safs-cli")
+        );
+        assert!(skill_install_options(&strings(&["install"])).is_err());
+        assert!(skill_install_options(&strings(&["install", "--skills=unknown"])).is_err());
+        assert_eq!(skill_install_options(&strings(&["read"])).unwrap(), None);
     }
 
     #[test]
@@ -1004,6 +1179,72 @@ mod tests {
             assert_eq!(search["query"], "*.ts");
             assert_eq!(search["mode"], "names");
         }
+    }
+
+    #[test]
+    fn accepts_token_efficient_positional_arguments() {
+        let cases: &[(&[&str], &str, &[(&str, &str)])] = &[
+            (
+                &["list", "src", "--binding", "b"],
+                "remote_list",
+                &[("path", "src")],
+            ),
+            (
+                &["read", "README.md", "--binding", "b"],
+                "remote_read",
+                &[("path", "README.md")],
+            ),
+            (
+                &["search", "TODO", "src", "--binding", "b"],
+                "remote_search",
+                &[("query", "TODO"), ("path", "src")],
+            ),
+            (
+                &["find", "*.ts", "test", "--binding", "b"],
+                "remote_search",
+                &[("query", "*.ts"), ("path", "test")],
+            ),
+            (
+                &["chmod", "script.sh", "755", "--binding", "b"],
+                "remote_chmod",
+                &[("path", "script.sh"), ("mode", "755")],
+            ),
+            (
+                &["output", "out", "stdout", "--binding", "b"],
+                "remote_output",
+                &[("outputId", "out"), ("stream", "stdout")],
+            ),
+            (
+                &["exec", "npm test", "--binding", "b"],
+                "run_remote_command",
+                &[("command", "npm test")],
+            ),
+        ];
+        for (arguments, expected_tool, expected_values) in cases {
+            let (tool, values) = request(strings(arguments), "/cwd".into()).unwrap();
+            assert_eq!(&tool, expected_tool, "arguments: {arguments:?}");
+            for (key, value) in *expected_values {
+                assert_eq!(values[*key], *value, "arguments: {arguments:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_excess_positional_arguments() {
+        let duplicate = request(
+            strings(&["read", "a.txt", "--path", "b.txt", "--binding", "b"]),
+            "/cwd".into(),
+        )
+        .unwrap_err();
+        assert!(duplicate.contains("Use either positional path or --path, not both"));
+        assert!(duplicate.contains("Usage: safs read"));
+
+        let excess = request(
+            strings(&["list", "src", "extra", "--binding", "b"]),
+            "/cwd".into(),
+        )
+        .unwrap_err();
+        assert!(excess.contains("Too many arguments for list"));
     }
 
     #[test]

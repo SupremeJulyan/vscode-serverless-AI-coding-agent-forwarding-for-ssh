@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 import test from 'node:test';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
@@ -20,6 +20,50 @@ async function freePort(): Promise<number> {
   ));
   return address.port;
 }
+
+test('native CLI installs its bundled Agent Skill without a router', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-native-skill-'));
+  const executable = bundledNativeCli(
+    process.cwd(), nativeCliPlatform(process.platform, process.arch)
+  );
+  try {
+    await mkdir(join(temporary, 'project'));
+    const installed = await executeCaptured({
+      command: executable,
+      args: ['install', '--skills'],
+      cwd: join(temporary, 'project')
+    });
+    assert.equal(installed.exitCode, 0, installed.stderr);
+    assert.match(installed.stdout, /\.agents[/\\]skills[/\\]safs-cli/);
+    const skillRoot = join(temporary, 'project', '.agents', 'skills', 'safs-cli');
+    const skill = await readFile(join(skillRoot, 'SKILL.md'), 'utf8');
+    const commands = await readFile(join(skillRoot, 'references', 'commands.md'), 'utf8');
+    assert.match(skill, /^---\nname: safs-cli\n/);
+    assert.match(skill, /safs bind --agent/);
+    assert.match(commands, /safs read PATH --binding ID/);
+
+    const globalCodex = await executeCaptured({
+      command: executable,
+      args: ['install', '--skills=codex', '-g'],
+      cwd: join(temporary, 'project'),
+      env: { HOME: temporary, USERPROFILE: temporary }
+    });
+    assert.equal(globalCodex.exitCode, 0, globalCodex.stderr);
+    assert.match(globalCodex.stdout, /\.codex[/\\]skills[/\\]safs-cli/);
+    await readFile(join(temporary, '.codex', 'skills', 'safs-cli', 'SKILL.md'));
+
+    const invalid = await executeCaptured({
+      command: executable,
+      args: ['install', '--skills=unknown'],
+      cwd: join(temporary, 'project')
+    });
+    assert.equal(invalid.exitCode, 1);
+    assert.match(invalid.stderr, /Unsupported skill target/);
+    assert.match(invalid.stderr, /Usage: safs install --skills/);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
 
 test('native CLI binds and executes through the existing SAFS router', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-e2e-'));
@@ -111,8 +155,13 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     ] });
     assert.equal(bind.exitCode, 0, bind.stderr);
     const bindingId = JSON.parse(bind.stdout).bindingId;
+    const positionalRead = await executeCaptured({ command: executable, args: [
+      '--config', config, 'read', 'concise.txt', '--binding', bindingId
+    ] });
+    assert.equal(positionalRead.exitCode, 0, positionalRead.stderr);
+    assert.equal(JSON.parse(positionalRead.stdout).content, 'content:concise.txt');
     const run = await executeCaptured({ command: executable, args: [
-      '--config', config, 'exec', '--binding', bindingId, '--', 'exit 7'
+      '--config', config, 'exec', 'exit 7', '--binding', bindingId
     ] });
     assert.equal(run.exitCode, 7);
     assert.equal(run.stdout, 'native-out');
@@ -176,7 +225,7 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     assert.equal(write.exitCode, 0, write.stderr);
     assert.deepEqual(
       [...new Set(operations)],
-      ['edit', 'read', 'search', 'delete', 'chmod', 'move', 'upload', 'download', 'write']
+      ['read', 'edit', 'search', 'delete', 'chmod', 'move', 'upload', 'download', 'write']
     );
     const batchStarts = activity.filter((event) => event.phase === 'start').length;
     const batch = await executeCaptured({ command: executable, args: [

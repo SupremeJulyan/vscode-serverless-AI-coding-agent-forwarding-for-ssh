@@ -54,18 +54,14 @@ export function streamableHttpMcpInstallPrompt(url: string): string {
   ].join('\n');
 }
 
-export function nativeCliUsagePrompt(): string {
-  return [
-    'Create or replace exactly one block delimited by `<!-- SAFS CLI BEGIN -->` and `<!-- SAFS CLI END -->` in your user-level global persistent instructions, not in the current conversation or project instructions. Preserve every unrelated instruction and do not append a duplicate block. If you do not support user-level global persistent instructions, tell me explicitly.',
-    '<!-- SAFS CLI BEGIN -->',
-    'For tasks where the user explicitly asks to use SAFS for a remote environment: `safs` is an installed global CLI. Start by running `safs bind --agent "<your Agent name>"`, reuse the returned `--binding` in every later command, and consult `safs --help` for syntax. Use structured SAFS commands for every remote file operation; never use local filesystem tools or `safs exec` to read, list, search, write, edit, move, delete, change permissions, upload, or download remote files. Reserve `safs exec` for task commands such as builds and tests.',
-    '<!-- SAFS CLI END -->',
-    'When finished, tell me where you saved the block.'
-  ].join('\n');
+export function globalNativeCliSkill(home: string): string {
+  return path.join(home, '.agents', 'skills', 'safs-cli');
 }
 
-export function nativeCliUninstallPrompt(): string {
-  return 'Remove the single block delimited by `<!-- SAFS CLI BEGIN -->` and `<!-- SAFS CLI END -->` from your user-level global persistent instructions. Remove only that SAFS block, preserve every unrelated instruction, and tell me which file or setting you changed. If the block does not exist, tell me without changing anything else.';
+export async function removeGlobalNativeCliSkill(home: string): Promise<string> {
+  const directory = globalNativeCliSkill(home);
+  await rm(directory, { recursive: true, force: true });
+  return directory;
 }
 
 export function streamableHttpMcpUninstallPrompt(): string {

@@ -28,9 +28,13 @@ test('Unix cleanup removes CLI files and managed profile entries', async () => {
   await mkdir(bin, { recursive: true });
   await writeFile(path.join(bin, 'safs'), 'binary');
   await writeFile(path.join(bin, '.safs-connection.json'), '{}');
+  const skill = path.join(home, '.agents', 'skills', 'safs-cli');
+  await mkdir(skill, { recursive: true });
+  await writeFile(path.join(skill, 'SKILL.md'), 'installed');
   await writeFile(path.join(home, '.profile'), '# SAFS CLI PATH BEGIN\nmanaged\n# SAFS CLI PATH END\nkeep\n');
   await cleanup({ platform: 'linux', home });
   assert.equal(await readFile(path.join(home, '.profile'), 'utf8'), 'keep\n');
   await assert.rejects(readFile(path.join(bin, 'safs')), { code: 'ENOENT' });
   await assert.rejects(readFile(path.join(bin, '.safs-connection.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(skill, 'SKILL.md')), { code: 'ENOENT' });
 });

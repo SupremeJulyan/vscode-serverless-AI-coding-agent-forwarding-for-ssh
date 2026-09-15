@@ -140,7 +140,15 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. Switching to hybrid or CLI mode installs the executable for the current extension environment; `SAFS: Install or Update Global CLI` does the same explicitly in any mode. The executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. In CLI-only mode, click **Enable Agent Forwarding** on the parent connection node or explicitly run `SAFS: Install Agent Forwarding for My Agent`, then paste the automatically copied English prompt into the Agent. The prompt asks the Agent to create or update one marked SAFS block in its user-level global persistent instructions—not only in the current conversation or project—while preserving every other existing rule and avoiding duplicate blocks. `safs --help` provides the actual workflow, and the Agent starts with `safs bind --agent "<Agent name>"`. The uninstall command copies an English prompt that removes only the block with the same markers. Use CLI-only mode when an Agent does not support MCP or when you want a CLI-only workflow. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
+CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. Switching to hybrid or CLI mode installs the executable for the current extension environment; `SAFS: Install or Update Global CLI` does the same explicitly in any mode. The executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. In CLI-only mode, click **Enable Agent Forwarding** on the parent connection node or explicitly run `SAFS: Install Agent Forwarding for My Agent`. This installs the CLI's bundled SAFS Agent Skill globally at `~/.agents/skills/safs-cli`, without copying a prompt or downloading anything. After the Agent restarts, it loads the Skill on demand and starts with `safs bind --agent "<Agent name>"`. The uninstall command removes only that SAFS Skill. Use CLI-only mode when an Agent does not support MCP or when you want a CLI-only workflow. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
+
+You can also install a project-level Skill directly, following the Playwright CLI pattern:
+
+```sh
+safs install --skills
+```
+
+The default target is `.agents/skills/safs-cli` in the current project; add `-g` for the user-level directory. Use `--skills=claude`, `--skills=codex`, or `--skills=copilot` for an Agent-specific directory. Skill content is embedded in the binary, so installation and updates do not require network access.
 
 CLI installation is global and Agent-independent. The Agent name is recorded only when
 `bind` creates a binding; later operations inherit it through `--binding`. The label is
@@ -155,14 +163,14 @@ stdin to avoid quoting long values in the shell:
 ```sh
 safs bind --agent 'Codex'
 binding_id='binding-id-from-safs-bind'
-safs read --binding "$binding_id" --path README.md
+safs read README.md --binding "$binding_id"
 safs find --binding "$binding_id" --name '*.ts'
 safs search --binding "$binding_id" --query TODO --mode files # content matches, not filenames
 printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
   | safs edit --binding "$binding_id" --path README.md --input -
 printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
 safs write --binding "$binding_id" --path short.txt --content 'short text'
-safs exec --binding "$binding_id" --command 'pwd'
+safs exec 'pwd' --binding "$binding_id"
 safs switch --agent 'Codex' --workspace 'workspace-id-from-safs-workspaces' --confirmed
 ```
 

@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
-  nativeCliConnectionPath, nativeCliPlatform, nativeCliUninstallPrompt, nativeCliUsagePrompt,
-  parseNativeCliVersion, removeNativeCli, withoutSafsPathBlock,
+  globalNativeCliSkill, nativeCliConnectionPath, nativeCliPlatform,
+  parseNativeCliVersion, removeGlobalNativeCliSkill, removeNativeCli, withoutSafsPathBlock,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/native-cli';
@@ -17,29 +17,18 @@ test('parses only the stable native CLI version output', () => {
   assert.equal(parseNativeCliVersion('warning: version 1.8.0\n'), undefined);
 });
 
-test('builds global CLI guidance for remote-only Agent operations', () => {
-  const prompt = nativeCliUsagePrompt();
-  assert.match(prompt, /user-level global persistent instructions/);
-  assert.match(prompt, /not in the current conversation or project instructions/);
-  assert.match(prompt, /do not append a duplicate block/);
-  assert.equal(prompt.match(/<!-- SAFS CLI BEGIN -->/gu)?.length, 2);
-  assert.equal(prompt.match(/<!-- SAFS CLI END -->/gu)?.length, 2);
-  assert.match(prompt, /`safs bind --agent/);
-  assert.match(prompt, /reuse the returned `--binding`/);
-  assert.match(prompt, /`safs --help`/);
-  assert.match(prompt, /Use structured SAFS commands for every remote file operation/);
-  assert.match(prompt, /never use local filesystem tools or `safs exec`/);
-  assert.equal(prompt.includes('workspaceRoot'), false);
-  assert.equal(prompt.includes('token='), false);
-  assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
-});
-
-test('builds a scoped prompt for removing persistent CLI rules', () => {
-  const prompt = nativeCliUninstallPrompt();
-  assert.match(prompt, /user-level global persistent instructions/);
-  assert.match(prompt, /Remove only that SAFS block/);
-  assert.match(prompt, /preserve every unrelated instruction/);
-  assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
+test('locates and removes the global SAFS Agent Skill', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'safs-native-skill-home-'));
+  try {
+    const skill = globalNativeCliSkill(home);
+    assert.equal(skill, join(home, '.agents', 'skills', 'safs-cli'));
+    await mkdir(skill, { recursive: true });
+    await writeFile(join(skill, 'SKILL.md'), 'installed');
+    assert.equal(await removeGlobalNativeCliSkill(home), skill);
+    await assert.rejects(readFile(join(skill, 'SKILL.md')), { code: 'ENOENT' });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('selects native binaries for the current extension environment', () => {

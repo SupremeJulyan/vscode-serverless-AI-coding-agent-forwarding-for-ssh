@@ -162,16 +162,19 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
   ]) {
     await access(new URL(`../bin/${executable}`, import.meta.url));
   }
+  await access(new URL('../skills/safs-cli/SKILL.md', import.meta.url));
+  await access(new URL('../skills/safs-cli/references/commands.md', import.meta.url));
   await assert.rejects(access(new URL(
     '../plugins/safs/.codex-plugin/plugin.json', import.meta.url
   )));
 });
 
-test('Agent integration uses copied prompts instead of probing Agent installations', async () => {
+test('Agent integration installs the bundled CLI Skill without probing Agent installations', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
-  assert.ok(nativeCliSource.includes('`safs --help`'));
-  assert.ok(extensionSource.includes('nativeCliUsagePrompt'));
+  assert.ok(nativeCliSource.includes('globalNativeCliSkill'));
+  assert.ok(extensionSource.includes("args: ['install', '--skills', '-g']"));
+  assert.equal(extensionSource.includes('nativeCliUsagePrompt'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
   assert.ok(extensionSource.includes("tagged.searchParams.delete('agent')"));
@@ -316,7 +319,7 @@ test('uses only the unified cross-platform config path', async () => {
   assert.deepEqual(matches, ['**/.safs/config.json']);
 });
 
-test('shows the install prompt only after enabling a parent mount or an explicit command', async () => {
+test('installs forwarding only after enabling a parent mount or an explicit command', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
@@ -333,9 +336,12 @@ test('shows the install prompt only after enabling a parent mount or an explicit
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes("command('installAgentForwarding'"));
   assert.equal(extensionSource.includes('.installAgentForwarding`'), false);
-  assert.ok(extensionSource.includes('await copyAgentForwardingInstallPrompt(vscodeContext)'));
+  assert.ok(extensionSource.includes(
+    'await installAgentForwardingIntegration(vscodeContext, cliExecutable)'
+  ));
   assert.ok(extensionSource.includes('if (!changed) return'));
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
+  assert.ok(extensionSource.includes('removeGlobalNativeCliSkill(os.homedir())'));
   assert.ok(extensionSource.includes('卸载提示词'));
   assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
   assert.equal(extensionSource.includes('hybridAgentInstallPrompt'), false);

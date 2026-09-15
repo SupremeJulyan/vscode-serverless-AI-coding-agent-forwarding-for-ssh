@@ -53,6 +53,9 @@ async function cleanup(options = {}) {
     let pathError;
     try { removeWindowsUserPath(binDirectory, options.run); } catch (error) { pathError = error; }
     await fs.rm(installRoot, { recursive: true, force: true });
+    await fs.rm(path.join(home, '.agents', 'skills', 'safs-cli'), {
+      recursive: true, force: true
+    });
     if (pathError) throw pathError;
     return;
   }
@@ -61,6 +64,9 @@ async function cleanup(options = {}) {
   await Promise.all([
     fs.rm(path.join(binDirectory, 'safs'), { force: true }),
     fs.rm(path.join(binDirectory, '.safs-connection.json'), { force: true }),
+    fs.rm(path.join(home, '.agents', 'skills', 'safs-cli'), {
+      recursive: true, force: true
+    }),
     removeUnixProfileBlock(path.join(home, '.profile')),
     removeUnixProfileBlock(path.join(home, '.zprofile'))
   ]);

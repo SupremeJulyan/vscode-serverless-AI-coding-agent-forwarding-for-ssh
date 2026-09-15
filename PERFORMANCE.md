@@ -78,10 +78,11 @@ all structured operations.
 
 The executable is selected from Windows/macOS/Linux x64/ARM64 repository assets and installed
 as the user-level global `safs` command. Its adjacent private connection file is
-discovered automatically. SAFS writes no AGENTS.md/CLAUDE.md instructions; CLI mode
-copies a prompt for user-level persistent Agent instructions. All modes
-require consistent settings across windows, a window reload and Agent restart on
-migration. Undetected/manual MCP registrations cannot be assumed removed.
+discovered automatically. SAFS writes no AGENTS.md/CLAUDE.md instructions. Instead,
+`safs install --skills` installs the bundled Agent Skill locally (or globally with
+`-g`) without network access; CLI mode's forwarding action runs the global form.
+All modes require consistent settings across windows, a window reload and Agent
+restart on migration. Undetected/manual MCP registrations cannot be assumed removed.
 
 CLI file commands reuse structured backend validation and accept JSON argument
 files for edits/filters/batches. Search preserves grep exit codes (1 for no match,

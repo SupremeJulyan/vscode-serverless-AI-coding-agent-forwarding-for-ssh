@@ -131,7 +131,15 @@ Agent 根据提示词自行判断边界。远程文件的读取、搜索、创�
 
 #### CLI 模式
 
-CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。切换到混合或 CLI 模式会安装当前扩展环境对应的程序；任意模式下也可以运行 `SAFS: 安装或更新全局 CLI` 主动安装或修复。扩展准备 CLI 时会读取其真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。纯 CLI 模式下，在目录树父连接节点点击 **启用 Agent 转发**，或主动运行 `SAFS: 为我的Agent安装转发功能`，再把自动复制的英文提示词粘贴给 Agent；提示词要求 Agent 将唯一的 SAFS 标记块追加或更新到用户级全局持久指令中，而不是只在当前对话或项目中保存，并保留其他现有规则。具体用法由 `safs --help` 提供，Agent 首先运行 `safs bind --agent "<Agent 名称>"`。卸载转发命令会复制按同一标记仅删除该全局 SAFS 规则的英文提示词。仅当 Agent 不支持 MCP 或希望使用纯命令行工作流时选择 CLI 模式。原生 CLI 不再提供 stdio `mcp-bridge`；MCP 模式直接使用提示词中的 Streamable HTTP URL。
+CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。切换到混合或 CLI 模式会安装当前扩展环境对应的程序；任意模式下也可以运行 `SAFS: 安装或更新全局 CLI` 主动安装或修复。扩展准备 CLI 时会读取其真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。纯 CLI 模式下，在目录树父连接节点点击 **启用 Agent 转发**，或主动运行 `SAFS: 为我的Agent安装转发功能`，会把 CLI 内置的 SAFS Agent Skill 安装到用户级 `~/.agents/skills/safs-cli`，无需复制提示词，也不会联网下载。重启 Agent 后，它会按需加载 Skill，并首先运行 `safs bind --agent "<Agent 名称>"`。卸载转发命令只移除该 SAFS Skill。仅当 Agent 不支持 MCP 或希望使用纯命令行工作流时选择 CLI 模式。原生 CLI 不再提供 stdio `mcp-bridge`；MCP 模式直接使用提示词中的 Streamable HTTP URL。
+
+也可以像 Playwright CLI 一样直接安装项目级 Skill：
+
+```sh
+safs install --skills
+```
+
+默认目标是当前项目的 `.agents/skills/safs-cli`；`-g` 安装到用户目录。针对特定 Agent 可使用 `--skills=claude`、`--skills=codex` 或 `--skills=copilot`。Skill 内容随二进制内置，因此安装和更新都不需要网络。
 
 CLI 安装是全局且与 Agent 无关的。`bind` 创建 binding 时才记录 Agent 名称；后续操作
 通过 `--binding` 自动沿用该名称，用于活动视图、日志和 binding 隔离，不参与本机路由认证。
@@ -144,14 +152,14 @@ CLI 安装是全局且与 Agent 无关的。`bind` 创建 binding 时才记录 A
 ```sh
 safs bind --agent 'Codex'
 binding_id='binding-id-from-safs-bind'
-safs read --binding "$binding_id" --path README.md
+safs read README.md --binding "$binding_id"
 safs find --binding "$binding_id" --name '*.ts'
 safs search --binding "$binding_id" --query TODO --mode files # 内容匹配文件，不是文件名
 printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
   | safs edit --binding "$binding_id" --path README.md --input -
 printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
 safs write --binding "$binding_id" --path short.txt --content 'short text'
-safs exec --binding "$binding_id" --command 'pwd'
+safs exec 'pwd' --binding "$binding_id"
 safs switch --agent 'Codex' --workspace 'workspace-id-from-safs-workspaces' --confirmed
 ```
 

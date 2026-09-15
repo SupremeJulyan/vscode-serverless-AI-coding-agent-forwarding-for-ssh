@@ -1,7 +1,7 @@
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
-  ensureUnixCliPath, globalNativeCli, installNativeCli,
-  nativeCliConnectionPath, nativeCliPlatform, nativeCliUninstallPrompt, nativeCliUsagePrompt,
+  ensureUnixCliPath, globalNativeCli, installNativeCli, removeGlobalNativeCliSkill,
+  nativeCliConnectionPath, nativeCliPlatform,
   parseNativeCliVersion,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt, windowsUserPathUpdatePlan
 } from './native-cli';
@@ -3888,13 +3888,21 @@ async function askAgentName(title: string): Promise<string | undefined> {
   return agentName.trim();
 }
 
-async function copyAgentForwardingInstallPrompt(
-  context: vscode.ExtensionContext
+async function installAgentForwardingIntegration(
+  context: vscode.ExtensionContext, cliExecutable?: string
 ): Promise<void> {
   if (agentInterface() === 'cli') {
-    await vscode.env.clipboard.writeText(nativeCliUsagePrompt());
+    if (!cliExecutable) throw new Error('SAFS CLI 尚未安装');
+    const result = await executeCaptured({
+      command: cliExecutable,
+      args: ['install', '--skills', '-g']
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`SAFS Agent Skill 安装失败：${result.stderr.trim() || `exit ${result.exitCode}`}`);
+    }
+    bridgeOutput?.info(`[Agent CLI] ${result.stdout.trim()}`);
     void vscode.window.showInformationMessage(
-      'SAFS：CLI 规则安装提示已复制，请粘贴到 Agent。'
+      'SAFS：Agent Skill 已安装，请重启 Agent。'
     );
     return;
   }
@@ -3960,10 +3968,10 @@ async function updateAiForwardEnabled(
     if (cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
     }
-    // Installation input is intentionally coupled only to the parent tree
+    // Agent integration installation is intentionally coupled only to the parent tree
     // node's disabled -> enabled transition. Startup, mode changes and other
-    // windows prepare transports silently and must never display this prompt.
-    await copyAgentForwardingInstallPrompt(vscodeContext);
+    // windows prepare transports silently and must never install a Skill or display a prompt.
+    await installAgentForwardingIntegration(vscodeContext, cliExecutable);
     return;
   }
   const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
@@ -4342,13 +4350,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (result.cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${result.cliExecutable}`);
     }
-    await copyAgentForwardingInstallPrompt(context);
+    await installAgentForwardingIntegration(context, result.cliExecutable);
   });
   command('uninstallAgentForwarding', async () => {
     if (agentInterface() === 'cli') {
-      await vscode.env.clipboard.writeText(nativeCliUninstallPrompt());
+      const removed = await removeGlobalNativeCliSkill(os.homedir());
+      bridgeOutput?.info(`[Agent CLI] 已移除全局 Agent Skill：${removed}`);
       void vscode.window.showInformationMessage(
-        'SAFS：CLI 规则卸载提示已复制，请粘贴到 Agent。'
+        'SAFS：Agent Skill 已移除，请重启 Agent。'
       );
       return;
     }
