@@ -253,14 +253,16 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     private readonly remoteCwd?: string,
     private readonly onFailed?: (error: Error) => void,
     private readonly log?: (message: string) => void,
-    private readonly onCwd?: (remoteCwd: string) => void
+    private readonly onCwd?: (remoteCwd: string) => void,
+    private readonly connectionHint?: string
   ) {
     this.password = password;
   }
 
   open(initialDimensions?: vscode.TerminalDimensions): void {
     if (initialDimensions) this.dimensions = initialDimensions;
-    this.writeEmitter.fire(`SAFS: 正在连接 ${this.host.name}…\r\n`);
+    const hint = this.connectionHint ? `（${this.connectionHint}）` : '';
+    this.writeEmitter.fire(`SAFS: 正在连接 ${this.host.name}…${hint}\r\n`);
     const config: ConnectConfig = {
       host: this.host.ip,
       port: this.host.port ?? 22,

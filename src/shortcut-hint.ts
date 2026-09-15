@@ -14,3 +14,8 @@ export function remoteShortcutKeys(platform: PlatformKind): RemoteShortcutKeys {
   }
   return { openFolder: 'Ctrl+Alt+R', openTerminal: 'Ctrl+Alt+T' };
 }
+
+export function remoteConnectionShortcutHint(platform: PlatformKind): string {
+  const shortcuts = remoteShortcutKeys(platform);
+  return `快捷键：打开目录 ${shortcuts.openFolder} / 终端 ${shortcuts.openTerminal}`;
+}

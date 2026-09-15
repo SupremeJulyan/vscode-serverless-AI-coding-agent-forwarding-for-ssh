@@ -83,7 +83,7 @@ import {
 import { remoteCommandBoundaryViolation } from './remote-command-boundary';
 import { proxyEnvironmentWarning } from './proxy-environment';
 import { testLoopbackProxy } from './proxy-diagnostic';
-import { remoteShortcutKeys } from './shortcut-hint';
+import { remoteConnectionShortcutHint, remoteShortcutKeys } from './shortcut-hint';
 import {
   TerminalCommandOutputCapture, terminalForwardingCommand
 } from './terminal-command-forwarding';
@@ -2366,7 +2366,8 @@ async function openTerminal(
               entry.remoteCwd = reportedCwd;
               queueAgentCommandTerminalRefresh(created, reportedCwd);
             }
-          }
+          },
+          remoteConnectionShortcutHint(platformAdapter.kind)
         );
         created = vscode.window.createTerminal({
           name: terminalName,
