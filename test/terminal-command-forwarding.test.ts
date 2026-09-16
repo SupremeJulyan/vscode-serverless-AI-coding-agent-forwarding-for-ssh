@@ -52,6 +52,27 @@ test('can probe the live terminal directory without forcing a cwd', {
   });
 });
 
+test('reportCwd emits the OSC 633 cwd sequence before the BEGIN marker', {
+  skip: process.platform === 'win32'
+}, () => {
+  const plan = terminalForwardingCommand(
+    'printf hello', undefined, 'ddeeff00c0ffee1234567890', true
+  );
+  assert.match(plan.commandLine, /633;P;Cwd=%s/);
+  assert.match(plan.commandLine, /SAFS_AGENT_BEGIN_ddeeff00c0ffee1234567890/);
+  assert.equal(plan.commandLine.includes('cd --'), false);
+  const processResult = spawnSync('/bin/bash', ['-c', plan.commandLine], {
+    cwd: '/tmp', encoding: 'utf8'
+  });
+  assert.match(processResult.stdout, /\u001b\]633;P;Cwd=\/tmp\u0007/);
+  const capture = new TerminalCommandOutputCapture(
+    plan.startMarker, plan.endMarkerPrefix, 1024
+  );
+  assert.deepEqual(capture.push(processResult.stdout), {
+    exitCode: 0, stdout: 'hello', stderr: '', truncated: false
+  });
+});
+
 test('captures split terminal output markers and the exit code', () => {
   const id = '0123456789abcdef01234567';
   const plan = terminalForwardingCommand('echo hello', '/work', id);

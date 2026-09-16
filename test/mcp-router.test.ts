@@ -200,6 +200,8 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
     assert.equal(bound.ok, true);
     assert.equal(bound.result.workspace.terminalCommandOnly, true);
     assert.match(bound.result.cliInstructions, /Use only safs exec/);
+    assert.match(bound.result.cliInstructions, /workspaceRoot|workspace root|selected workspace/i);
+    assert.match(bound.result.cliInstructions, /create or modify files inside the selected workspaceRoot/i);
     assert.match(bound.result.cliInstructions, /Do not pass --cwd/);
     const bindingId = bound.result.bindingId;
 

@@ -367,7 +367,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   /** Execute through this visible PTY, preserving sudo/su identity and the live environment. */
   executeForwardedCommand(
     command: string, remoteCwd: string | undefined, signal?: AbortSignal,
-    maxOutputBytes = 1024 * 1024, hideEcho = true
+    maxOutputBytes = 1024 * 1024, hideEcho = true, reportCwd = true
   ): Promise<Ssh2CommandResult> {
     if (this.closed || !this.stream) {
       return Promise.reject(new Error('所选 SAFS 终端尚未连接或已经关闭'));
@@ -379,7 +379,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
       return Promise.reject(new Error('Remote terminal command was cancelled'));
     }
     const executionId = randomBytes(12).toString('hex');
-    const plan = terminalForwardingCommand(command, remoteCwd, executionId);
+    const plan = terminalForwardingCommand(command, remoteCwd, executionId, reportCwd);
     return new Promise<Ssh2CommandResult>((resolve, reject) => {
       let echoHiding = hideEcho;
       const restoreEcho = () => {

@@ -9,7 +9,7 @@ const workspaceInstructions = [
   'For SAFS remote operations, use the MCP tools only. Never pass remote paths to local filesystem tools or a local shell.',
   'Relative paths use the bound workspace root. Use search to locate relevant files and bounded reads for evidence; batch independent selections with remote_read_many.',
   'Prefer remote_edit for small edits and remote_write for full replacements. When available, use structured delete/move/chmod tools for those changes.',
-  'Structured mutation tools are strictly limited to the selected workspace root. run_remote_command is not a general-purpose filesystem sandbox; never use it or shell redirection for file operations or to bypass a rejected structured operation.',
+  'Command execution and shell redirection are allowed only inside the selected workspaceRoot. They are rejected when they change directory or write outside the workspace root. Prefer structured SAFS file tools when available for exact, auditable edits.',
   'Inspect truncation and per-item status. For commands, a nonzero exitCode means failure. For searches, inspect status. Continue reads with returned cursors/offsets; fetch retained output with remote_output instead of rerunning commands. Binary/large transfers use transfer tools when available.'
 ].join(' ');
 
@@ -26,12 +26,14 @@ export const routedAgentMcpInstructions = workspaceInstructions + ' ' + [
 export const terminalAgentMcpInstructions = [
   'Only the selected visible SAFS terminal is available.',
   'Use run_remote_command for remote commands. It runs in the terminal directory shown as workspaceRoot and inherits that terminal\'s current user and environment.',
+  'Shell commands may create or modify files inside the selected workspaceRoot, but they are rejected when they change directory or write outside it.',
   'SAFS file, search, transfer, workspace-selection, and retained-output tools are disabled until terminal mode is stopped in Agent Activity.'
 ].join(' ');
 
 export const terminalCliInstructions = [
   'This binding is in SAFS terminal-only mode.',
   'Use only safs exec --binding <bindingId> -- <command>. Do not pass --cwd.',
+  'Commands may create or modify files inside the selected workspaceRoot, but they are rejected if they change directory or write outside that workspaceRoot.',
   'All SAFS file, search, transfer, batch, and retained-output commands are disabled until terminal mode is stopped in Agent Activity.'
 ].join(' ');
 

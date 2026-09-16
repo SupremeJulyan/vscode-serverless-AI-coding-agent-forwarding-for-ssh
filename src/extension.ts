@@ -1950,7 +1950,7 @@ async function executeWithAgentCommandTerminal(
   try {
     const result = info.pty
       ? await info.pty.executeForwardedCommand(
-          command, remoteCwd, signal, maxOutputBytes,
+          command, undefined, signal, maxOutputBytes,
           settings().get<boolean>('agentTerminalHideAgentEcho', true)
         )
       : await executeWithTerminalShellIntegration(
@@ -2027,7 +2027,8 @@ async function executeTerminalOnlyCommand(input: {
     );
     if (timedOut) throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
     if (!result) throw new Error('The selected SAFS terminal is no longer available.');
-    return { workspaceRoot: terminalCwd, ...result };
+    const workspaceRoot = liveAgentCommandTerminalCwd(terminal, info) ?? terminalCwd;
+    return { workspaceRoot, ...result };
   } catch (error) {
     if (timedOut) throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
     throw error;
@@ -3039,8 +3040,13 @@ async function executeRemoteCommand(
       );
       if (timedOut) throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
       if (result) {
+        // 命令本身不会 cd，始终继承终端实时目录；执行结束后回读一次工作区，
+        // 使 sudo/su 后首次执行的结果与面板/发布的工作区保持一致。
+        const liveCwd = terminalInfo
+          ? liveAgentCommandTerminalCwd(terminal, terminalInfo)
+          : terminalCwd;
         return {
-          remoteCwd: terminalCwd,
+          remoteCwd: liveCwd ?? terminalCwd,
           ...(retainOutput ? { responseBudget } : {}),
           ...result
         };

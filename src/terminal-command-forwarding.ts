@@ -9,7 +9,8 @@ export interface TerminalCommandCaptureResult {
 
 /** Build a shell-neutral wrapper that preserves the terminal's current user and environment. */
 export function terminalForwardingCommand(
-  command: string, remoteCwd: string | undefined, executionId: string
+  command: string, remoteCwd: string | undefined, executionId: string,
+  reportCwd = false
 ): { commandLine: string; startMarker: string; endMarkerPrefix: string } {
   if (!/^[a-f0-9]{24}$/u.test(executionId)) {
     throw new Error('Invalid terminal forwarding execution id');
@@ -19,7 +20,14 @@ export function terminalForwardingCommand(
   const inner = remoteCwd === undefined
     ? command
     : `cd -- ${shellQuote(remoteCwd)} && ${command}`;
+  // reportCwd emits the OSC 633 cwd sequence before the BEGIN marker so the
+  // built-in PTY's RemoteCwdOscTracker keeps the workspace in sync even for a
+  // sudo/su 子 Shell, whose own shell integration is not available.
+  const cwdReport = reportCwd
+    ? ["printf '\\033]633;P;Cwd=%s\\007' \"$PWD\""]
+    : [];
   const outer = [
+    ...cwdReport,
     `printf '\\036SAFS_AGENT_BEGIN_${executionId}\\037'`,
     `/bin/sh -c ${shellQuote(inner)}`,
     '__safs_agent_status=$?',
