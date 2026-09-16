@@ -10,7 +10,6 @@ export function shouldUseBuiltinSshTerminal(
   kind: PlatformKind, host: HostConfig, forceSystemSsh = false
 ): boolean {
   return !forceSystemSsh
-    && Boolean(host.password)
-    && !host.private_key_path
+    && (Boolean(host.password) || Boolean(host.private_key_path))
     && !(kind === 'wsl' && host.vpn === true);
 }

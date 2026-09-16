@@ -1785,7 +1785,8 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
   }
   let terminalCwd: string;
   try {
-    terminalCwd = await probeAgentCommandTerminalCwd(terminal, info);
+    // 再次点击终端模式＝强制向终端转发 pwd，实测 sudo/su 后的工作区。
+    terminalCwd = await probeAgentCommandTerminalCwd(terminal, info, refreshingSelectedTerminal);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     bridgeOutput?.error(`[Agent 终端转发] 无法确定终端目录：${detail}`);
@@ -1860,14 +1861,19 @@ async function executeWithTerminalShellIntegration(
 
 async function probeAgentCommandTerminalCwd(
   terminal: vscode.Terminal,
-  info: NonNullable<ReturnType<typeof managedRemoteTerminals.get>>
+  info: NonNullable<ReturnType<typeof managedRemoteTerminals.get>>,
+  forceProbe = false
 ): Promise<string> {
   // Prefer the live-tracked directory (shell integration / pty cwd tracker) so
   // enabling terminal mode never depends on executing `pwd` while the terminal
-  // is busy running another Agent command.
-  const tracked = reportedRemoteTerminalCwd(terminal, info);
-  if (tracked && path.posix.isAbsolute(tracked)) {
-    return path.posix.normalize(tracked);
+  // is busy running another Agent command. Forced probing (e.g. re-clicking the
+  // terminal mode button) always asks the terminal itself: a sudo/su 子 Shell
+  // has no shell integration, so its live cwd can only be obtained via `pwd`.
+  if (!forceProbe) {
+    const tracked = reportedRemoteTerminalCwd(terminal, info);
+    if (tracked && path.posix.isAbsolute(tracked)) {
+      return path.posix.normalize(tracked);
+    }
   }
   if (busyAgentCommandTerminals.has(terminal)) {
     throw new Error('所选终端正在执行另一条 Agent 命令');
