@@ -138,12 +138,19 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
   const client = new Client({ name: 'terminal-agent', version: '1.0.0' });
   try {
     await backend.start();
-    workspaces = [record('terminal-window', backend.url, {
-      workspaceRoot: '/home/switched-user/project',
-      agentCwd: '/local/project',
-      focused: false,
-      terminalCommandOnly: true
-    })];
+    workspaces = [
+      record('ordinary-window', backend.url, {
+        workspaceRoot: '/home/ordinary/project',
+        agentCwd: '/local/project',
+        focused: true
+      }),
+      record('terminal-window', backend.url, {
+        workspaceRoot: '/home/switched-user/project',
+        agentCwd: '/local/project',
+        focused: false,
+        terminalCommandOnly: true
+      })
+    ];
     await router.start();
     await client.connect(new StreamableHTTPClientTransport(
       new URL(agentTaggedMcpUrl(router.url, 'Codex'))

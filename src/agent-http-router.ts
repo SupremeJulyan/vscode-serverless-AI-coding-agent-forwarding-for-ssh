@@ -357,9 +357,11 @@ export class AgentHttpRouter {
       }
     }
     if (name === 'cli_list_workspaces') {
+      const workspaces = this.activeToolProfile() === 'terminal'
+        ? this.terminalWorkspaces() : this.workspaces();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
-          workspaces: this.workspaces().map((workspace) => this.selectableWorkspace(workspace))
+          workspaces: workspaces.map((workspace) => this.selectableWorkspace(workspace))
         }) }]
       };
     }
@@ -374,7 +376,9 @@ export class AgentHttpRouter {
           'Run safs bind with --agent NAME so this binding can identify the Agent.'
         );
       }
-      const workspaces = this.workspaces();
+      const allWorkspaces = this.workspaces();
+      const terminalMode = this.activeToolProfile() === 'terminal';
+      const workspaces = terminalMode ? this.terminalWorkspaces() : allWorkspaces;
       if (!workspaces.length) {
         return this.toolError(
           'NO_ACTIVE_REMOTE',
@@ -414,17 +418,22 @@ export class AgentHttpRouter {
         );
       }
       if (!switching) {
-        const canonicalCwd = agentCwd ? canonicalAgentCwd(agentCwd) : '';
-        const matches = canonicalCwd ? workspaces.filter((candidate) => candidate.agentCwd
-          && cwdContains(canonicalAgentCwd(candidate.agentCwd), canonicalCwd)) : [];
-        const longest = matches.reduce(
-          (length, candidate) => Math.max(length, canonicalAgentCwd(candidate.agentCwd!).length),
-          0
-        );
-        const closest = matches.filter(
-          (candidate) => canonicalAgentCwd(candidate.agentCwd!).length === longest
-        );
-        if (closest.length === 1) workspace = closest[0];
+        let closest: DiscoveredAgentWorkspace[] = [];
+        if (terminalMode) {
+          workspace = this.terminalWorkspace();
+        } else {
+          const canonicalCwd = agentCwd ? canonicalAgentCwd(agentCwd) : '';
+          const matches = canonicalCwd ? workspaces.filter((candidate) => candidate.agentCwd
+            && cwdContains(canonicalAgentCwd(candidate.agentCwd), canonicalCwd)) : [];
+          const longest = matches.reduce(
+            (length, candidate) => Math.max(length, canonicalAgentCwd(candidate.agentCwd!).length),
+            0
+          );
+          closest = matches.filter(
+            (candidate) => canonicalAgentCwd(candidate.agentCwd!).length === longest
+          );
+          if (closest.length === 1) workspace = closest[0];
+        }
         if (!workspace) {
           const preferred = this.preferredTargets.get(owner);
           const previous = preferred
@@ -435,7 +444,7 @@ export class AgentHttpRouter {
             recoveredLogicalWorkspace = true;
           }
         }
-        if (!workspace && closest.length === 0) {
+        if (!workspace && !terminalMode && closest.length === 0) {
           const focused = workspaces.filter((candidate) => candidate.focused);
           if (focused.length === 1) workspace = focused[0];
         }
