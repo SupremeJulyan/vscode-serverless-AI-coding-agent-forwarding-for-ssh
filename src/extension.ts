@@ -3758,11 +3758,16 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
           start: (entry) => {
             const location = currentRemoteLocation();
             const folder = registry.get(boundMountName);
-            if (!location || location.mountName !== boundMountName || !folder) return undefined;
+            const terminalInfo = agentCommandTerminal
+              ? managedRemoteTerminals.get(agentCommandTerminal)
+              : undefined;
+            const terminalOnly = !location && terminalInfo?.mount.name === boundMountName;
+            if ((!terminalOnly && (!location || location.mountName !== boundMountName))
+              || !folder) return undefined;
             return agentActivityStore.start({
               ...entry,
               mountName: boundMountName,
-              workspaceRoot: entry.toolName === 'run_remote_command' && agentCommandTerminalCwd
+              workspaceRoot: agentCommandTerminalCwd
                 ? agentCommandTerminalCwd
                 : currentWorkspacePath(folder)
             });
