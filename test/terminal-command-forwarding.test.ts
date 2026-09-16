@@ -86,6 +86,15 @@ test('captures split terminal output markers and the exit code', () => {
   });
 });
 
+test('hides split protocol markers while keeping forwarded command output visible', () => {
+  const id = '0123456789abcdef01234567';
+  const plan = terminalForwardingCommand('printf hello', '/work', id);
+  const capture = new TerminalCommandOutputCapture(plan.startMarker, plan.endMarkerPrefix, 1024);
+  assert.equal(capture.visibleOutput(`prompt ${plan.startMarker.slice(0, 8)}`), '');
+  assert.equal(capture.visibleOutput(`${plan.startMarker.slice(8)}hello${plan.endMarkerPrefix}`), 'prompt hello');
+  assert.equal(capture.visibleOutput('0\x1fprompt$ '), 'prompt$ ');
+});
+
 test('bounds captured terminal output while continuing to find its end marker', () => {
   const id = 'fedcba9876543210fedcba98';
   const plan = terminalForwardingCommand('yes', '/work', id);

@@ -6,12 +6,13 @@ export const agentActivityViewId = 'safs.agentActivity';
 
 export interface AgentTerminalTargetState {
   enabled: boolean;
+  mode?: 'workspace' | 'terminal';
   label?: string;
 }
 
 export interface AgentActivityViewActions {
   terminalTarget(): AgentTerminalTargetState;
-  setTerminalTarget(enabled: boolean): Promise<void>;
+  refreshTerminalTarget(): Promise<void>;
 }
 
 export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -49,9 +50,8 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
           '清空'
         );
         if (selected === '清空') await this.store.clear();
-      } else if (type === 'setTerminalTarget') {
-        const enabled = (message as { enabled?: unknown }).enabled;
-        if (typeof enabled === 'boolean') await this.actions?.setTerminalTarget(enabled);
+      } else if (type === 'refreshTerminalTarget') {
+        await this.actions?.refreshTerminalTarget();
       }
     });
   }
@@ -137,15 +137,11 @@ export function activityViewHtml(webview: vscode.Webview): string {
       margin-bottom: 8px; padding: 7px 8px; border: 1px solid var(--vscode-widget-border);
       border-radius: 6px; background: var(--vscode-editor-background);
     }
-    .mode-switch { display: grid; grid-template-columns: 1fr 1fr; }
-    .mode-switch button { border-radius: 0; }
-    .mode-switch button:first-child { border-radius: 4px 0 0 4px; }
-    .mode-switch button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
-    .mode-switch button.active {
-      color: var(--vscode-button-foreground); background: var(--vscode-button-background);
-      border-color: var(--vscode-button-background);
+    .mode-switch { display: flex; align-items: center; gap: 12px; }
+    .mode-label {
+      color: var(--vscode-descriptionForeground); white-space: nowrap;
     }
-    .mode-switch button.active:hover { background: var(--vscode-button-hoverBackground); }
+    .mode-label.active { font-weight: 700; }
     .agent-mode-detail {
       color: var(--vscode-descriptionForeground); min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -194,10 +190,11 @@ export function activityViewHtml(webview: vscode.Webview): string {
     </div>
     <div><div id="statusTitle" class="status-title">等待 Agent 操作</div><div id="statusDetail" class="status-detail">当前远程窗口</div></div>
   </section>
-  <section class="agent-mode">
+  <section id="agentMode" class="agent-mode" hidden>
     <div class="mode-switch" role="group" aria-label="Agent 工具模式">
-      <button id="workspaceModeButton" class="active" type="button" aria-pressed="true">工作区模式</button>
-      <button id="terminalModeButton" type="button" aria-pressed="false" title="使用或刷新当前聚焦的 SAFS 终端">终端模式</button>
+      <span id="workspaceModeLabel" class="mode-label" hidden>工作区模式</span>
+      <span id="terminalModeLabel" class="mode-label" hidden>终端模式</span>
+      <button id="refreshTerminalTarget" type="button" hidden>刷新工作区</button>
     </div>
     <div id="agentModeDetail" class="agent-mode-detail">使用当前远程工作区</div>
   </section>
@@ -222,8 +219,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const orb = document.getElementById('orb');
     const categoryFilter = document.getElementById('category');
     const statusFilter = document.getElementById('eventStatus');
-    const workspaceModeButton = document.getElementById('workspaceModeButton');
-    const terminalModeButton = document.getElementById('terminalModeButton');
+    const workspaceModeLabel = document.getElementById('workspaceModeLabel');
+    const terminalModeLabel = document.getElementById('terminalModeLabel');
+    const refreshTerminalTarget = document.getElementById('refreshTerminalTarget');
+    const agentMode = document.getElementById('agentMode');
     const agentModeDetail = document.getElementById('agentModeDetail');
     let terminalModeEnabled = false;
     let events = [];
@@ -392,13 +391,18 @@ export function activityViewHtml(webview: vscode.Webview): string {
       if (!event.data) return;
       if (event.data.type === 'state') acceptState(event.data);
       if (event.data.type === 'terminalTarget') {
-        const enabled = event.data.enabled === true;
+        const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'
+          ? event.data.mode
+          : event.data.enabled === true ? 'terminal' : undefined;
+        const enabled = mode === 'terminal';
         terminalModeEnabled = enabled;
-        workspaceModeButton.classList.toggle('active', !enabled);
-        terminalModeButton.classList.toggle('active', enabled);
-        workspaceModeButton.setAttribute('aria-pressed', String(!enabled));
-        terminalModeButton.setAttribute('aria-pressed', String(enabled));
-        agentModeDetail.textContent = enabled
+        agentMode.hidden = !mode;
+        workspaceModeLabel.hidden = mode !== 'workspace';
+        terminalModeLabel.hidden = mode !== 'terminal';
+        refreshTerminalTarget.hidden = mode !== 'terminal';
+        workspaceModeLabel.classList.toggle('active', mode === 'workspace');
+        terminalModeLabel.classList.toggle('active', enabled);
+        agentModeDetail.textContent = mode === 'terminal'
           ? '当前终端：' + (event.data.label || 'SAFS 终端')
           : '使用当前远程工作区';
       }
@@ -406,11 +410,8 @@ export function activityViewHtml(webview: vscode.Webview): string {
     categoryFilter.addEventListener('change', render);
     statusFilter.addEventListener('change', render);
     document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
-    workspaceModeButton.addEventListener('click', function() {
-      if (terminalModeEnabled) vscode.postMessage({ type: 'setTerminalTarget', enabled: false });
-    });
-    terminalModeButton.addEventListener('click', function() {
-      vscode.postMessage({ type: 'setTerminalTarget', enabled: true });
+    refreshTerminalTarget.addEventListener('click', function() {
+      vscode.postMessage({ type: 'refreshTerminalTarget' });
     });
     vscode.postMessage({ type: 'ready' });
   </script>

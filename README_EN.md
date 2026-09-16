@@ -4,7 +4,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote terminal over SSH, without installing VS Code Server on the server. After Agent Forwarding is enabled, agents such as Copilot, Codex, and Claude Code can also read and write files, search code, and run commands in the current remote workspace.
+SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote terminal over SSH, without installing VS Code Server on the server. After Agent Forwarding is enabled, AI Coding Agents such as Copilot, Codex, and Claude Code can also read and write files, search code, and run commands in the current remote workspace.
 
 ![Start Agent Forwarding](images/start-agent-forwarding.gif)
 
@@ -64,22 +64,19 @@ The first time you open the configured remote home from a parent connection node
 
 ### 3. Let an Agent operate the remote workspace
 
-MCP is the default mode:
+**MCP mode** is the default:
 
-1. Click **Enable Agent Forwarding** beside a parent connection node in the SAFS view. The installation prompt appears only when every connection's forwarding switch is off and you enable the first one; enabling more connections does not install again. After all switches are turned off, the next first enable prompts again. You can also explicitly run `SAFS: Install Agent Forwarding for My Agent` to repair the integration.
-2. Enter the Agent name when prompted. The extension copies an English installation prompt containing the local Streamable HTTP URL. Default MCP mode does not install the global CLI.
-3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself. The default mode loads the MCP tool set selected by `safs.agentMcpToolProfile`. SAFS does not detect or modify Agent configuration.
+1. Click **Enable Agent Forwarding** beside a parent connection node in the SAFS view. You can also explicitly run `SAFS: Install Agent Forwarding for My Agent` to repair the integration.
+2. Enter the Agent name when prompted. The extension copies an English installation prompt containing the local Streamable HTTP URL.
+3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself.
 4. Open the remote directory for that connection.
 5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
-6. Tell the Agent: `Use safs to inspect the current remote project and run its tests.`
+6. Tell the Agent: `use safs mcp`. The Agent will ask you to choose which workspace to bind; when it is running inside VS Code, it can bind to the currently open remote workspace automatically.
 
 On its first startup, the extension checks environment variables such as `ALL_PROXY`, `HTTPS_PROXY`, and `HTTP_PROXY`. If proxy environment variables are present and `NO_PROXY` does not fully cover loopback, SAFS warns that local Agent forwarding connections may be affected; this does not mean the proxy application is in global mode. You can set `NO_PROXY=localhost,127.0.0.1,::1` and restart the Agent to bypass the proxy for local forwarding requests.
 
-The warning includes a local connection test button. You can also run `safs.testLocalProxy` from the command palette. It uses curl to request temporary loopback services and reports connectivity and explicit proxy use for `localhost`, `127.0.0.1`, and `::1`. Curl is required; versions before 8.7.0 may not report proxy use. Results reflect the extension process environment, not a separate Agent environment or system TUN routing.
-
-> The MCP endpoint listens only on `127.0.0.1`. The Agent and the VS Code instance running SAFS must be in the same operating-system environment.
-
-`safs.agentInterface` supports two modes:
+You can also switch to **CLI mode**:
+Set `safs.agentInterface` to choose between the two modes:
 
 - `mcp` (default): every operation uses the MCP tool set selected by `safs.agentMcpToolProfile`. Switching to this mode uninstalls the global CLI and removes SAFS-managed Skills from the supported Agent user directories.
 - `cli`: switching to this mode installs or updates the global `safs` CLI and user-level Skill, then copies an MCP removal prompt. Paste it into the Agent, unregister MCP, and restart the Agent. The Agent then runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
@@ -118,11 +115,11 @@ successful, and failed operations. The timeline keeps the newest operation first
 filtered by operation type and status. Consecutive reads, directory listings, and searches
 are grouped automatically.
 
-The **Workspace Mode / Terminal Mode** controls at the top of the panel form a two-way switch,
-with the current mode highlighted. When you select Terminal Mode, SAFS reads the focused remote
-terminal's actual directory and publishes it as the Agent `workspaceRoot`. Commands inherit the
-terminal's current user privileges and exported environment, including after a manual
-`sudo su - user`; the bound terminal and directory are shown below the switch.
+The panel shows only the active **Workspace Mode** or **Terminal Mode**.
+Opening a remote directory uses Workspace Mode; opening an SAFS remote terminal without a remote
+directory uses Terminal Mode. SAFS reads the terminal's actual directory and publishes it as the
+Agent `workspaceRoot`. Commands inherit the terminal's current user privileges and exported
+environment; the bound terminal and directory are shown below the status.
 
 In Terminal Mode, MCP exposes only `run_remote_command`. Even if an Agent cached the earlier tool
 list, calling another tool returns an actionable message directing it to the only available tool,
@@ -132,9 +129,9 @@ available for routing. Once bound to this window, the only remote-operation comm
 as guidance, and `--cwd` cannot override the terminal directory. File, search, transfer,
 workspace-switching, and retained-output tools are unavailable in this mode.
 
-Terminal Mode lasts only for the current window session. Closing the terminal or selecting
-**Workspace Mode** restores the original Agent tools. Do not interact with a foreground program
-in the selected terminal while forwarding is active.
+Terminal Mode lasts only for the current window session. Closing the terminal or opening a remote
+directory restores Workspace Mode. Do not interact with a foreground program in the selected
+terminal while forwarding is active.
 
 The view keeps the latest 200 redacted records for this window. It never stores file
 contents, diffs, stdout, or stderr; commands and errors are persisted only as short,

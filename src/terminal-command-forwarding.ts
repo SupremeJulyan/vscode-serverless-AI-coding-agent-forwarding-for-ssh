@@ -43,7 +43,11 @@ export function terminalForwardingCommand(
 /** Incrementally extracts output between private control-character markers. */
 export class TerminalCommandOutputCapture {
   private pending = '';
+  private visiblePending = '';
   private started = false;
+  private visibleStarted = false;
+  private visibleAwaitingExitCode = false;
+  private visibleFinished = false;
   private awaitingExitCode = false;
   private finished = false;
   private readonly chunks: Buffer[] = [];
@@ -82,6 +86,55 @@ export class TerminalCommandOutputCapture {
     this.pending = this.pending.slice(end + this.endMarkerPrefix.length);
     this.awaitingExitCode = true;
     return this.finishExitCode();
+  }
+
+  visibleOutput(data: string): string {
+    if (!data || this.visibleFinished) return data;
+    this.visiblePending += data;
+    if (!this.visibleStarted) {
+      const start = this.visiblePending.indexOf(this.startMarker);
+      if (start < 0) {
+        const retained = this.startMarker.length - 1;
+        const visible = this.visiblePending.slice(0, -retained || undefined);
+        this.visiblePending = this.tail(this.visiblePending, retained);
+        return visible;
+      }
+      const visible = this.visiblePending.slice(0, start);
+      const remainder = this.visiblePending.slice(start + this.startMarker.length);
+      this.visiblePending = '';
+      this.visibleStarted = true;
+      return visible + this.visibleOutput(remainder);
+    }
+
+    if (this.visibleAwaitingExitCode) {
+      const terminator = this.visiblePending.indexOf('\x1f');
+      if (terminator < 0) {
+        this.visiblePending = this.tail(this.visiblePending, 1);
+        return '';
+      }
+      const visible = this.visiblePending.slice(terminator + 1);
+      this.visiblePending = '';
+      this.visibleFinished = true;
+      return visible;
+    }
+
+    const end = this.visiblePending.indexOf(this.endMarkerPrefix);
+    if (end < 0) {
+      const retained = this.endMarkerPrefix.length - 1;
+      const visible = this.visiblePending.slice(0, -retained || undefined);
+      this.visiblePending = this.tail(this.visiblePending, retained);
+      return visible;
+    }
+    const visible = this.visiblePending.slice(0, end);
+    const terminator = this.visiblePending.indexOf('\x1f', end + this.endMarkerPrefix.length);
+    if (terminator < 0) {
+      this.visiblePending = this.visiblePending.slice(end + this.endMarkerPrefix.length);
+      this.visibleAwaitingExitCode = true;
+      return visible;
+    }
+    this.visiblePending = this.visiblePending.slice(terminator + 1);
+    this.visibleFinished = true;
+    return visible + this.visiblePending;
   }
 
   private finishExitCode(): TerminalCommandCaptureResult | undefined {

@@ -4,7 +4,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SSH 使用远程终端；服务器无需安装 VS Code Server。启用 Agent 转发后，Copilot、Codex、Claude Code 等 Agent 也能在当前远程工作区读写文件、搜索代码和执行命令。
+SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SSH 使用远程终端；服务器无需安装 VS Code Server。启用 Agent 转发后，Copilot、Codex、Claude Code 等 AI Coding Agent 也能在当前远程工作区读写文件、搜索代码和执行命令。
 
 ![启动 Agent 转发](images/start-agent-forwarding.gif)
 
@@ -64,22 +64,19 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 ### 3. 让 Agent 操作远程工作区
 
-默认使用 MCP 模式：
+默认使用 **MCP 模式**：
 
-1. 在 SAFS 视图中点击连接父节点旁的 **启用 Agent 转发**。只有所有连接的转发开关都处于关闭状态时，首次开启任一连接才会显示安装提示；继续开启其他连接不会重复安装。全部关闭后再次首次开启时会重新提示。也可以主动运行 `SAFS: 为我的Agent安装转发功能` 进行修复。
-2. 按提示输入 Agent 名称，扩展会复制一段包含本机 Streamable HTTP URL 的英文安装提示词。默认 MCP 模式不会安装全局 CLI。
-3. 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。默认加载 `safs.agentMcpToolProfile` 选择的 MCP 工具集；SAFS 不会探测或修改 Agent 配置。
+1. 在 SAFS 视图中点击连接父节点旁的 **启用 Agent 转发**。也可以主动运行 `SAFS: 为我的Agent安装转发功能` 进行修复。
+2. 按提示输入 Agent 名称，扩展会复制一段包含本机 Streamable HTTP URL 的英文安装提示词。
+3. 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。
 4. 打开该连接的远程目录。
 5. 重启 Agent 并新建对话，然后通过 `/mcp` 或 MCP 管理界面确认存在 `safs` 服务。
-6. 告诉 Agent：`使用 safs 检查当前远程项目并运行测试`。
+6. 告诉 Agent：`use safs mcp`, Agent 会让你选择绑定哪个工作区（如果Agent在vscode里运行则自动绑定当前打开远程工作区）。
 
 插件首次启动时会检查 `ALL_PROXY`、`HTTPS_PROXY` 和 `HTTP_PROXY` 等环境变量。检测到代理环境变量且 `NO_PROXY` 未完整覆盖本机回环地址时，会提示可能影响 Agent 本机转发连接；这不代表代理软件开启了全局模式。可设置 `NO_PROXY=localhost,127.0.0.1,::1`，然后重启 Agent，让本机转发请求绕过代理。
 
-提示中的“测试本机连接”按钮会执行新命令 `SAFS: 测试本机代理连接`（`safs.testLocalProxy`），也可从命令面板随时运行。测试通过 curl 请求临时本机服务，分别显示 `localhost`、`127.0.0.1` 和 `::1` 的连通性及是否使用显式代理。需要安装 curl；8.7.0 之前的版本可能无法报告代理状态。测试使用扩展进程的环境变量，不代表独立 Agent 的环境或系统 TUN 路由。
-
-> MCP 地址只监听 `127.0.0.1`。Agent 与运行 SAFS 的 VS Code 必须位于同一操作系统环境。
-
-`safs.agentInterface` 支持两种模式：
+也可切换 **CLI 模式**:
+设置 `safs.agentInterface` 支持两种模式：
 
 - `mcp`（默认）：所有操作使用 MCP，加载 `safs.agentMcpToolProfile` 选择的完整或核心工具集；切换到该模式会卸载全局 CLI，并清理 SAFS 安装到各 Agent 用户目录中的 Skill。
 - `cli`：切换到该模式时安装或更新全局 `safs` CLI 与用户级 Skill，同时复制 MCP 卸载提示词；将提示词粘贴给 Agent、完成注销并重启 Agent 后，运行 `safs bind --agent "<Agent 名称>"`，此后完全通过 CLI 操作。
@@ -112,10 +109,10 @@ Agent 根据提示词自行判断边界。远程文件的读取、搜索、创�
 操作。顶部动画显示执行中、成功或失败状态，下方时间线按最新操作优先排列，并可按
 操作类型和状态筛选。连续的读取、列目录和搜索会自动折叠。
 
-面板顶部的 **工作区模式 / 终端模式** 是二选一切换按钮，当前模式会高亮。切换到终端
-模式时，SAFS 先从当前聚焦的远程终端读取实际目录，并把它作为 Agent 的
-`workspaceRoot`；命令继承该终端当前的用户权限和环境变量（例如手动执行
-`sudo su - user` 后），按钮下方会显示绑定的终端及目录。
+面板顶部只显示当前生效的 **工作区模式** 或 **终端模式**。
+打开远程目录时使用工作区模式；没有打开远程目录、只打开 SAFS 远程终端时使用终端模式。
+SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命令继承该终端当前的用户
+权限和环境变量，下方会显示绑定的终端及目录。
 
 终端模式下，MCP 只暴露 `run_remote_command` 一个工具。即使 Agent 缓存了切换前的工具
 列表，调用其他工具时也会收到明确提示，改用唯一可用的 `run_remote_command`。CLI 是所有
@@ -124,8 +121,8 @@ Agent 根据提示词自行判断边界。远程文件的读取、搜索、创�
 会返回该命令提示，并禁止用 `--cwd` 覆盖终端目录。文件、搜索、传输、工作区切换和长输出
 续读工具在此模式下均不可用。
 
-终端模式只在当前窗口会话内有效；终端关闭或点击 **工作区模式** 后会恢复原来的 Agent
-工具。转发期间不要在该终端中同时操作前台程序。
+终端模式只在当前窗口会话内有效；终端关闭或打开远程目录后会恢复工作区模式。转发期间
+不要在该终端中同时操作前台程序。
 
 活动视图仅保留当前窗口最近 200 条脱敏记录；文件正文、Diff、命令输出不会写入记录，
 命令和错误只保存经过脱敏的短摘要。“清空”不会删除

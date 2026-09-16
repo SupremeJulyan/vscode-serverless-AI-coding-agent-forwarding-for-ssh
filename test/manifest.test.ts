@@ -251,7 +251,11 @@ test('SAFS MCP is opt-in for remote context instead of mandatory in every worksp
   assert.ok(tools.includes('Use exactly one of two forms'));
   assert.ok(tools.includes('receiving an explicit user choice in a later turn'));
   const extension = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extension.includes('callback((options.input ?? {}) as T)'));
+  assert.equal(extension.includes('vscode.lm.registerTool'), false);
+  assert.equal(extension.includes("'safs_listRemoteFiles'"), false);
+  assert.equal(extension.includes("'safs_runRemoteCommand'"), false);
+  assert.match(extension, /prepareOpenedTerminalForAgent\(/);
+  assert.match(extension, /const mountName = location\?\.mountName \?\? terminalInfo\?\.mount\.name/);
   assert.ok(direct.includes('currentFile(input)'));
   assert.equal(direct.includes('resolve_workspace_execution'), false);
   assert.equal(router.includes('resolve_workspace_execution'), false);

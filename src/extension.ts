@@ -932,6 +932,7 @@ async function openRemoteDirectory(): Promise<void> {
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, resolved);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, resolved);
   await recordDirectoryHistory(vscodeContext, mount.name, resolved);
+  await setAgentCommandTerminalMode(false);
   agentTrace('Open', `创建新窗口打开远程目录：${resolved}`);
   await vscode.commands.executeCommand(
     'vscode.openFolder', vscode.Uri.parse(folderUri(folder, resolved)), true
@@ -946,6 +947,7 @@ async function switchRemoteDirectory(): Promise<void> {
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, resolved);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, resolved);
   await recordDirectoryHistory(vscodeContext, mount.name, resolved);
+  await setAgentCommandTerminalMode(false);
   agentTrace('Open', `切换远程目录：${previousPath ?? '<local>'} -> ${resolved}`);
   await vscode.commands.executeCommand(
     'vscode.openFolder', vscode.Uri.parse(folderUri(folder, resolved))
@@ -1704,15 +1706,29 @@ function currentRemoteLocation(): { mountName: string; remotePath: string } | un
 
 // ---- openTerminal (aligned with main) ----
 
-function agentCommandTerminalState(): { enabled: boolean; label?: string } {
+function agentCommandTerminalState(): {
+  enabled: boolean; mode?: 'workspace' | 'terminal'; label?: string;
+} {
+  if (currentRemoteLocation()) return { enabled: false, mode: 'workspace' };
   const terminal = agentCommandTerminal;
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
   if (!terminal || !info || !agentCommandTerminalCwd) return { enabled: false };
-  return { enabled: true, label: `${terminal.name} · ${agentCommandTerminalCwd}` };
+  return {
+    enabled: true,
+    mode: 'terminal',
+    label: `${terminal.name} · ${agentCommandTerminalCwd}`
+  };
 }
 
 async function refreshAgentCommandTerminalState(): Promise<void> {
   await agentActivityView?.updateTerminalTarget();
+}
+
+async function refreshAgentCommandTerminal(): Promise<void> {
+  const terminal = agentCommandTerminal;
+  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+  if (!terminal || !info || currentRemoteLocation()) return;
+  await enableAgentCommandTerminal(terminal, info, true);
 }
 
 async function applyAgentCommandTerminalCwd(
@@ -1762,8 +1778,8 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     return;
   }
   const location = currentRemoteLocation();
-  if (!location || location.mountName !== info.mount.name) {
-    void vscode.window.showWarningMessage('SAFS：所选终端不属于当前远程工作区。');
+  if (location) {
+    await refreshAgentCommandTerminalState();
     return;
   }
   if (!info.pty && !terminal.shellIntegration) {
@@ -1783,10 +1799,18 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     );
     if (confirmed !== '切换到终端模式') return;
   }
+  await enableAgentCommandTerminal(terminal, info, refreshingSelectedTerminal);
+}
+
+async function enableAgentCommandTerminal(
+  terminal: vscode.Terminal,
+  info: NonNullable<ReturnType<typeof managedRemoteTerminals.get>>,
+  forceProbe = false
+): Promise<void> {
   let terminalCwd: string;
   try {
     // 再次点击终端模式＝强制向终端转发 pwd，实测 sudo/su 后的工作区。
-    terminalCwd = await probeAgentCommandTerminalCwd(terminal, info, refreshingSelectedTerminal);
+    terminalCwd = await probeAgentCommandTerminalCwd(terminal, info, forceProbe);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     bridgeOutput?.error(`[Agent 终端转发] 无法确定终端目录：${detail}`);
@@ -1798,11 +1822,29 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
   info.remoteCwd = terminalCwd;
   await refreshAgentCommandTerminalState();
   await publishAgentWorkspace(vscodeContext);
-  const action = refreshingSelectedTerminal ? '已刷新终端专用模式' : '已启用终端专用模式';
+  const action = forceProbe ? '已刷新终端专用模式' : '已启用终端专用模式';
   bridgeOutput?.warn(`[Agent 终端转发] ${action}：${terminal.name}；mount=${
     info.mount.name
   }；cwd=${terminalCwd}`);
   terminal.show(false);
+}
+
+async function prepareOpenedTerminalForAgent(
+  terminal: vscode.Terminal,
+  info: NonNullable<ReturnType<typeof managedRemoteTerminals.get>>
+): Promise<void> {
+  if (!currentRemoteLocation()) {
+    await enableAgentCommandTerminal(terminal, info);
+  } else {
+    await refreshAgentCommandTerminalState();
+  }
+  const forwarding = vscodeContext.globalState
+    .get<string[]>(aiForwardMountsKey, []).includes(info.mount.name);
+  if (!forwarding) return;
+  startAgentHttpRouterLeadership(vscodeContext);
+  await ensureAgentHttpRouter(vscodeContext);
+  const server = await ensureAgentMcpServer(vscodeContext);
+  if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
 }
 
 async function executeWithTerminalShellIntegration(
@@ -1884,8 +1926,7 @@ async function probeAgentCommandTerminalCwd(
   try {
     const result = info.pty
       ? await info.pty.executeForwardedCommand(
-          'pwd -P', undefined, controller.signal, 16_384,
-          settings().get<boolean>('agentTerminalHideAgentEcho', true)
+          'pwd -P', undefined, controller.signal, 16_384
         )
       : await executeWithTerminalShellIntegration(
           terminal, 'pwd -P', undefined, controller.signal, 16_384
@@ -1950,8 +1991,7 @@ async function executeWithAgentCommandTerminal(
   try {
     const result = info.pty
       ? await info.pty.executeForwardedCommand(
-          command, undefined, signal, maxOutputBytes,
-          settings().get<boolean>('agentTerminalHideAgentEcho', true)
+          command, undefined, signal, maxOutputBytes
         )
       : await executeWithTerminalShellIntegration(
           terminal, command, remoteCwd, signal, maxOutputBytes
@@ -2288,6 +2328,10 @@ async function openTerminal(
     });
     if (existingTerminal) {
       existingTerminal.show();
+      const existingInfo = managedRemoteTerminals.get(existingTerminal);
+      if (existingInfo) {
+        await prepareOpenedTerminalForAgent(existingTerminal, existingInfo);
+      }
       return { terminal: existingTerminal, created: false };
     }
   }
@@ -2438,6 +2482,7 @@ async function openTerminal(
       }, terminalCredentialTtlMs);
     }
     terminal.show();
+    await prepareOpenedTerminalForAgent(terminal, managedRemoteTerminals.get(terminal)!);
     return { terminal, created: true };
   } finally {
     openingTerminalIds.delete(terminalId);
@@ -2602,19 +2647,6 @@ async function mountAndFolder(mountName: string): Promise<{
   const mount = config.mounts.find((candidate) => candidate.name === mountName);
   if (!mount) throw new Error(`Remote mount does not exist: ${mountName}`);
   return { mount, folder: await ensureFolder(mount) };
-}
-
-async function forwardedMountName(requested?: string): Promise<string> {
-  const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
-  if (requested) {
-    if (!enabled.has(requested)) throw new Error(`Agent forwarding is not enabled: ${requested}`);
-    return requested;
-  }
-  const current = currentRemoteLocation()?.mountName;
-  if (current && enabled.has(current)) return current;
-  if (enabled.size === 1) return [...enabled][0];
-  if (enabled.size === 0) throw new Error('Agent forwarding is not enabled.');
-  throw new Error('Multiple Agent forwarding targets are enabled; provide mountName.');
 }
 
 function windowBoundMountName(boundMountName: string, requested?: string): string {
@@ -3157,12 +3189,6 @@ async function executeRemoteCommand(
   }
 }
 
-async function runRemote(input: {
-  mountName: string; command: string; remoteCwd?: string; source?: string; agentName?: string;
-}): Promise<unknown> {
-  return executeRemoteCommand(vscodeContext, { ...input, source: input.source ?? 'mcp' });
-}
-
 async function remoteSearch(input: RemoteSearchOptions & {
   mountName: string; agentName?: string; captureForMcp?: boolean;
 }): Promise<unknown> {
@@ -3612,8 +3638,11 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
   if (!mcp) {
     const token = await agentMcpToken(context);
     const location = currentRemoteLocation();
-    if (!location) throw new Error('当前窗口不是 Serverless Remote 工作区');
-    const boundMountName = location.mountName;
+    const terminalInfo = agentCommandTerminal
+      ? managedRemoteTerminals.get(agentCommandTerminal)
+      : undefined;
+    const boundMountName = location?.mountName ?? terminalInfo?.mount.name;
+    if (!boundMountName) throw new Error('当前窗口不是 Serverless Remote 工作区');
     agentTrace('MCP', `创建窗口级 MCP，绑定挂载 ${boundMountName}`);
     mcp = new AgentMcpServer(
       settings().get<number>('agentMcpPort', 0),
@@ -3625,11 +3654,15 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
         ),
         currentWorkspace: async () => {
           const location = currentRemoteLocation();
-          if (!location) return null;
+          const terminalInfo = agentCommandTerminal
+            ? managedRemoteTerminals.get(agentCommandTerminal)
+            : undefined;
+          const mountName = location?.mountName ?? terminalInfo?.mount.name;
+          if (!mountName) return null;
           const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
-          if (!enabled.has(location.mountName)) return null;
+          if (!enabled.has(mountName)) return null;
           const config = await readConfig();
-          const mount = config.mounts.find((candidate) => candidate.name === location.mountName);
+          const mount = config.mounts.find((candidate) => candidate.name === mountName);
           if (!mount) return null;
           const folder = await ensureFolder(mount);
           const editorWorkspacePath = currentWorkspacePath(folder);
@@ -3768,13 +3801,17 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
 
 async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<void> {
   const location = currentRemoteLocation();
+  const terminalInfo = agentCommandTerminal
+    ? managedRemoteTerminals.get(agentCommandTerminal)
+    : undefined;
+  const mountName = location?.mountName ?? terminalInfo?.mount.name;
   const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
-  if (!location || !enabled.has(location.mountName) || !mcp?.running || mcp.portUnavailable) {
+  if (!mountName || !enabled.has(mountName) || !mcp?.running || mcp.portUnavailable) {
     updateSafsStatusBar(false, undefined, true);
-    if (location && !enabled.has(location.mountName)) await mcp?.stop();
+    if (mountName && !enabled.has(mountName)) await mcp?.stop();
     await agentWorkspacePublisher.remove();
-    const reason = !location ? '非远程工作区'
-      : !enabled.has(location.mountName) ? `挂载 ${location.mountName} 未启用 Agent 转发`
+    const reason = !mountName ? '非远程工作区'
+      : !enabled.has(mountName) ? `挂载 ${mountName} 未启用 Agent 转发`
         : !mcp?.running ? 'MCP 未运行' : 'MCP 端口不可用';
     if (lastAgentDiscoveryState !== `removed:${reason}`) {
       lastAgentDiscoveryState = `removed:${reason}`;
@@ -3783,16 +3820,13 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     return;
   }
   const config = await readConfig();
-  const mount = config.mounts.find((candidate) => candidate.name === location.mountName);
+  const mount = config.mounts.find((candidate) => candidate.name === mountName);
   if (!mount) {
     updateSafsStatusBar(false, undefined, true);
     await agentWorkspacePublisher.remove();
     return;
   }
   const folder = await ensureFolder(mount);
-  const terminalInfo = agentCommandTerminal
-    ? managedRemoteTerminals.get(agentCommandTerminal)
-    : undefined;
   if (agentCommandTerminal && (!terminalInfo || terminalInfo.mount.name !== mount.name)) {
     const previous = agentCommandTerminal.name;
     agentCommandTerminal = undefined;
@@ -4085,7 +4119,11 @@ async function updateAiForwardEnabled(
       `挂载 ${mount.name} Agent 转发标记已设为${enabledValue ? '启用' : '关闭'}`
     );
     const current = currentRemoteLocation();
-    if (!enabledValue && current?.mountName === mount.name) {
+    const terminalInfo = agentCommandTerminal
+      ? managedRemoteTerminals.get(agentCommandTerminal)
+      : undefined;
+    const activeMountName = current?.mountName ?? terminalInfo?.mount.name;
+    if (!enabledValue && activeMountName === mount.name) {
       agentTrace('Preference', `当前窗口绑定 ${mount.name}，正在停止 MCP 并移除发现记录`);
       await mcp?.stop();
       await agentWorkspacePublisher.remove();
@@ -4099,7 +4137,7 @@ async function updateAiForwardEnabled(
       } else {
         await ensureAgentHttpRouter(vscodeContext);
       }
-      if (current?.mountName === mount.name) {
+      if (activeMountName === mount.name) {
         const server = await ensureAgentMcpServer(vscodeContext);
         if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
       }
@@ -4252,7 +4290,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await agentActivityStore.initialize();
   agentActivityView = new AgentActivityViewProvider(agentActivityStore, {
     terminalTarget: agentCommandTerminalState,
-    setTerminalTarget: setAgentCommandTerminalMode
+    refreshTerminalTarget: refreshAgentCommandTerminal
   });
   context.subscriptions.push(output, bridgeOutput, agentActivityView);
   await recoverTerminalDiagnostics(context);
@@ -4587,49 +4625,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tree.refresh();
   });
 
-  // VS Code Language Model tools
-  const tool = <T>(
-    name: string,
-    callback: (input: T) => Promise<unknown>,
-    confirmation = false
-  ) => context.subscriptions.push(vscode.lm.registerTool<T>(name, {
-    ...(confirmation ? {
-      prepareInvocation: async () => ({
-        invocationMessage: '正在修改远程 SFTP 文件',
-        confirmationMessages: {
-          title: '修改远程文件',
-          message: new vscode.MarkdownString('是否允许修改远程 SFTP 工作区？')
-        }
-      })
-    } : {}),
-    invoke: async (options) => new vscode.LanguageModelToolResult([
-      // 紧凑 JSON：缩进空白只会白白消耗模型 token。
-      new vscode.LanguageModelTextPart(JSON.stringify(
-        await callback((options.input ?? {}) as T)
-      ))
-    ])
-  }));
-  tool<{ mountName?: string; path?: string }>('safs_listRemoteFiles', async (input) =>
-    remoteList({ ...input, mountName: await forwardedMountName(input.mountName) }));
-  tool<{ mountName?: string }>('safs_currentRemoteFile', async (input) =>
-    activeRemoteFile(await forwardedMountName(input.mountName)));
-  tool<{ mountName?: string; path: string; content: string }>(
-    'safs_writeRemoteFile', async (input) =>
-      remoteWrite({ ...input, mountName: await forwardedMountName(input.mountName) }), true
-  );
-  tool<RemoteSearchOptions & { mountName?: string }>(
-    'safs_searchRemoteFiles', async (input) =>
-      remoteSearch({ ...input, mountName: await forwardedMountName(input.mountName) })
-  );
-  tool<{ mountName?: string; command: string; remoteCwd?: string }>(
-    'safs_runRemoteCommand', async (input) =>
-      runRemote({
-        ...input,
-        mountName: await forwardedMountName(input.mountName),
-        source: 'command_palette'
-      }), true
-  );
-
   // Terminal lifecycle
   context.subscriptions.push(vscode.window.onDidCloseTerminal((terminal) => {
     if (terminal === agentCommandTerminal) {
@@ -4663,6 +4658,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void updateSyncStatusBar().catch((error) =>
         logAsyncFailure('同步状态栏刷新失败', error)
       );
+      void refreshAgentCommandTerminalState();
       const terminal = agentCommandTerminal;
       const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
       if (terminal && info) {
