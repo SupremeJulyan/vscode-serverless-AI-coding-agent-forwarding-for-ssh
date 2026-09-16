@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.8.7",
+  "version": "1.8.8",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -568,6 +568,11 @@
           "maximum": 1048576,
           "default": 8192,
           "description": "Command/search preview byte budget (MCP previews cap at 65536). MCP retains up to 16 MiB per execution for remote_output continuation, within a 32 MiB window cache for up to 10 minutes. retentionTruncated marks incomplete capture."
+        },
+        "safs.agentTerminalHideAgentEcho": {
+          "type": "boolean",
+          "default": true,
+          "description": "Hide the echoed Agent command in the visible SAFS terminal when forwarding with the built-in ssh2 terminal. The command output remains visible; the full command is still shown in SAFS Log and Agent Activity. Disable to watch the exact command line being typed while troubleshooting."
         },
         "safs.highRiskCommandPatterns": {
           "type": "array",

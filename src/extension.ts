@@ -1748,6 +1748,7 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     const name = agentCommandTerminal.name;
     agentCommandTerminal = undefined;
     agentCommandTerminalCwd = undefined;
+    agentActivityStore?.interruptRunning('终端模式已关闭，Agent 任务已中断');
     await refreshAgentCommandTerminalState();
     await publishAgentWorkspace(vscodeContext);
     bridgeOutput?.info(`[Agent 终端转发] 已停止使用 ${name}`);
@@ -1861,6 +1862,13 @@ async function probeAgentCommandTerminalCwd(
   terminal: vscode.Terminal,
   info: NonNullable<ReturnType<typeof managedRemoteTerminals.get>>
 ): Promise<string> {
+  // Prefer the live-tracked directory (shell integration / pty cwd tracker) so
+  // enabling terminal mode never depends on executing `pwd` while the terminal
+  // is busy running another Agent command.
+  const tracked = reportedRemoteTerminalCwd(terminal, info);
+  if (tracked && path.posix.isAbsolute(tracked)) {
+    return path.posix.normalize(tracked);
+  }
   if (busyAgentCommandTerminals.has(terminal)) {
     throw new Error('所选终端正在执行另一条 Agent 命令');
   }
@@ -1869,7 +1877,10 @@ async function probeAgentCommandTerminalCwd(
   busyAgentCommandTerminals.add(terminal);
   try {
     const result = info.pty
-      ? await info.pty.executeForwardedCommand('pwd -P', undefined, controller.signal, 16_384)
+      ? await info.pty.executeForwardedCommand(
+          'pwd -P', undefined, controller.signal, 16_384,
+          settings().get<boolean>('agentTerminalHideAgentEcho', true)
+        )
       : await executeWithTerminalShellIntegration(
           terminal, 'pwd -P', undefined, controller.signal, 16_384
         );
@@ -1883,6 +1894,24 @@ async function probeAgentCommandTerminalCwd(
     clearTimeout(timeout);
     busyAgentCommandTerminals.delete(terminal);
   }
+}
+
+/** Resolve the terminal's live directory and keep the published workspace /
+ *  webview display aligned when the user runs `cd` after enabling terminal mode. */
+function liveAgentCommandTerminalCwd(
+  terminal: vscode.Terminal,
+  info: NonNullable<ReturnType<typeof managedRemoteTerminals.get>>
+): string | undefined {
+  if (agentCommandTerminal !== terminal) return undefined;
+  const live = reportedRemoteTerminalCwd(terminal, info);
+  if (!live || !path.posix.isAbsolute(live)) return agentCommandTerminalCwd;
+  const normalized = path.posix.normalize(live);
+  if (normalized !== agentCommandTerminalCwd) {
+    agentCommandTerminalCwd = normalized;
+    void refreshAgentCommandTerminalState();
+    void publishAgentWorkspace(vscodeContext);
+  }
+  return agentCommandTerminalCwd;
 }
 
 async function executeWithAgentCommandTerminal(
@@ -1914,7 +1943,10 @@ async function executeWithAgentCommandTerminal(
   );
   try {
     const result = info.pty
-      ? await info.pty.executeForwardedCommand(command, remoteCwd, signal, maxOutputBytes)
+      ? await info.pty.executeForwardedCommand(
+          command, remoteCwd, signal, maxOutputBytes,
+          settings().get<boolean>('agentTerminalHideAgentEcho', true)
+        )
       : await executeWithTerminalShellIntegration(
           terminal, command, remoteCwd, signal, maxOutputBytes
         );
@@ -1934,34 +1966,24 @@ async function executeTerminalOnlyCommand(input: {
 }): Promise<Record<string, unknown>> {
   if (!input.command?.trim()) throw new Error('Remote command must not be empty.');
   const terminal = agentCommandTerminal;
-  let terminalCwd = agentCommandTerminalCwd;
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  if (!terminal || !terminalCwd || !info) {
+  if (!terminal || !info) {
     throw new AgentToolError(
       'TERMINAL_TARGET_UNAVAILABLE',
       'No SAFS terminal is selected. Enable Use Current Terminal in Agent Activity.'
     );
   }
-  const liveCwd = info.pty
-    ? info.remoteCwd
-    : reportedRemoteTerminalCwd(terminal, info);
-  if (path.posix.isAbsolute(liveCwd) && liveCwd !== terminalCwd) {
-    terminalCwd = path.posix.normalize(liveCwd);
-    agentCommandTerminalCwd = terminalCwd;
-    await refreshAgentCommandTerminalState();
-    await publishAgentWorkspace(vscodeContext);
-    if (agentCommandTerminal !== terminal || !agentCommandTerminalCwd) {
-      throw new AgentToolError(
-        'TERMINAL_TARGET_UNAVAILABLE',
-        'The selected terminal no longer belongs to the current SAFS workspace.'
-      );
-    }
-    terminalCwd = agentCommandTerminalCwd;
-  }
   if (info.mount.name !== input.mountName) {
     throw new AgentToolError(
       'TERMINAL_TARGET_MISMATCH',
       `The selected terminal belongs to ${info.mount.name}, not ${input.mountName}.`
+    );
+  }
+  const terminalCwd = liveAgentCommandTerminalCwd(terminal, info);
+  if (!terminalCwd) {
+    throw new AgentToolError(
+      'TERMINAL_TARGET_UNAVAILABLE',
+      'No SAFS terminal directory is available. Enable Use Current Terminal in Agent Activity.'
     );
   }
   const responseBudget = Math.max(
@@ -2986,6 +3008,15 @@ async function executeRemoteCommand(
   // Explicit, session-only terminal forwarding applies only to Agent task commands.
   // Searches keep their isolated execution path and file operations remain on SFTP.
   if (source !== 'remote_search' && agentCommandTerminal) {
+    // The terminal's own working directory always wins in terminal mode.
+    // The Agent-supplied remoteCwd may come from a stale workspace context and
+    // must never be used to cd the terminal away from where the user is.
+    const terminal = agentCommandTerminal;
+    const terminalInfo = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+    let terminalCwd = terminalInfo ? liveAgentCommandTerminalCwd(terminal, terminalInfo) : undefined;
+    if (!terminalCwd) {
+      throw new Error('The selected SAFS terminal is no longer available.');
+    }
     const controller = new AbortController();
     const cancellation = token?.onCancellationRequested(() => controller.abort());
     const commandTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
@@ -2998,12 +3029,12 @@ async function executeRemoteCommand(
       : undefined;
     try {
       const result = await executeWithAgentCommandTerminal(
-        mount.name, input.command, remoteCwd, controller.signal, maxOutputBytes
+        mount.name, input.command, terminalCwd, controller.signal, maxOutputBytes
       );
       if (timedOut) throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
       if (result) {
         return {
-          remoteCwd,
+          remoteCwd: terminalCwd,
           ...(retainOutput ? { responseBudget } : {}),
           ...result
         };

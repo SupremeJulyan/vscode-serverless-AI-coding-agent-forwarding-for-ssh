@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.8
+
+- 终端模式下转发命令时默认关闭远端 tty 回显，隐藏超长命令串，仅保留命令输出；
+  新增 `safs.agentTerminalHideAgentEcho` 配置项可关闭隐藏用于排查。
+- 终端模式工作区目录改用实时跟踪路径，切换目录或恢复终端时不再因 busy 状态阻塞
+  `pwd` 探测；执行前统一收敛到 `liveAgentCommandTerminalCwd`。
+- 中断 Agent 任务后，Agent 活动面板不再残留运行中状态；关闭终端模式或切换工作区
+  模式时自动清理被中断的会话记录。
+- 插件与原生 CLI 版本升级到 1.8.8。
+
 ## 1.8.7
 
 - 原生 `safs` CLI 改用更直接的子命令语法，并新增 Playwright CLI 风格的

@@ -245,6 +245,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     reject(error: Error): void;
     signal?: AbortSignal;
     abort(): void;
+    restoreEcho?(): void;
   };
 
   constructor(
@@ -366,7 +367,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   /** Execute through this visible PTY, preserving sudo/su identity and the live environment. */
   executeForwardedCommand(
     command: string, remoteCwd: string | undefined, signal?: AbortSignal,
-    maxOutputBytes = 1024 * 1024
+    maxOutputBytes = 1024 * 1024, hideEcho = true
   ): Promise<Ssh2CommandResult> {
     if (this.closed || !this.stream) {
       return Promise.reject(new Error('所选 SAFS 终端尚未连接或已经关闭'));
@@ -380,8 +381,15 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     const executionId = randomBytes(12).toString('hex');
     const plan = terminalForwardingCommand(command, remoteCwd, executionId);
     return new Promise<Ssh2CommandResult>((resolve, reject) => {
+      let echoHiding = hideEcho;
+      const restoreEcho = () => {
+        if (!echoHiding) return;
+        echoHiding = false;
+        this.stream?.write('stty echo\r');
+      };
       const abort = () => {
         this.stream?.write('\x03');
+        restoreEcho();
         this.finishForwardedCommand(undefined, new Error('Remote terminal command was cancelled'));
       };
       this.forwardedCommand = {
@@ -391,10 +399,22 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
         resolve,
         reject,
         signal,
-        abort
+        abort,
+        restoreEcho: () => restoreEcho()
       };
       signal?.addEventListener('abort', abort, { once: true });
-      this.stream?.write(`${plan.commandLine}\r`);
+      if (!hideEcho) {
+        this.stream?.write(`${plan.commandLine}\r`);
+        return;
+      }
+      // 关闭远端 tty 的输入回显后再键入整行命令，避免超长命令刷屏；
+      // stty 需要先于命令字节到达才不把下一行回显出来，因此分两步发送。
+      // 末尾不追加 stty echo：命令若读 stdin 会吞掉它，改由完成/中止时发送。
+      this.stream?.write('stty -echo\r');
+      setTimeout(() => {
+        if (!this.forwardedCommand) return;
+        this.stream?.write(`${plan.commandLine}\r`);
+      }, 120);
     });
   }
 
@@ -416,6 +436,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     if (!forwarded) return;
     this.forwardedCommand = undefined;
     forwarded.signal?.removeEventListener('abort', forwarded.abort);
+    forwarded.restoreEcho?.();
     if (error) forwarded.reject(error);
     else if (result) forwarded.resolve(result);
   }

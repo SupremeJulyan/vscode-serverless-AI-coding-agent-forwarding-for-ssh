@@ -118,18 +118,23 @@ successful, and failed operations. The timeline keeps the newest operation first
 filtered by operation type and status. Consecutive reads, directory listings, and searches
 are grouped automatically.
 
-Use **Use Current Terminal** in the panel to enter terminal-only mode. SAFS reads the focused
-remote terminal's actual directory and publishes it as the Agent `workspaceRoot`; commands
-inherit the terminal's current user privileges and exported environment, including after a
-manual `sudo su - user`. MCP then keeps only `run_remote_command`: file, search, transfer,
-workspace-switching, and retained-output tools are disabled. The CLI is shared by every window,
-so it keeps `bind`/`workspaces`/`switch` for routing, but a binding to this window permits only
-`safs exec` and rejects `--cwd`. A cwd reported by the terminal refreshes automatically. You can
-also click the selected **Terminal Mode** button again to refresh it or select the currently
-focused SAFS terminal, without switching through Workspace Mode first. Moving to a workspace that
-does not belong to the selected terminal safely clears the old target. This mode is session-only and ends when the terminal closes or
-you click **Exit Dedicated Mode**. Do not interact with a foreground program in the selected
-terminal while forwarding is active.
+The **Workspace Mode / Terminal Mode** controls at the top of the panel form a two-way switch,
+with the current mode highlighted. When you select Terminal Mode, SAFS reads the focused remote
+terminal's actual directory and publishes it as the Agent `workspaceRoot`. Commands inherit the
+terminal's current user privileges and exported environment, including after a manual
+`sudo su - user`; the bound terminal and directory are shown below the switch.
+
+In Terminal Mode, MCP exposes only `run_remote_command`. Even if an Agent cached the earlier tool
+list, calling another tool returns an actionable message directing it to the only available tool,
+`run_remote_command`. The CLI is shared by every window, so `bind`/`workspaces`/`switch` remain
+available for routing. Once bound to this window, the only remote-operation command is
+`safs exec --binding <bindingId> -- 'COMMAND'`; other operations and batches return that command
+as guidance, and `--cwd` cannot override the terminal directory. File, search, transfer,
+workspace-switching, and retained-output tools are unavailable in this mode.
+
+Terminal Mode lasts only for the current window session. Closing the terminal or selecting
+**Workspace Mode** restores the original Agent tools. Do not interact with a foreground program
+in the selected terminal while forwarding is active.
 
 The view keeps the latest 200 redacted records for this window. It never stores file
 contents, diffs, stdout, or stderr; commands and errors are persisted only as short,

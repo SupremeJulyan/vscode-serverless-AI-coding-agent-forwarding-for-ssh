@@ -218,6 +218,21 @@ export class AgentActivityStore {
     this.finish(id, 'error', undefined, error);
   }
 
+  /** Mark every still-running event interrupted, e.g. when the user switches modes. */
+  interruptRunning(reason = 'Agent 任务已中断'): void {
+    const now = this.now();
+    let changed = false;
+    for (const event of this.events) {
+      if (event.status !== 'running') continue;
+      changed = true;
+      event.status = 'interrupted';
+      event.completedAt = now.toISOString();
+      event.durationMs = Math.max(0, now.getTime() - Date.parse(event.startedAt));
+      event.error = safeText(reason, 500) || 'Agent 任务已中断';
+    }
+    if (changed) this.changed();
+  }
+
   private finish(
     id: string, status: 'success' | 'error', result?: unknown, error?: unknown
   ): void {
