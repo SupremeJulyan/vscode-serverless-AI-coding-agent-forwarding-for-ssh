@@ -1704,12 +1704,19 @@ function currentRemoteLocation(): { mountName: string; remotePath: string } | un
   return undefined;
 }
 
+function hasRemoteWorkspaceContext(): boolean {
+  return (vscode.workspace.workspaceFolders ?? []).some((folder) => {
+    if (folder.uri.scheme === remoteFileSystemScheme) return true;
+    return folder.uri.scheme === 'file' && syncedRemoteLocation(folder.uri.fsPath) !== undefined;
+  });
+}
+
 // ---- openTerminal (aligned with main) ----
 
 function agentCommandTerminalState(): {
   enabled: boolean; mode?: 'workspace' | 'terminal'; label?: string;
 } {
-  if (currentRemoteLocation()) return { enabled: false, mode: 'workspace' };
+  if (hasRemoteWorkspaceContext()) return { enabled: false, mode: 'workspace' };
   const terminal = agentCommandTerminal;
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
   if (!terminal || !info || !agentCommandTerminalCwd) return { enabled: false };
@@ -1727,7 +1734,7 @@ async function refreshAgentCommandTerminalState(): Promise<void> {
 async function refreshAgentCommandTerminal(): Promise<void> {
   const terminal = agentCommandTerminal;
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  if (!terminal || !info || currentRemoteLocation()) return;
+  if (!terminal || !info || hasRemoteWorkspaceContext()) return;
   await enableAgentCommandTerminal(terminal, info, true);
 }
 
@@ -1777,7 +1784,7 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     void vscode.window.showWarningMessage('SAFS：请先聚焦一个已连接的 SAFS 远程终端。');
     return;
   }
-  const location = currentRemoteLocation();
+  const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   if (location) {
     await refreshAgentCommandTerminalState();
     return;
@@ -1833,7 +1840,7 @@ async function prepareOpenedTerminalForAgent(
   terminal: vscode.Terminal,
   info: NonNullable<ReturnType<typeof managedRemoteTerminals.get>>
 ): Promise<void> {
-  if (!currentRemoteLocation()) {
+  if (!hasRemoteWorkspaceContext()) {
     await enableAgentCommandTerminal(terminal, info);
   } else {
     await refreshAgentCommandTerminalState();
@@ -3637,7 +3644,7 @@ async function stopAgentHttpRouterLeadership(): Promise<void> {
 async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<AgentMcpServer> {
   if (!mcp) {
     const token = await agentMcpToken(context);
-    const location = currentRemoteLocation();
+    const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
     const terminalInfo = agentCommandTerminal
       ? managedRemoteTerminals.get(agentCommandTerminal)
       : undefined;
@@ -3653,7 +3660,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
           (folder) => folder.name === boundMountName
         ),
         currentWorkspace: async () => {
-          const location = currentRemoteLocation();
+          const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
           const terminalInfo = agentCommandTerminal
             ? managedRemoteTerminals.get(agentCommandTerminal)
             : undefined;
@@ -3756,7 +3763,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
         },
         activity: {
           start: (entry) => {
-            const location = currentRemoteLocation();
+            const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
             const folder = registry.get(boundMountName);
             const terminalInfo = agentCommandTerminal
               ? managedRemoteTerminals.get(agentCommandTerminal)
@@ -3805,7 +3812,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
 }
 
 async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<void> {
-  const location = currentRemoteLocation();
+  const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const terminalInfo = agentCommandTerminal
     ? managedRemoteTerminals.get(agentCommandTerminal)
     : undefined;
