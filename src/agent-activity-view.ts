@@ -225,7 +225,6 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const refreshTerminalTarget = document.getElementById('refreshTerminalTarget');
     const agentMode = document.getElementById('agentMode');
     const agentModeDetail = document.getElementById('agentModeDetail');
-    let terminalModeEnabled = false;
     let events = [];
     let statusTimer;
     const seenStatus = new Map();
@@ -396,7 +395,6 @@ export function activityViewHtml(webview: vscode.Webview): string {
           ? event.data.mode
           : event.data.enabled === true ? 'terminal' : undefined;
         const enabled = mode === 'terminal';
-        terminalModeEnabled = enabled;
         agentMode.hidden = !mode;
         workspaceModeLabel.hidden = mode !== 'workspace';
         terminalModeLabel.hidden = mode !== 'terminal';
