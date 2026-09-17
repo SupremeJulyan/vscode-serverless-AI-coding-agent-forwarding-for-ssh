@@ -932,7 +932,6 @@ async function openRemoteDirectory(): Promise<void> {
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, resolved);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, resolved);
   await recordDirectoryHistory(vscodeContext, mount.name, resolved);
-  await setAgentCommandTerminalMode(false);
   agentTrace('Open', `创建新窗口打开远程目录：${resolved}`);
   await vscode.commands.executeCommand(
     'vscode.openFolder', vscode.Uri.parse(folderUri(folder, resolved)), true

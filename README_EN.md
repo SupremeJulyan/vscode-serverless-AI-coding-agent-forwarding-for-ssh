@@ -129,9 +129,10 @@ available for routing. Once bound to this window, the only remote-operation comm
 as guidance, and `--cwd` cannot override the terminal directory. File, search, transfer,
 workspace-switching, and retained-output tools are unavailable in this mode.
 
-Terminal Mode lasts only for the current window session. Closing the terminal or opening a remote
-directory restores Workspace Mode. Do not interact with a foreground program in the selected
-terminal while forwarding is active.
+Terminal Mode lasts only for the current window session. Closing the terminal or switching the
+remote directory in the current window exits Terminal Mode. Opening a remote directory in a new
+window leaves the original window in Terminal Mode. Do not interact with a foreground program
+in the selected terminal while forwarding is active.
 
 The view keeps the latest 200 redacted records for this window. It never stores file
 contents, diffs, stdout, or stderr; commands and errors are persisted only as short,

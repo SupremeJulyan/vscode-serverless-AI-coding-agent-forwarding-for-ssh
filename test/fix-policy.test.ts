@@ -12,6 +12,18 @@ test('mount parent opens the resolved default root without recording it as histo
   assert.equal(body.includes('recordDirectoryHistory'), false);
 });
 
+test('opening a remote directory in a new window preserves the source window terminal mode', async () => {
+  const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function openRemoteDirectory');
+  const end = source.indexOf('async function switchRemoteDirectory', start);
+  const openInNewWindow = source.slice(start, end);
+  assert.match(openInNewWindow, /'vscode\.openFolder',[\s\S]*?, true/);
+  assert.equal(openInNewWindow.includes('setAgentCommandTerminalMode(false)'), false);
+
+  const switchInCurrentWindow = source.slice(end, source.indexOf('async function promptRemoteDirectory', end));
+  assert.ok(switchInCurrentWindow.includes('await setAgentCommandTerminalMode(false)'));
+});
+
 test('sync ownership retries silently and SFTP negotiation has no fixed timeout', async () => {
   const sync = await readFile(new URL('../src/remote-sync.ts', import.meta.url), 'utf8');
   assert.equal(sync.includes('同步任务由另一个 VS Code 窗口管理'), false);

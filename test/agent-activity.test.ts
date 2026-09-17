@@ -86,6 +86,7 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   const html = activityViewHtml({ cspSource: 'vscode-webview://activity' } as any);
   assert.match(html, /default-src 'none'/);
   assert.match(html, /script-src 'nonce-/);
+  assert.match(html, /\[hidden\] \{ display: none !important; \}/);
   assert.equal(html.includes('https://'), false);
   assert.equal(html.includes('暂停弹幕'), false);
   assert.equal(html.includes('恢复弹幕'), false);

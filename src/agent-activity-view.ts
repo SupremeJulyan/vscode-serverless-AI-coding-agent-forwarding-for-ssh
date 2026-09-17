@@ -80,6 +80,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
   <style nonce="${nonce}">
     :root { color-scheme: light dark; }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body {
       margin: 0; padding: 10px; color: var(--vscode-foreground);
       background: var(--vscode-sideBar-background); font: 12px/1.45 var(--vscode-font-family);
