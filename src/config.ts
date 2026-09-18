@@ -23,6 +23,7 @@ export interface BridgeConfig {
   encrypt_passwords?: boolean;
   hosts: HostConfig[];
   mounts: MountConfig[];
+  host_aliases?: Record<string, string>;
 }
 
 export function deriveMounts(hosts: HostConfig[]): MountConfig[] {
@@ -95,14 +96,25 @@ export function parseConfig(value: unknown): BridgeConfig {
     throw new Error('Config must contain a hosts array');
   }
 
+  const generatedNames = new Map<string, number>();
   const hosts = object.hosts.map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       throw new Error(`hosts[${index}] must be an object`);
     }
     const host = item as Record<string, unknown>;
-    const name = requireString(host.name, `hosts[${index}].name`);
     const ip = requireString(host.ip, `hosts[${index}].ip`);
-    const user = requireString(host.user, `hosts[${index}].user`);
+    const explicitName = typeof host.name === 'string' && host.name.trim().length > 0;
+    const baseName = explicitName
+      ? requireString(host.name, `hosts[${index}].name`)
+      : ip;
+    const generatedCount = generatedNames.get(baseName) ?? 0;
+    generatedNames.set(baseName, generatedCount + 1);
+    const name = explicitName || generatedCount === 0
+      ? baseName
+      : `${baseName}#${generatedCount + 1}`;
+    // The host can be created from the Remote Folders '+' action before its
+    // login credentials are filled in from the hierarchical view.
+    const user = typeof host.user === 'string' ? host.user : '';
     return { name, ip, user, port: host.port, vpn: host.vpn, private_key_path: host.private_key_path, password: host.password } as HostConfig;
   });
 
@@ -136,11 +148,28 @@ export function parseConfig(value: unknown): BridgeConfig {
       throw new Error(`Mount '${mount.name}' references missing host '${mount.host}'`);
     }
   }
+  const hostAliases = parseHostAliases(object.host_aliases);
   return {
     encrypt_passwords: object.encrypt_passwords === false ? false : true,
     hosts,
-    mounts
+    mounts,
+    ...(hostAliases ? { host_aliases: hostAliases } : {})
   };
+}
+
+function parseHostAliases(value: unknown): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('host_aliases must be an object');
+  }
+  const aliases: Record<string, string> = {};
+  for (const [ip, alias] of Object.entries(value)) {
+    if (typeof alias !== 'string' || alias.trim().length === 0) {
+      throw new Error(`host_aliases[${ip}] must be a non-empty string`);
+    }
+    aliases[ip] = alias.trim();
+  }
+  return Object.keys(aliases).length > 0 ? aliases : undefined;
 }
 
 export async function loadConfig(configPath: string): Promise<BridgeConfig> {

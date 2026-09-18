@@ -104,6 +104,28 @@ test('defaults encrypt_passwords to true when the legacy field is absent', () =>
   assert.equal(parseConfig({ encrypt_passwords: false, hosts: [], mounts: [] }).encrypt_passwords, false);
 });
 
+test('allows a host to be created before its login credentials are added', () => {
+  const config = parseConfig({ hosts: [{ name: 'pending', ip: '10.0.0.8' }] });
+  assert.equal(config.hosts[0].user, '');
+  assert.equal(config.mounts[0].name, 'pending');
+});
+
+test('uses the IP as the host name for legacy entries without a name', () => {
+  const config = parseConfig({
+    hosts: [{ ip: '10.0.0.9', user: 'alice' }]
+  });
+  assert.equal(config.hosts[0].name, '10.0.0.9');
+  assert.equal(config.mounts[0].host, '10.0.0.9');
+});
+
+test('preserves hierarchical host display aliases', () => {
+  const config = parseConfig({
+    host_aliases: { '10.0.0.9': 'build-server' },
+    hosts: [{ ip: '10.0.0.9', user: 'alice' }]
+  });
+  assert.deepEqual(config.host_aliases, { '10.0.0.9': 'build-server' });
+});
+
 test('preserves a Windows drive-letter mount path', () => {
   assert.equal(expandHome('x:'), 'X:\\');
   assert.equal(expandHome('x:\\'), 'X:\\');

@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.8.9",
+  "version": "1.9.0",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -47,7 +47,11 @@
     "onCommand:safs.close",
     "onCommand:safs.status",
     "onCommand:safs.openConfig",
+    "onCommand:safs.addRemoteDirectory",
     "onCommand:safs.addSshConfig",
+    "onCommand:safs.addHostCredentials",
+    "onCommand:safs.renameHost",
+    "onCommand:safs.toggleView",
     "onCommand:safs.copyStreamableHttpUrl",
     "onCommand:safs.installCli",
     "onCommand:safs.installAgentForwarding",
@@ -81,16 +85,35 @@
       },
       {
         "command": "safs.status",
-        "title": "SAFS: 显示状态"
+        "title": "显示状态"
       },
       {
         "command": "safs.openConfig",
-        "title": "SAFS: 打开配置"
+        "title": "打开配置"
       },
       {
         "command": "safs.addSshConfig",
         "title": "SAFS: 添加 SSH 配置",
         "icon": "$(add)"
+      },
+      {
+        "command": "safs.addRemoteDirectory",
+        "title": "添加远程目录",
+        "icon": "$(add)"
+      },
+      {
+        "command": "safs.addHostCredentials",
+        "title": "添加主机登录配置",
+        "icon": "$(add)"
+      },
+      {
+        "command": "safs.renameHost",
+        "title": "重命名",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "safs.toggleView",
+        "title": "切换视图"
       },
       {
         "command": "safs.copyStreamableHttpUrl",
@@ -219,7 +242,7 @@
     "viewsWelcome": [
       {
         "view": "safs.mounts",
-        "contents": "尚未配置远程目录。\n[添加 SSH 配置](command:safs.addSshConfig)\n[打开配置](command:safs.openConfig)",
+        "contents": "尚未配置远程目录。\n[添加远程目录](command:safs.addRemoteDirectory)\n[打开配置](command:safs.openConfig)",
         "when": "safs.hasNoMounts"
       }
     ],
@@ -260,7 +283,7 @@
       ],
       "view/title": [
         {
-          "command": "safs.addSshConfig",
+          "command": "safs.addRemoteDirectory",
           "when": "view == safs.mounts",
           "group": "navigation@1"
         },
@@ -278,9 +301,29 @@
           "command": "safs.status",
           "when": "view == safs.mounts",
           "group": "safs@2"
+        },
+        {
+          "command": "safs.toggleView",
+          "when": "view == safs.mounts && !safs.hierarchicalView",
+          "group": "safs@3"
+        },
+        {
+          "command": "safs.toggleView",
+          "when": "view == safs.mounts && safs.hierarchicalView",
+          "group": "safs@3"
         }
       ],
       "view/item/context": [
+        {
+          "command": "safs.addHostCredentials",
+          "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
+          "group": "inline@1"
+        },
+        {
+          "command": "safs.renameHost",
+          "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
+          "group": "inline@5"
+        },
         {
           "command": "safs.enableAiForwardItem",
           "when": "view == safs.mounts && viewItem =~ /safs\\.connection.*aiDisabled/",

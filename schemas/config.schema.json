@@ -33,17 +33,22 @@
       "deprecated": true,
       "description": "已废弃：由 Add SSH Config 自动生成，无需手动维护。新配置文件中无需包含此字段。",
       "items": { "$ref": "#/definitions/mount" }
+    },
+    "host_aliases": {
+      "type": "object",
+      "description": "远程目录视图中按 IP 分组节点的显示名称。",
+      "additionalProperties": { "type": "string", "minLength": 1 }
     }
   },
   "additionalProperties": false,
   "definitions": {
     "host": {
       "type": "object",
-      "required": ["name", "ip", "user"],
+      "required": ["ip"],
       "properties": {
-        "name": { "type": "string", "minLength": 1, "description": "主机唯一名称，供 mounts.host 引用。" },
+        "name": { "type": "string", "minLength": 1, "description": "主机内部名称；旧配置可省略，默认使用 IP。" },
         "ip": { "type": "string", "minLength": 1, "description": "服务器 IP 地址或域名。" },
-        "user": { "type": "string", "minLength": 1, "description": "SSH 登录用户名。" },
+        "user": { "type": "string", "description": "SSH 登录用户名；可先留空，稍后从 SAFS 分层视图补充。" },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 22, "description": "SSH 端口。" },
         "vpn": { "type": "boolean", "default": false, "description": "是否通过 VPN 可见的网络连接。" },
         "private_key_path": { "type": "string", "description": "SSH 私钥路径，例如 ~/.ssh/id_ed25519。" },
