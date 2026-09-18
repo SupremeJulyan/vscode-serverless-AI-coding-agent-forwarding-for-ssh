@@ -15,6 +15,18 @@ function encodeMountAuthority(mountName: string): string {
   // status-bar/remote indicator; fall back to lowercase hexadecimal for
   // anything else so the identifier survives that normalization.
   if (/^[a-z0-9][a-z0-9._-]*$/.test(mountName)) return mountName;
+  // Legacy hierarchical names were generated as "host@user". Keep their
+  // authority readable and ASCII-only in VS Code's remote indicator, including
+  // Unicode host aliases; the original name is carried in the URI query so
+  // parsing remains lossless.
+  if (/^[\p{L}\p{N}][\p{L}\p{N}._@-]*$/u.test(mountName)
+      && !/[A-Z]/.test(mountName)) {
+    return [...mountName].map((character) => {
+      if (/^[a-z0-9._-]$/.test(character)) return character;
+      if (character === '@') return '_';
+      return `_u${character.codePointAt(0)!.toString(16)}`;
+    }).join('');
+  }
   return `m-${Buffer.from(mountName, 'utf8').toString('hex')}`;
 }
 
@@ -76,9 +88,10 @@ function decodeRemotePath(pathname: string): string {
  * or host-like punctuation do not leak into URI parsing rules.
  */
 export function remoteUri(mountName: string, remotePath: string): string {
-  return `${remoteFileSystemScheme}://${encodeMountAuthority(mountName)}${
-    encodeRemotePath(remotePath)
-  }`;
+  const authority = encodeMountAuthority(mountName);
+  const query = authority === mountName && !/[^\x00-\x7f]/.test(mountName)
+    ? '' : `?mount=${encodeURIComponent(mountName)}`;
+  return `${remoteFileSystemScheme}://${authority}${encodeRemotePath(remotePath)}${query}`;
 }
 
 export function parseRemoteUri(value: string): RemoteUriLocation {
@@ -92,8 +105,9 @@ export function parseRemoteUri(value: string): RemoteUriLocation {
   if (parsed.username || parsed.password || parsed.port) {
     throw new Error(`Invalid remote workspace URI: ${value}`);
   }
+  const queryMountName = parsed.searchParams.get('mount');
   return {
-    mountName: decodeMountAuthority(parsed.hostname),
+    mountName: queryMountName ?? decodeMountAuthority(parsed.hostname),
     remotePath: decodeRemotePath(parsed.pathname)
   };
 }

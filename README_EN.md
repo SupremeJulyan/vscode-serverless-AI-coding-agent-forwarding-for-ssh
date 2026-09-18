@@ -25,7 +25,7 @@ SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote
 2. Click the **SAFS** icon in the Activity Bar.
 3. Click **+** in the upper-right corner of the Remote Folders view and enter the host name and IP address.
 4. Use the **...** menu in the Remote Folders view to switch between the legacy and hierarchical views. The new view shows `host/IP → user → history`, merging entries that share an IP.
-5. Click **+** beside a host name to enter the account and password. Passwords use the configuration encryption master password when needed; private-key authentication is also supported. The configuration name is generated as `host name@user`.
+5. Click **+** beside a host name to enter the account and password. Passwords use the configuration encryption master password when needed; private-key authentication is also supported. The configuration name is generated as `user_host name`.
 6. On the first connection, verify and accept the server's host-key fingerprint.
 
 Configurations are stored in `~/.safs/config.json`. The UI is recommended for normal use. To edit the file manually, run `SAFS: Open Config`:

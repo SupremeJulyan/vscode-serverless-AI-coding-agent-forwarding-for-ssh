@@ -22,6 +22,22 @@ test('uses the config name as the authority when it is URI-safe', () => {
     mountName: 'gkn',
     remotePath: '/home/alice'
   });
+  const hierarchical = remoteUri('10.68.0.3@nsgsx_zyc', '/home/zhuyuan');
+  assert.equal(
+    hierarchical,
+    'safs://10.68.0.3_nsgsx_zyc/home/zhuyuan?mount=10.68.0.3%40nsgsx_zyc'
+  );
+  assert.deepEqual(parseRemoteUri(hierarchical), {
+    mountName: '10.68.0.3@nsgsx_zyc',
+    remotePath: '/home/zhuyuan'
+  });
+  const unicodeHost = remoteUri('zhuyuan_测试主机', '/home/zhuyuan');
+  assert.equal(unicodeHost.includes('m-'), false);
+  assert.match(unicodeHost, /^safs:\/\/zhuyuan__u6d4b_u8bd5_u4e3b_u673a\//);
+  assert.deepEqual(parseRemoteUri(unicodeHost), {
+    mountName: 'zhuyuan_测试主机',
+    remotePath: '/home/zhuyuan'
+  });
   // Unsafe names (uppercase/space) fall back to the legacy hex authority.
   const hex = remoteUri('My Host', '/home');
   assert.match(hex, /^safs:\/\/m-[0-9a-f]+\//);

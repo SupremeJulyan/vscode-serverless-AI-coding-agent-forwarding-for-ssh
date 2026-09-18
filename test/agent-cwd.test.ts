@@ -24,6 +24,7 @@ test('creates a real cwd below extension storage', async () => {
 
 test('uses a readable filesystem-safe mount name below the cwd hash', () => {
   assert.equal(safeAgentCwdName('node37'), 'node37');
+  assert.equal(safeAgentCwdName('10.68.0.3@nsgsx_zyc'), '10.68.0.3@nsgsx_zyc');
   assert.equal(safeAgentCwdName('计算节点 / project'), '计算节点_project');
   assert.equal(safeAgentCwdName('CON'), '_CON');
   assert.equal(safeAgentCwdName('...'), 'mount');

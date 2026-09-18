@@ -2721,9 +2721,7 @@ async function addHostCredentials(
   if (!host) {
     throw new Error(`IP 为 ${requestedGroup?.ip ?? requestedHost?.ip} 的 SSH 主机不存在`);
   }
-  const hostDisplayName = requestedGroup?.displayName
-    ?? config.host_aliases?.[host.ip]
-    ?? host.ip;
+  const hostDisplayName = hierarchicalHostName(host, config.host_aliases);
   const title = `配置主机：${host.name}`;
   const user = await input({
     title,
@@ -2748,7 +2746,7 @@ async function addHostCredentials(
   );
   if (requestedGroup && matchingUserIndex >= 0) index = matchingUserIndex;
   const targetHost = index >= 0 ? config.hosts[index] : host;
-  const generatedName = `${hostDisplayName}@${normalizedUser}`;
+  const generatedName = `${normalizedUser}_${hostDisplayName}`;
   const nameConflict = config.hosts.findIndex((candidate, candidateIndex) =>
     candidate.name === generatedName && candidateIndex !== index
   );
@@ -3439,6 +3437,15 @@ function groupHostsByIp(
   return [...groups.values()];
 }
 
+function hierarchicalHostName(
+  host: HostConfig, aliases?: Record<string, string>
+): string {
+  const alias = aliases?.[host.ip];
+  // Non-ASCII aliases remain user-facing labels, but config names and URI
+  // authorities fall back to the IP for reliable cross-platform handling.
+  return alias && !/[^\x00-\x7f]/.test(alias) ? alias : host.ip;
+}
+
 async function renameHostGroup(group: HostGroupItem): Promise<void> {
   const config = await loadConfig(configPath());
   const name = await input({
@@ -3454,7 +3461,7 @@ async function renameHostGroup(group: HostGroupItem): Promise<void> {
   else aliases[group.ip] = normalizedName;
   if (Object.keys(aliases).length > 0) config.host_aliases = aliases;
   else delete config.host_aliases;
-  await saveConfig(configPath(), config);
+  await normalizeHierarchicalConfigNames(vscodeContext, config);
   bridgeOutput?.info(`[配置] 已重命名主机 ${group.ip} -> ${normalizedName}`);
   void vscode.window.showInformationMessage(
     `SAFS：主机"${group.ip}"已重命名为"${normalizedName}"。`
@@ -3507,10 +3514,12 @@ async function removeHistoryEntry(
 
 /** Generate the configuration identifier used by the hierarchical view. */
 async function normalizeHierarchicalConfigNames(
-  context: vscode.ExtensionContext
+  context: vscode.ExtensionContext, suppliedConfig?: BridgeConfig
 ): Promise<void> {
-  await ensureConfigFile(configPath());
-  const config = await loadConfig(configPath());
+  const config = suppliedConfig ?? await (async () => {
+    await ensureConfigFile(configPath());
+    return loadConfig(configPath());
+  })();
   const aliases = config.host_aliases ?? {};
   const renamed = new Map<string, string>();
   const usedNames = new Set<string>();
@@ -3520,8 +3529,8 @@ async function normalizeHierarchicalConfigNames(
       usedNames.add(host.name);
       continue;
     }
-    const hostName = aliases[host.ip] ?? host.ip;
-    const baseName = `${hostName}@${host.user}`;
+    const hostName = hierarchicalHostName(host, aliases);
+    const baseName = `${host.user}_${hostName}`;
     let nextName = baseName;
     let suffix = 2;
     while (usedNames.has(nextName) && nextName !== host.name) {
@@ -3532,7 +3541,11 @@ async function normalizeHierarchicalConfigNames(
     if (host.name !== nextName) renamed.set(host.name, nextName);
     host.name = nextName;
   }
-  if (renamed.size === 0) return;
+  if (renamed.size === 0) {
+    if (suppliedConfig) await saveConfig(configPath(), config);
+    lastReadConfig = config;
+    return;
+  }
 
   config.mounts = config.mounts.map((mount) => ({
     ...mount,
@@ -3580,6 +3593,13 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
       remoteFolderViewModeKey, 'legacy'
     );
     void this.updateViewContext();
+    if (this.viewMode === 'hierarchical') {
+      void normalizeHierarchicalConfigNames(this.context)
+        .then(() => this.refresh())
+        .catch((error) => {
+          bridgeOutput?.warn(`[配置] 启动时同步主机别名失败：${String(error)}`);
+        });
+    }
   }
 
   refresh(): void {

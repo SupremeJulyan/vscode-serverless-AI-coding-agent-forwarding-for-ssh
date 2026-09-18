@@ -10,7 +10,7 @@ export interface AgentCwdPlaceholder {
 export function safeAgentCwdName(mountName: string): string {
   const normalized = mountName.normalize('NFKC').trim();
   const encoded = [...normalized].map((character) =>
-    /[\p{L}\p{N}._-]/u.test(character) ? character : '_'
+    /[\p{L}\p{N}._@-]/u.test(character) ? character : '_'
   ).join('').replace(/_+/g, '_').replace(/^[. ]+|[. ]+$/g, '');
   const shortened = [...encoded].slice(0, 48).join('') || 'mount';
   return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(shortened)
