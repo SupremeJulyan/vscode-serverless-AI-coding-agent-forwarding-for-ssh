@@ -83,9 +83,9 @@ Set `safs.agentInterface` to choose between the two modes:
 
 MCP and CLI modes are mutually exclusive. Running `SAFS: Install or Update Global CLI` from the Command Palette switches to CLI mode when necessary, installs or repairs the CLI and Skill, and copies the MCP removal prompt.
 
-When the same host, mount, and remote root are republished, an existing binding automatically
-resumes on the unique new instance. Selection is requested again only when the target is gone or
-ambiguous.
+Bindings remain pinned to a specific VS Code window. If that window closes, its binding expires
+even when another window has the same mount and directory. When multiple windows share a
+placeholder path, an initial bind requires an explicit choice.
 
 In MCP mode, a successful bind returns the target workspace and `bindingId`. Switching first lists
 candidates and waits for an explicit user choice; after a successful switch, the Agent stops the
@@ -120,14 +120,16 @@ Opening a remote directory uses Workspace Mode; opening an SAFS remote terminal 
 directory uses Terminal Mode. SAFS reads the terminal's actual directory and publishes it as the
 Agent `workspaceRoot`. Commands inherit the terminal's current user privileges and exported
 environment; the bound terminal and directory are shown below the status.
+Use **Switch Workspace** to select and open a remote directory in the current window; cancelling
+the picker leaves the current mode unchanged.
 
-In Terminal Mode, MCP exposes only `run_remote_command`. Even if an Agent cached the earlier tool
-list, calling another tool returns an actionable message directing it to the only available tool,
-`run_remote_command`. The CLI is shared by every window, so `bind`/`workspaces`/`switch` remain
-available for routing. Once bound to this window, the only remote-operation command is
-`safs exec --binding <bindingId> -- 'COMMAND'`; other operations and batches return that command
-as guidance, and `--cwd` cannot override the terminal directory. File, search, transfer,
-workspace-switching, and retained-output tools are unavailable in this mode.
+The shared MCP URL always exposes a stable tool list. After `get_remote_workspace`, the binding
+result reports `workspace.mode` as `workspace` or `terminal`. A terminal binding permits only
+`run_remote_command` for remote operations; file, search, transfer, and retained-output calls
+are rejected. Bindings to other workspace windows remain unaffected. The CLI keeps
+`bind`/`workspaces`/`switch` for routing; a terminal binding permits only
+`safs exec --binding <bindingId> -- 'COMMAND'` for remote operations, and `--cwd` cannot override
+the terminal directory. Switching a binding still requires the workspace selection flow.
 
 Terminal Mode lasts only for the current window session. Closing the terminal or switching the
 remote directory in the current window exits Terminal Mode. Opening a remote directory in a new

@@ -9,8 +9,7 @@ import {
 import {
   type AgentToolProfile, configureAgentMcpResources,
   registerAgentMcpTools, routedAgentMcpInstructions,
-  terminalAgentMcpInstructions, terminalCliInstructions, terminalCliOnlyCommandMessage,
-  terminalMcpOnlyToolError, terminalMcpOnlyToolMessage
+  terminalCliInstructions, terminalCliOnlyCommandMessage, terminalMcpOnlyToolMessage
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
 
@@ -150,12 +149,8 @@ export class AgentHttpRouter {
   private _leader = false;
   private readonly discover: () => DiscoveredAgentWorkspace[];
   private readonly bindings = new Map<string, {
-    instanceId: string; host: string; mountName: string; workspaceRoot: string;
-    workspaceUri: string; owner: string;
+    instanceId: string; workspaceUri: string; host: string; workspaceRoot: string; owner: string;
     agentName?: string;
-  }>();
-  private readonly preferredTargets = new Map<string, {
-    host: string; mountName: string; workspaceRoot: string; workspaceUri: string;
   }>();
 
   constructor(
@@ -187,20 +182,10 @@ export class AgentHttpRouter {
     return this.discover();
   }
 
-  private terminalWorkspaces(): DiscoveredAgentWorkspace[] {
-    return this.workspaces().filter((workspace) => workspace.terminalCommandOnly === true);
-  }
-
   private activeToolProfile(): AgentToolProfile {
-    return this.terminalWorkspaces().length > 0 ? 'terminal'
-      : (this.options.toolProfile?.() ?? 'full');
-  }
-
-  private terminalWorkspace(): DiscoveredAgentWorkspace | undefined {
-    const candidates = this.terminalWorkspaces();
-    if (candidates.length === 1) return candidates[0];
-    const focused = candidates.filter((workspace) => workspace.focused);
-    return focused.length === 1 ? focused[0] : undefined;
+    // The shared MCP URL has no window identity before get_remote_workspace.
+    // Tool schemas must stay stable; the binding determines each window's mode.
+    return this.options.toolProfile?.() ?? 'full';
   }
 
   private bindingKey(agentName?: string): string {
@@ -211,33 +196,18 @@ export class AgentHttpRouter {
     const workspaces = this.workspaces();
     const binding = this.bindings.get(bindingId);
     if (!binding) return undefined;
-    const exact = workspaces.find((workspace) => workspace.instanceId === binding.instanceId);
-    if (exact) return exact;
-    const replacements = workspaces.filter((workspace) =>
-      this.isSameLogicalTarget(binding, workspace)
-    );
-    if (replacements.length !== 1) return undefined;
-    binding.instanceId = replacements[0].instanceId;
-    this.options.log?.(
-      `Binding ${bindingId} resumed on republished workspace ${replacements[0].instanceId}`
-    );
-    return replacements[0];
-  }
-
-  private isSameLogicalTarget(
-    target: { host: string; mountName: string; workspaceRoot: string; workspaceUri: string },
-    workspace: DiscoveredAgentWorkspace
-  ): boolean {
-    return workspace.host === target.host
-      && workspace.mountName === target.mountName
-      && workspace.workspaceRoot === target.workspaceRoot
-      && workspace.workspaceUri === target.workspaceUri;
+    // A second VS Code window may publish the same mount and path. Never move a
+    // binding to another window merely because its remote coordinates match.
+    return workspaces.find((workspace) => workspace.instanceId === binding.instanceId
+      && workspace.workspaceUri === binding.workspaceUri
+      && workspace.host === binding.host);
   }
 
   private publicWorkspace(workspace: DiscoveredAgentWorkspace): Record<string, unknown> {
     return {
       workspaceRoot: workspace.workspaceRoot,
       host: workspace.host,
+      mode: workspace.terminalCommandOnly ? 'terminal' : 'workspace',
       ...(workspace.terminalCommandOnly ? { terminalCommandOnly: true } : {})
     };
   }
@@ -329,36 +299,8 @@ export class AgentHttpRouter {
     name: string, input: Record<string, unknown>, agentName?: string,
     source: AgentActivitySource = 'mcp'
   ): Promise<any> {
-    if (source === 'mcp' && name === 'run_remote_command'
-        && this.activeToolProfile() === 'terminal') {
-      const candidates = this.terminalWorkspaces();
-      const workspace = this.terminalWorkspace();
-      if (!workspace) {
-        return this.toolError(
-          candidates.length > 1 ? 'TERMINAL_TARGET_AMBIGUOUS' : 'TERMINAL_TARGET_UNAVAILABLE',
-          candidates.length > 1
-            ? 'Multiple SAFS terminal targets are active. Keep only one enabled, or focus its VS Code window.'
-            : 'No SAFS terminal target is active. Enable Use Current Terminal in Agent Activity.'
-        );
-      }
-      try {
-        return await this.forward(workspace, 'run_remote_command', {
-          command: input.command,
-          mountName: workspace.mountName
-        }, agentName, source);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        this.options.log?.(`终端工具失败，mount=${workspace.mountName}：${detail}`);
-        return this.toolError(
-          'REMOTE_UNAVAILABLE',
-          `The selected SAFS terminal is currently unavailable: ${detail}`,
-          { mountName: workspace.mountName }
-        );
-      }
-    }
     if (name === 'cli_list_workspaces') {
-      const workspaces = this.activeToolProfile() === 'terminal'
-        ? this.terminalWorkspaces() : this.workspaces();
+      const workspaces = this.workspaces();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
           workspaces: workspaces.map((workspace) => this.selectableWorkspace(workspace))
@@ -376,9 +318,7 @@ export class AgentHttpRouter {
           'Run safs bind with --agent NAME so this binding can identify the Agent.'
         );
       }
-      const allWorkspaces = this.workspaces();
-      const terminalMode = this.activeToolProfile() === 'terminal';
-      const workspaces = terminalMode ? this.terminalWorkspaces() : allWorkspaces;
+      const workspaces = this.workspaces();
       if (!workspaces.length) {
         return this.toolError(
           'NO_ACTIVE_REMOTE',
@@ -386,11 +326,10 @@ export class AgentHttpRouter {
         );
       }
       const switching = name === 'switch_remote_workspace';
-      const workspaceId = typeof input.workspaceId === 'string'
+      const workspaceId = switching && typeof input.workspaceId === 'string'
         ? input.workspaceId.trim()
         : '';
       const agentCwd = typeof input.agentCwd === 'string' ? input.agentCwd.trim() : '';
-      let recoveredLogicalWorkspace = false;
       let workspace = workspaceId
         ? workspaces.find((candidate) => candidate.instanceId === workspaceId)
         : undefined;
@@ -419,32 +358,18 @@ export class AgentHttpRouter {
       }
       if (!switching) {
         let closest: DiscoveredAgentWorkspace[] = [];
-        if (terminalMode) {
-          workspace = this.terminalWorkspace();
-        } else {
-          const canonicalCwd = agentCwd ? canonicalAgentCwd(agentCwd) : '';
-          const matches = canonicalCwd ? workspaces.filter((candidate) => candidate.agentCwd
-            && cwdContains(canonicalAgentCwd(candidate.agentCwd), canonicalCwd)) : [];
-          const longest = matches.reduce(
-            (length, candidate) => Math.max(length, canonicalAgentCwd(candidate.agentCwd!).length),
-            0
-          );
-          closest = matches.filter(
-            (candidate) => canonicalAgentCwd(candidate.agentCwd!).length === longest
-          );
-          if (closest.length === 1) workspace = closest[0];
-        }
-        if (!workspace) {
-          const preferred = this.preferredTargets.get(owner);
-          const previous = preferred
-            ? workspaces.filter((candidate) => this.isSameLogicalTarget(preferred, candidate))
-            : [];
-          if (previous.length === 1) {
-            workspace = previous[0];
-            recoveredLogicalWorkspace = true;
-          }
-        }
-        if (!workspace && !terminalMode && closest.length === 0) {
+        const canonicalCwd = agentCwd ? canonicalAgentCwd(agentCwd) : '';
+        const matches = canonicalCwd ? workspaces.filter((candidate) => candidate.agentCwd
+          && cwdContains(canonicalAgentCwd(candidate.agentCwd), canonicalCwd)) : [];
+        const longest = matches.reduce(
+          (length, candidate) => Math.max(length, canonicalAgentCwd(candidate.agentCwd!).length),
+          0
+        );
+        closest = matches.filter(
+          (candidate) => canonicalAgentCwd(candidate.agentCwd!).length === longest
+        );
+        if (closest.length === 1) workspace = closest[0];
+        if (!workspace && closest.length === 0) {
           const focused = workspaces.filter((candidate) => candidate.focused);
           if (focused.length === 1) workspace = focused[0];
         }
@@ -452,7 +377,7 @@ export class AgentHttpRouter {
           return this.toolError(
             'WORKSPACE_SELECTION_REQUIRED',
             closest.length > 1
-              ? 'The Agent cwd matches multiple active SAFS windows. Ask the user to choose one candidate in the Agent conversation, then call this tool again with its workspaceId.'
+              ? 'The Agent cwd matches multiple active SAFS windows. Ask the user to choose one candidate in the Agent conversation, then call switch_remote_workspace with its workspaceId and userConfirmed=true.'
               : 'The Agent cwd does not match an active SAFS placeholder and there is no unique focused SAFS window. Ask the user to choose one candidate in the Agent conversation, then call switch_remote_workspace with its workspaceId.',
             {
               candidates: workspaces.map((candidate) => this.selectableWorkspace(candidate)),
@@ -465,18 +390,11 @@ export class AgentHttpRouter {
       const bindingId = randomUUID().replace(/-/g, '').slice(0, 16);
       this.bindings.set(bindingId, {
         instanceId: selectedWorkspace.instanceId,
-        host: selectedWorkspace.host,
-        mountName: selectedWorkspace.mountName,
-        workspaceRoot: selectedWorkspace.workspaceRoot,
         workspaceUri: selectedWorkspace.workspaceUri,
+        host: selectedWorkspace.host,
+        workspaceRoot: selectedWorkspace.workspaceRoot,
         owner,
         agentName: bindingAgentName
-      });
-      this.preferredTargets.set(owner, {
-        host: selectedWorkspace.host,
-        mountName: selectedWorkspace.mountName,
-        workspaceRoot: selectedWorkspace.workspaceRoot,
-        workspaceUri: selectedWorkspace.workspaceUri
       });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
@@ -485,7 +403,6 @@ export class AgentHttpRouter {
           ...(source === 'cli' ? {
             agentName: bindingAgentName,
             selectedAutomatically: !switching,
-            ...(recoveredLogicalWorkspace ? { recoveredLogicalWorkspace: true } : {}),
             ...(selectedWorkspace.terminalCommandOnly ? {
               cliInstructions: terminalCliInstructions
             } : {}),
@@ -532,7 +449,7 @@ export class AgentHttpRouter {
     const { bindingId: _bindingId, ...publicInput } = input;
     let args: Record<string, unknown> = { ...publicInput, mountName: workspace.mountName };
     if (workspace.terminalCommandOnly) {
-      if (source !== 'cli' || name !== 'run_remote_command') {
+      if (name !== 'run_remote_command') {
         const cliCommand = `safs exec --binding ${bindingId} -- 'COMMAND'`;
         return this.toolError(
           'TERMINAL_COMMAND_ONLY',
@@ -572,11 +489,7 @@ export class AgentHttpRouter {
     const profile = this.activeToolProfile();
     const server = new McpServer(
       { name: 'safs-http-router', version: '1.0.0' },
-      {
-        instructions: profile === 'terminal'
-          ? terminalAgentMcpInstructions
-          : routedAgentMcpInstructions
-      }
+      { instructions: routedAgentMcpInstructions }
     );
     configureAgentMcpResources(server);
     registerAgentMcpTools(server, {
@@ -707,17 +620,6 @@ export class AgentHttpRouter {
           agentName ? `，agent=${agentName}` : '，agent=<unknown>'
         }`
       );
-      // Agent may retain an earlier tools/list result after the window switches
-      // modes. Return an actionable tool result instead of the SDK's generic
-      // "Tool not found" error for such stale calls.
-      if (method === 'tools/call' && typeof tool === 'string'
-          && this.activeToolProfile() === 'terminal' && tool !== 'run_remote_command') {
-        response.json({
-          jsonrpc: '2.0', id: request.body?.id ?? null,
-          result: terminalMcpOnlyToolError()
-        });
-        return;
-      }
       // 绑定工具由固定路由器本地完成；其它工具只在实际执行窗口记录，避免双份日志。
       if (method === 'tools/call' && typeof tool === 'string'
         && ['get_remote_workspace', 'switch_remote_workspace'].includes(tool)) {

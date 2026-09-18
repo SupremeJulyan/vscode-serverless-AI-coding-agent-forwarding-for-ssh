@@ -100,6 +100,8 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   assert.match(html, />工作区模式<\/span>/);
   assert.match(html, />终端模式<\/span>/);
   assert.match(html, />刷新工作区<\/button>/);
+  assert.match(html, /id="switchWorkspace"[^>]*>切换工作区<\/button>/);
+  assert.match(html, /type: 'switchWorkspace'/);
   assert.equal(html.includes("type: 'setTerminalTarget'"), false);
   assert.match(html, /type: 'refreshTerminalTarget'/);
   assert.equal(html.includes('aria-pressed'), false);

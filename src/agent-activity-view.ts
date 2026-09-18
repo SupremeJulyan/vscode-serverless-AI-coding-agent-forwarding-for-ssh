@@ -13,6 +13,7 @@ export interface AgentTerminalTargetState {
 export interface AgentActivityViewActions {
   terminalTarget(): AgentTerminalTargetState;
   refreshTerminalTarget(): Promise<void>;
+  switchWorkspace(): Promise<void>;
 }
 
 export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -52,6 +53,8 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
         if (selected === '清空') await this.store.clear();
       } else if (type === 'refreshTerminalTarget') {
         await this.actions?.refreshTerminalTarget();
+      } else if (type === 'switchWorkspace') {
+        await this.actions?.switchWorkspace();
       }
     });
   }
@@ -196,6 +199,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       <span id="workspaceModeLabel" class="mode-label" hidden>工作区模式</span>
       <span id="terminalModeLabel" class="mode-label" hidden>终端模式</span>
       <button id="refreshTerminalTarget" type="button" hidden>刷新工作区</button>
+      <button id="switchWorkspace" type="button" title="在当前窗口选择并打开远程目录">切换工作区</button>
     </div>
     <div id="agentModeDetail" class="agent-mode-detail">使用当前远程工作区</div>
   </section>
@@ -223,6 +227,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const workspaceModeLabel = document.getElementById('workspaceModeLabel');
     const terminalModeLabel = document.getElementById('terminalModeLabel');
     const refreshTerminalTarget = document.getElementById('refreshTerminalTarget');
+    const switchWorkspace = document.getElementById('switchWorkspace');
     const agentMode = document.getElementById('agentMode');
     const agentModeDetail = document.getElementById('agentModeDetail');
     let events = [];
@@ -411,6 +416,9 @@ export function activityViewHtml(webview: vscode.Webview): string {
     document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
     refreshTerminalTarget.addEventListener('click', function() {
       vscode.postMessage({ type: 'refreshTerminalTarget' });
+    });
+    switchWorkspace.addEventListener('click', function() {
+      vscode.postMessage({ type: 'switchWorkspace' });
     });
     vscode.postMessage({ type: 'ready' });
   </script>

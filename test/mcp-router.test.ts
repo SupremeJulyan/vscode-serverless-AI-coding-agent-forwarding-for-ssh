@@ -118,7 +118,7 @@ test('normalizes Windows and WSL views of the same Agent cwd', () => {
   assert.equal(canonicalAgentCwd('/mnt/c/Users/Me/SAFS'), '/mnt/c/users/me/safs');
 });
 
-test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plus exec', async () => {
+test('a terminal binding permits only commands without changing other window bindings', async () => {
   const backend = new AgentMcpServer(0, 'terminal-backend', {
     ...callbacks('terminal'),
     toolProfile: () => 'terminal',
@@ -141,7 +141,7 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
     workspaces = [
       record('ordinary-window', backend.url, {
         workspaceRoot: '/home/ordinary/project',
-        agentCwd: '/local/project',
+        agentCwd: '/local/ordinary',
         focused: true
       }),
       record('terminal-window', backend.url, {
@@ -155,23 +155,26 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
     await client.connect(new StreamableHTTPClientTransport(
       new URL(agentTaggedMcpUrl(router.url, 'Codex'))
     ));
-    assert.match(client.getInstructions() ?? '', /Only the selected visible SAFS terminal/);
+    assert.match(client.getInstructions() ?? '', /workspace\.mode/);
     const tools = await client.listTools();
-    assert.deepEqual(tools.tools.map((tool) => tool.name), ['run_remote_command']);
-    assert.deepEqual(
-      Object.keys(tools.tools[0].inputSchema.properties ?? {}),
-      ['command']
-    );
+    assert.ok(tools.tools.some((tool) => tool.name === 'get_remote_workspace'));
+    assert.ok(tools.tools.some((tool) => tool.name === 'remote_read'));
+    const selected = await client.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/local/project' }
+    });
+    const selectedValue = JSON.parse((selected.content as any[])[0].text);
+    assert.equal(selectedValue.workspace.mode, 'terminal');
+    const mcpBindingId = selectedValue.bindingId;
     const deniedMcp = await client.callTool({
-      name: 'remote_read', arguments: { path: 'README.md' }
+      name: 'remote_read', arguments: { bindingId: mcpBindingId, path: 'README.md' }
     });
     assert.equal(deniedMcp.isError, true);
     const deniedMcpValue = JSON.parse((deniedMcp.content as any[])[0].text);
     assert.equal(deniedMcpValue.code, 'TERMINAL_COMMAND_ONLY');
     assert.equal(deniedMcpValue.allowedTool, 'run_remote_command');
-    assert.match(deniedMcpValue.message, /only available MCP tool: run_remote_command/);
+    assert.match(deniedMcpValue.message, /only available MCP remote-operation tool: run_remote_command/);
     const executed = await client.callTool({
-      name: 'run_remote_command', arguments: { command: 'id -un' }
+      name: 'run_remote_command', arguments: { bindingId: mcpBindingId, command: 'id -un' }
     });
     assert.deepEqual(JSON.parse((executed.content as any[])[0].text), {
       workspaceRoot: '/home/switched-user/project',
@@ -183,12 +186,9 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
     });
     const cachedCommandAlias = await client.callTool({
       name: 'run_remote_command',
-      arguments: { bindingId: 'cached-before-toggle', command: 'whoami', remoteCwd: '/ignored' }
+      arguments: { bindingId: mcpBindingId, command: 'whoami', remoteCwd: '/ignored' }
     });
-    assert.equal(
-      JSON.parse((cachedCommandAlias.content as any[])[0].text).stdout,
-      'terminal:whoami'
-    );
+    assert.equal(JSON.parse((cachedCommandAlias.content as any[])[0].text).code, 'TERMINAL_CWD_FIXED');
 
     const cliUrl = new URL(router.url);
     cliUrl.pathname = '/cli';
@@ -206,6 +206,7 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
     });
     assert.equal(bound.ok, true);
     assert.equal(bound.result.workspace.terminalCommandOnly, true);
+    assert.equal(bound.result.workspace.mode, 'terminal');
     assert.match(bound.result.cliInstructions, /Use only safs exec/);
     assert.match(bound.result.cliInstructions, /workspaceRoot|workspace root|selected workspace/i);
     assert.match(bound.result.cliInstructions, /create or modify files inside the selected workspaceRoot/i);
@@ -245,78 +246,222 @@ test('terminal mode exposes one MCP tool and lets CLI keep only bind routing plu
   }
 });
 
-test('binding survives a unique republish of the same logical workspace', async () => {
-  const backend = new AgentMcpServer(0, 'republished-backend', callbacks('republished'));
+test('agents bound to separate windows retain their own modes across focus changes', async () => {
+  let aProfile: 'terminal' | 'full' = 'terminal';
+  const terminalBackend = new AgentMcpServer(0, 'terminal-backend', {
+    ...callbacks('A'),
+    toolProfile: () => aProfile,
+    runTerminal: async (input) => ({ stdout: `A:${input.command}` })
+  });
+  const workspaceBackend = new AgentMcpServer(0, 'workspace-backend', callbacks('B'));
   let workspaces: DiscoveredAgentWorkspace[] = [];
   const router = new AgentHttpRouter(await freePort(), 'router-token', {
     discover: () => workspaces
   });
-  const client = new Client({ name: 'republish-agent', version: '1.0.0' });
+  const agentA = new Client({ name: 'agent-A', version: '1.0.0' });
+  const agentB = new Client({ name: 'agent-B', version: '1.0.0' });
   try {
-    await backend.start();
-    workspaces = [record('old-instance', backend.url, {
-      host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
-      agentCwd: '/placeholder/a', focused: true
-    })];
+    await Promise.all([terminalBackend.start(), workspaceBackend.start()]);
+    workspaces = [
+      record('window-A', terminalBackend.url, {
+        agentCwd: '/local/A', focused: true, terminalCommandOnly: true
+      }),
+      record('window-B', workspaceBackend.url, {
+        agentCwd: '/local/B', focused: false
+      })
+    ];
+    await router.start();
+    await agentA.connect(new StreamableHTTPClientTransport(
+      new URL(agentTaggedMcpUrl(router.url, 'Codex'))
+    ));
+    const aSelection = await agentA.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/local/A' }
+    });
+    const aBinding = JSON.parse((aSelection.content as any[])[0].text);
+    assert.equal(aBinding.workspace.mode, 'terminal');
+
+    workspaces = workspaces.map((workspace) => ({
+      ...workspace, focused: workspace.instanceId === 'window-B'
+    }));
+    await agentB.connect(new StreamableHTTPClientTransport(
+      new URL(agentTaggedMcpUrl(router.url, 'Codex'))
+    ));
+    assert.deepEqual(
+      (await agentA.listTools()).tools.map((tool) => tool.name),
+      (await agentB.listTools()).tools.map((tool) => tool.name)
+    );
+    const bSelection = await agentB.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/local/B' }
+    });
+    const bBinding = JSON.parse((bSelection.content as any[])[0].text);
+    assert.equal(bBinding.workspace.mode, 'workspace');
+
+    const bRead = await agentB.callTool({
+      name: 'remote_read', arguments: { bindingId: bBinding.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((bRead.content as any[])[0].text).label, 'B');
+    const aRead = await agentA.callTool({
+      name: 'remote_read', arguments: { bindingId: aBinding.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((aRead.content as any[])[0].text).code, 'TERMINAL_COMMAND_ONLY');
+    const aCommand = await agentA.callTool({
+      name: 'run_remote_command',
+      arguments: { bindingId: aBinding.bindingId, command: 'pwd' }
+    });
+    assert.equal(JSON.parse((aCommand.content as any[])[0].text).stdout, 'A:pwd');
+
+    workspaces = workspaces.map((workspace) => ({
+      ...workspace, focused: workspace.instanceId === 'window-A'
+    }));
+    const bReadAgain = await agentB.callTool({
+      name: 'remote_read', arguments: { bindingId: bBinding.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((bReadAgain.content as any[])[0].text).label, 'B');
+
+    const cliUrl = new URL(router.url);
+    cliUrl.pathname = '/cli';
+    const invokeCli = async (name: string, args: Record<string, unknown>) => {
+      const response = await fetch(cliUrl, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, arguments: args })
+      });
+      assert.equal(response.status, 200);
+      return response.json() as Promise<any>;
+    };
+    const cliA = await invokeCli('get_remote_workspace', {
+      agentName: 'Codex', agentCwd: '/local/A'
+    });
+    const cliB = await invokeCli('get_remote_workspace', {
+      agentName: 'Codex', agentCwd: '/local/B'
+    });
+    assert.equal(cliA.result.workspace.mode, 'terminal');
+    assert.equal(cliB.result.workspace.mode, 'workspace');
+    const cliADenied = await invokeCli('remote_read', {
+      bindingId: cliA.result.bindingId, path: 'README.md'
+    });
+    const cliBRead = await invokeCli('remote_read', {
+      bindingId: cliB.result.bindingId, path: 'README.md'
+    });
+    assert.equal(cliADenied.result.code, 'TERMINAL_COMMAND_ONLY');
+    assert.equal(cliBRead.result.label, 'B');
+
+    aProfile = 'full';
+    workspaces = workspaces.map((workspace) => workspace.instanceId === 'window-A'
+      ? { ...workspace, terminalCommandOnly: undefined }
+      : workspace);
+    const aModeAfterSwitch = await agentA.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/local/A' }
+    });
+    assert.equal(JSON.parse((aModeAfterSwitch.content as any[])[0].text).workspace.mode, 'workspace');
+    const aReadAfterSwitch = await agentA.callTool({
+      name: 'remote_read', arguments: { bindingId: aBinding.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((aReadAfterSwitch.content as any[])[0].text).label, 'A');
+    workspaces = workspaces.map((workspace) => workspace.instanceId === 'window-A'
+      ? { ...workspace, workspaceRoot: '/srv/a/terminal-cwd-refresh' }
+      : workspace);
+    const aReadAfterCwdRefresh = await agentA.callTool({
+      name: 'remote_read', arguments: { bindingId: aBinding.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((aReadAfterCwdRefresh.content as any[])[0].text).label, 'A');
+    workspaces = workspaces.map((workspace) => workspace.instanceId === 'window-A'
+      ? { ...workspace, workspaceUri: 'safs://a/srv/another-project' }
+      : workspace);
+    const aAfterWorkspaceSwitch = await agentA.callTool({
+      name: 'remote_read', arguments: { bindingId: aBinding.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((aAfterWorkspaceSwitch.content as any[])[0].text).code,
+      'WORKSPACE_BINDING_EXPIRED');
+    const bReadAfterSwitch = await agentB.callTool({
+      name: 'remote_read', arguments: { bindingId: bBinding.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((bReadAfterSwitch.content as any[])[0].text).label, 'B');
+  } finally {
+    await Promise.allSettled([
+      agentA.close(), agentB.close(), router.stop(),
+      terminalBackend.stop(), workspaceBackend.stop()
+    ]);
+  }
+});
+
+test('a binding never moves to another window with the same remote path', async () => {
+  const terminalBackend = new AgentMcpServer(0, 'terminal-backend', {
+    ...callbacks('A'), toolProfile: () => 'terminal',
+    runTerminal: async (input) => ({ stdout: `A:${input.command}` })
+  });
+  const workspaceBackend = new AgentMcpServer(0, 'workspace-backend', callbacks('B'));
+  let workspaces: DiscoveredAgentWorkspace[] = [];
+  const router = new AgentHttpRouter(await freePort(), 'router-token', {
+    discover: () => workspaces
+  });
+  const client = new Client({ name: 'window-agent', version: '1.0.0' });
+  try {
+    await Promise.all([terminalBackend.start(), workspaceBackend.start()]);
+    workspaces = [
+      record('window-A', terminalBackend.url, {
+        host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
+        agentCwd: '/placeholder/A', focused: true, terminalCommandOnly: true
+      }),
+      record('window-B', workspaceBackend.url, {
+        host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
+        agentCwd: '/placeholder/shared', focused: false
+      })
+    ];
     await router.start();
     await client.connect(new StreamableHTTPClientTransport(new URL(router.url)));
     const selected = await client.callTool({
-      name: 'get_remote_workspace', arguments: { agentCwd: '/placeholder/a/project' }
+      name: 'get_remote_workspace', arguments: { agentCwd: '/placeholder/A' }
     });
     const selectedValue = JSON.parse((selected.content as any[])[0].text);
+    assert.equal(selectedValue.workspace.mode, 'terminal');
 
-    workspaces = [record('new-instance', backend.url, {
-      host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
-      agentCwd: '/new-placeholder/a', focused: false
-    })];
-    const resumed = await client.callTool({
-      name: 'remote_list', arguments: { bindingId: selectedValue.bindingId, path: '.' }
+    workspaces = workspaces.map((workspace) => ({
+      ...workspace,
+      agentCwd: '/placeholder/shared',
+      focused: workspace.instanceId === 'window-B'
+    }));
+    const bSelected = await client.callTool({
+      name: 'get_remote_workspace', arguments: { agentCwd: '/placeholder/shared' }
     });
-    assert.equal(JSON.parse((resumed.content as any[])[0].text).label, 'republished');
+    assert.equal(bSelected.isError, true);
+    assert.equal(JSON.parse((bSelected.content as any[])[0].text).code,
+      'WORKSPACE_SELECTION_REQUIRED');
+    const bSwitch = await client.callTool({
+      name: 'switch_remote_workspace',
+      arguments: { workspaceId: 'window-B', userConfirmed: true }
+    });
+    const bBinding = JSON.parse((bSwitch.content as any[])[0].text);
+    assert.equal(bBinding.workspace.mode, 'workspace');
+    const aStillTerminal = await client.callTool({
+      name: 'remote_read', arguments: { bindingId: selectedValue.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((aStillTerminal.content as any[])[0].text).code, 'TERMINAL_COMMAND_ONLY');
 
-    workspaces = [];
-    const temporarilyMissing = await client.callTool({
-      name: 'remote_list', arguments: { bindingId: selectedValue.bindingId, path: '.' }
+    workspaces = [{ ...workspaces[1], focused: false }];
+    const expired = await client.callTool({
+      name: 'run_remote_command',
+      arguments: { bindingId: selectedValue.bindingId, command: 'pwd' }
     });
-    assert.equal(temporarilyMissing.isError, true);
+    assert.equal(expired.isError, true);
     assert.equal(
-      JSON.parse((temporarilyMissing.content as any[])[0].text).code,
+      JSON.parse((expired.content as any[])[0].text).code,
       'WORKSPACE_BINDING_EXPIRED'
     );
-
-    workspaces = [
-      record('duplicate-one', backend.url, {
-        host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
-        agentCwd: '/duplicate/one', focused: false
-      }),
-      record('duplicate-two', backend.url, {
-        host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
-        agentCwd: '/duplicate/two', focused: false
-      })
-    ];
-    const ambiguous = await client.callTool({
+    const bRead = await client.callTool({
+      name: 'remote_read', arguments: { bindingId: bBinding.bindingId, path: 'README.md' }
+    });
+    assert.equal(JSON.parse((bRead.content as any[])[0].text).label, 'B');
+    const candidate = await client.callTool({
       name: 'get_remote_workspace', arguments: { agentCwd: '/unrelated/local/cwd' }
     });
-    assert.equal(ambiguous.isError, true);
+    assert.equal(candidate.isError, true);
     assert.equal(
-      JSON.parse((ambiguous.content as any[])[0].text).code,
+      JSON.parse((candidate.content as any[])[0].text).code,
       'WORKSPACE_SELECTION_REQUIRED'
     );
-
-    workspaces = [record('latest-instance', backend.url, {
-      host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
-      agentCwd: '/latest-placeholder/a', focused: false
-    })];
-    const rebound = await client.callTool({
-      name: 'get_remote_workspace', arguments: { agentCwd: '/unrelated/local/cwd' }
-    });
-    const reboundValue = JSON.parse((rebound.content as any[])[0].text);
-    assert.equal(rebound.isError, undefined);
-    assert.deepEqual(Object.keys(reboundValue).sort(), ['bindingId', 'workspace']);
-    assert.deepEqual(reboundValue.workspace, { host: 'host-a', workspaceRoot: '/srv/a' });
   } finally {
     await client.close();
-    await Promise.allSettled([router.stop(), backend.stop()]);
+    await Promise.allSettled([router.stop(), terminalBackend.stop(), workspaceBackend.stop()]);
   }
 });
 
@@ -348,7 +493,7 @@ test('exact cwd wins, expired binding stays invalid, and a new get may use focus
     });
     const value = JSON.parse((selected.content as any[])[0].text);
     assert.deepEqual(Object.keys(value).sort(), ['bindingId', 'workspace']);
-    assert.deepEqual(value.workspace, { host: 'host-a', workspaceRoot: '/srv/a' });
+    assert.deepEqual(value.workspace, { host: 'host-a', workspaceRoot: '/srv/a', mode: 'workspace' });
 
     workspaces = [workspaces[1]];
     const expired = await client.callTool({
@@ -361,7 +506,7 @@ test('exact cwd wins, expired binding stays invalid, and a new get may use focus
       arguments: { agentCwd: '/mnt/c/local/agent-cwd/a/project' }
     });
     const reboundValue = JSON.parse((rebound.content as any[])[0].text);
-    assert.deepEqual(reboundValue.workspace, { workspaceRoot: '/srv/b', host: 'host-b' });
+    assert.deepEqual(reboundValue.workspace, { workspaceRoot: '/srv/b', host: 'host-b', mode: 'workspace' });
     assert.notEqual(reboundValue.bindingId, value.bindingId);
   } finally {
     await client.close();
@@ -400,7 +545,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
     const bindingId = routeValue.bindingId as string;
     assert.match(bindingId, /^[a-f0-9]{16}$/);
     assert.deepEqual(routeValue.workspace, {
-      workspaceRoot: '/srv/a', host: 'dev'
+      workspaceRoot: '/srv/a', host: 'dev', mode: 'workspace'
     });
     assert.deepEqual(Object.keys(routeValue).sort(), ['bindingId', 'workspace']);
     assert.deepEqual(routerAudits, ['get_remote_workspace']);
@@ -491,7 +636,7 @@ test('unmatched cwd automatically binds the uniquely focused SAFS window', async
     const value = JSON.parse((selected.content as any[])[0].text);
     assert.equal(selected.isError, undefined);
     assert.deepEqual(Object.keys(value).sort(), ['bindingId', 'workspace']);
-    assert.deepEqual(value.workspace, { workspaceRoot: '/srv/a', host: 'host-a' });
+    assert.deepEqual(value.workspace, { workspaceRoot: '/srv/a', host: 'host-a', mode: 'workspace' });
   } finally {
     await client.close();
     await Promise.allSettled([router.stop(), backend.stop()]);
@@ -539,8 +684,8 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
     const unresolvedValue = JSON.parse((unresolved.content as any[])[0].text);
     assert.equal(unresolvedValue.code, 'WORKSPACE_SELECTION_REQUIRED');
     assert.deepEqual(unresolvedValue.candidates, [
-      { workspaceId: 'focused', workspaceRoot: '/srv/a', host: 'host-a' },
-      { workspaceId: 'other', workspaceRoot: '/srv/b', host: 'host-b' }
+      { workspaceId: 'focused', workspaceRoot: '/srv/a', host: 'host-a', mode: 'workspace' },
+      { workspaceId: 'other', workspaceRoot: '/srv/b', host: 'host-b', mode: 'workspace' }
     ]);
     const switchCandidates = await client.callTool({
       name: 'switch_remote_workspace', arguments: {}
@@ -549,8 +694,8 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
     const switchCandidatesValue = JSON.parse((switchCandidates.content as any[])[0].text);
     assert.equal(switchCandidatesValue.code, 'WORKSPACE_SELECTION_REQUIRED');
     assert.deepEqual(switchCandidatesValue.candidates, [
-      { workspaceId: 'focused', workspaceRoot: '/srv/a', host: 'host-a' },
-      { workspaceId: 'other', workspaceRoot: '/srv/b', host: 'host-b' }
+      { workspaceId: 'focused', workspaceRoot: '/srv/a', host: 'host-a', mode: 'workspace' },
+      { workspaceId: 'other', workspaceRoot: '/srv/b', host: 'host-b', mode: 'workspace' }
     ]);
     const selected = await client.callTool({
       name: 'switch_remote_workspace', arguments: { workspaceId: 'other' }
@@ -567,7 +712,7 @@ test('workspace selection accepts workspaceId and preserves existing bindings', 
     const selectedValue = JSON.parse((confirmed.content as any[])[0].text);
     const bindingId = selectedValue.bindingId as string;
     assert.deepEqual(selectedValue.workspace, {
-      workspaceRoot: '/srv/b', host: 'host-b'
+      workspaceRoot: '/srv/b', host: 'host-b', mode: 'workspace'
     });
     assert.equal(selectedValue.mustStopNow, true);
     assert.match(selectedValue.message, /Stop now and wait for a new user request/);

@@ -17,10 +17,11 @@ export const directAgentMcpInstructions = workspaceInstructions +
   ' Call get_remote_workspace once to identify this window workspace.';
 
 export const routedAgentMcpInstructions = workspaceInstructions + ' ' + [
-  'Initially bind with get_remote_workspace(agentCwd=the absolute cwd on the Agent machine). An exact placeholder cwd, the unique previously selected logical target, or one uniquely focused window can bind automatically.',
+  'Initially bind with get_remote_workspace(agentCwd=the absolute cwd on the Agent machine). An exact placeholder cwd or one uniquely focused window can bind automatically.',
+  'Inspect workspace.mode in the binding result. A terminal binding permits only run_remote_command for remote operations and fixes its working directory to that terminal; file, search, and transfer operations are unavailable for that binding. The workspace-selection tools remain available. Other window bindings keep their own modes.',
   'If candidates are returned, show them and wait for the user to choose. Never select in the same turn as asking or infer consent from a single candidate. Only after the reply call switch_remote_workspace(workspaceId, userConfirmed=true).',
   'Call switch_remote_workspace without arguments to list workspaces before a user-directed change. A successful switch cancels the old task: stop and wait for a new request.',
-  'Pass bindingId to subsequent tools. It stays pinned to the selected logical workspace and may follow its unique republished instance; on expiry stop and report, never silently select or switch to another workspace.'
+  'Pass bindingId to subsequent tools. It stays pinned to the selected VS Code window; if that window closes or reloads, stop and request a new binding instead of silently switching to another window.'
 ].join(' ');
 
 export const terminalAgentMcpInstructions = [
@@ -38,8 +39,8 @@ export const terminalCliInstructions = [
 ].join(' ');
 
 export const terminalMcpOnlyToolMessage =
-  'This SAFS window is in terminal mode. The requested tool is unavailable. ' +
-  'Use the only available MCP tool: run_remote_command.';
+  'This SAFS binding is in terminal mode. The requested operation is unavailable. ' +
+  'Use the only available MCP remote-operation tool: run_remote_command.';
 
 export const terminalCliOnlyCommandMessage =
   'This SAFS workspace is in terminal mode. The requested command is unavailable. ' +
@@ -112,7 +113,7 @@ function toolDefinitions(
       name: 'get_remote_workspace',
       title: routed ? 'Bind a SAFS remote workspace' : 'Bind this SAFS remote workspace',
       description: routed
-        ? 'Initially binds a SAFS workspace. agentCwd is the absolute local cwd on the Agent machine, usually a SAFS placeholder; never pass a remote path or workspaceRoot. Resolution prefers an exact placeholder match, then the unique previously selected logical target, then one uniquely focused SAFS window. This tool never switches to a different target. If selection is ambiguous, show them to the user and wait for an explicit choice before calling switch_remote_workspace. Returns workspace and bindingId.'
+        ? 'Initially binds a SAFS workspace. agentCwd is the absolute local cwd on the Agent machine, usually a SAFS placeholder; never pass a remote path or workspaceRoot. Resolution uses a unique placeholder match, then a uniquely focused window only when no placeholder matches. This tool never changes an existing bindingId. If selection is ambiguous, show the candidates to the user and wait for an explicit choice before calling switch_remote_workspace. Returns workspace (including its mode) and bindingId.'
         : 'Returns the SAFS workspace served by this exact VS Code window for later remote tool calls.',
       inputSchema: routed ? {
         agentCwd: z.string().min(1).describe('Absolute current working directory on the Agent machine; not a remote path.')

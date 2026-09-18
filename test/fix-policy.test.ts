@@ -21,7 +21,9 @@ test('opening a remote directory in a new window preserves the source window ter
   assert.equal(openInNewWindow.includes('setAgentCommandTerminalMode(false)'), false);
 
   const switchInCurrentWindow = source.slice(end, source.indexOf('async function promptRemoteDirectory', end));
-  assert.ok(switchInCurrentWindow.includes('await setAgentCommandTerminalMode(false)'));
+  assert.equal(switchInCurrentWindow.includes('setAgentCommandTerminalMode(false)'), false);
+  assert.match(switchInCurrentWindow, /'vscode\.openFolder',\s*vscode\.Uri\.parse\(folderUri\(folder, resolved\)\)/);
+  assert.ok(source.includes('if (hasRemoteWorkspaceContext() && agentCommandTerminal)'));
 });
 
 test('sync ownership retries silently and SFTP negotiation has no fixed timeout', async () => {

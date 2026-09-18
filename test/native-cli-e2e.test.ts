@@ -148,7 +148,7 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     ] });
     assert.equal(workspaces.exitCode, 0, workspaces.stderr);
     assert.deepEqual(JSON.parse(workspaces.stdout), { workspaces: [{
-      workspaceId: 'native-window', workspaceRoot: '/project', host: 'dev'
+      workspaceId: 'native-window', workspaceRoot: '/project', host: 'dev', mode: 'workspace'
     }] });
     const bind = await executeCaptured({ command: executable, args: [
       '--config', config, 'bind', '--agent', 'Recorded Agent', '--cwd', temporary
