@@ -72,6 +72,7 @@ export type AgentMcpToolName =
   | 'remote_output'
   | 'remote_edit'
   | 'remote_write'
+  | 'remote_create'
   | 'remote_delete'
   | 'remote_chmod'
   | 'remote_move'
@@ -179,6 +180,18 @@ function toolDefinitions(
       title: 'Write a remote file',
       description: 'Creates or completely replaces one UTF-8 file inside workspaceRoot directly over SFTP. The parent directory must already exist; use remote_edit for small changes and remote_upload for large content. Returns the normalized path and UTF-8 byte count.',
       inputSchema: { ...binding, path: z.string().min(1), content: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    {
+      name: 'remote_create',
+      title: 'Create a remote file or directory',
+      description: 'Creates one new empty or UTF-8 file, or one directory, inside workspaceRoot directly over SFTP. The target must not already exist and its parent directory must already exist. type is file or directory; content is allowed only for files.',
+      inputSchema: {
+        ...binding,
+        path: z.string().min(1),
+        type: z.enum(['file', 'directory']),
+        content: z.string().optional()
+      },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
     {

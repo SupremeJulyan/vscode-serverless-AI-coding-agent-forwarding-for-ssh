@@ -55,6 +55,7 @@ function callbacks(label: string) {
     read: async (input: unknown) => ({ label, input }),
     edit: async (input: unknown) => ({ label, input }),
     write: async (input: unknown) => ({ label, input }),
+    create: async (input: unknown) => ({ label, input }),
     delete: async (input: unknown) => ({ label, input }),
     chmod: async (input: unknown) => ({ label, input }),
     move: async (input: unknown) => ({ label, input }),

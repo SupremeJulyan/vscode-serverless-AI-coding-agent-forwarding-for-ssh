@@ -34,6 +34,9 @@ export interface AgentMcpCallbacks {
     expectedHash?: string;
   }): Promise<unknown>;
   write(input: { mountName?: string; path: string; content: string }): Promise<unknown>;
+  create?(input: {
+    mountName?: string; path: string; type: 'file' | 'directory'; content?: string;
+  }): Promise<unknown>;
   delete(input: { mountName?: string; path: string; recursive?: boolean }): Promise<unknown>;
   chmod(input: { mountName?: string; path: string; mode: string }): Promise<unknown>;
   move(input: {
@@ -138,6 +141,7 @@ export class AgentMcpServer {
     const trackedTools = new Set([
       'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many',
       'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move',
+      'remote_create',
       'remote_upload', 'remote_download', 'remote_output', 'remote_search', 'run_remote_command'
     ]);
     const invoke = async (
@@ -246,6 +250,11 @@ export class AgentMcpServer {
             return invoke(name, input, () => this.callbacks.write(input as {
               mountName?: string; path: string; content: string;
             }));
+          case 'remote_create':
+            return invoke(name, input, () => {
+              if (!this.callbacks.create) throw new Error('Remote create is unavailable.');
+              return this.callbacks.create(input as Parameters<NonNullable<AgentMcpCallbacks['create']>>[0]);
+            });
           case 'remote_delete':
             return invoke(name, input, () => this.callbacks.delete(input as {
               mountName?: string; path: string; recursive?: boolean;

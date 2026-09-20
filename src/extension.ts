@@ -2986,6 +2986,41 @@ async function remoteWrite(input: {
   return { path: remotePath, bytes: content.length };
 }
 
+async function remoteCreate(input: {
+  mountName: string; path: string; type: 'file' | 'directory'; content?: string;
+}): Promise<unknown> {
+  const { folder } = await mountAndFolder(input.mountName);
+  const workspaceRoot = currentWorkspacePath(folder);
+  const remotePath = transferRemotePath(folder, input.path);
+  if (remotePath === workspaceRoot) {
+    throw new Error(`The workspace root itself cannot be created: ${input.path}`);
+  }
+  if (input.type === 'directory' && input.content !== undefined) {
+    throw new Error('Directory creation does not accept file content.');
+  }
+  const session = await pool.get(folder.hostName);
+  const realParent = await session.realpath(path.posix.dirname(remotePath));
+  if (!isRemotePathInsideRoot(workspaceRoot, realParent)) {
+    throw agentWorkspaceBoundaryError(
+      `Create parent escapes workspaceRoot through a symbolic link: ${input.path}`
+    );
+  }
+  try {
+    await session.stat(remotePath);
+    throw new Error(`The remote path already exists: ${input.path}`);
+  } catch (error) {
+    if (!isMissingRemoteError(error)) throw error;
+  }
+  const uri = vscode.Uri.parse(folderUri(folder, remotePath));
+  if (input.type === 'directory') {
+    await provider.createDirectory(uri);
+    return { path: remotePath, type: 'directory' };
+  }
+  const content = new TextEncoder().encode(input.content ?? '');
+  await provider.writeFile(uri, content, { create: true, overwrite: false });
+  return { path: remotePath, type: 'file', bytes: content.length };
+}
+
 async function remoteEdit(input: {
   mountName: string; path: string; edits: RemoteTextEdit[]; expectedHash?: string;
 }): Promise<unknown> {
@@ -4140,6 +4175,9 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         write: async (input) => remoteWrite({
+          ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
+        }),
+        create: async (input) => remoteCreate({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         delete: async (input) => remoteDelete({

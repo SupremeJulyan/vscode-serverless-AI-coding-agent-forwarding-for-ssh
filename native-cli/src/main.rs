@@ -15,7 +15,7 @@ SAFS is a token-efficient remote workspace CLI for coding agents.
 Setup:     install
 Workspace: bind, workspaces, switch, current-file
 Read:      list, read, read-many, search, find, output
-Write:     edit, write, delete, chmod, move, upload, download
+Write:     edit, write, create, delete, chmod, move, upload, download
 Execute:   exec, batch
 
 Examples:
@@ -103,6 +103,12 @@ Example: --input '{"edits":[{"oldText":"old","newText":"new"}],"expectedHash":"S
             r#"Usage: safs write PATH --binding ID (--file LOCAL_UTF8_FILE|- | --content TEXT)
 --content is convenient for short, non-sensitive text. Use --file - for multiline
 or sensitive content so it does not appear in command arguments.
+"#,
+        ),
+        "create" => Some(
+            r#"Usage: safs create PATH TYPE --binding ID [--content TEXT | --file LOCAL_UTF8_FILE|-]
+TYPE is `file` or `directory`. Files default to empty content; directories cannot
+receive content. The target must not already exist and its parent must exist.
 "#,
         ),
         "delete" => Some(
@@ -373,6 +379,7 @@ fn parse_request(
         "find" => &["binding", "path", "name"],
         "edit" => &["binding", "path"],
         "write" => &["binding", "path", "content"],
+        "create" => &["binding", "path", "type", "content"],
         "delete" => &["binding", "path"],
         "chmod" => &["binding", "path", "mode"],
         "upload" | "download" | "move" | "read-many" | "batch" => &["binding"],
@@ -444,6 +451,7 @@ fn parse_request(
     let positional_keys: &[&str] = match verb.as_str() {
         "list" => &["path"],
         "read" | "edit" | "write" | "delete" => &["path"],
+        "create" => &["path", "type"],
         "search" => &["query", "path"],
         "find" => &["name", "path"],
         "chmod" => &["path", "mode"],
@@ -558,6 +566,7 @@ fn parse_request(
                     "search" => "remote_search",
                     "edit" => "remote_edit",
                     "write" => "remote_write",
+                    "create" => "remote_create",
                     "delete" => "remote_delete",
                     "chmod" => "remote_chmod",
                     "move" => "remote_move",
@@ -592,6 +601,7 @@ fn parse_request(
                 "search" | "find" => "remote_search",
                 "edit" => "remote_edit",
                 "write" => "remote_write",
+                "create" => "remote_create",
                 "delete" => "remote_delete",
                 "chmod" => "remote_chmod",
                 "move" => "remote_move",
@@ -633,8 +643,8 @@ fn parse_request(
         }
     };
     if let Some(path) = content_path {
-        if tool != "remote_write" {
-            return Err("--file is only valid for write".into());
+        if !matches!(tool, "remote_write" | "remote_create") {
+            return Err("--file is only valid for write or create".into());
         }
         let content = if path == "-" {
             stdin_content.ok_or("Cannot read UTF-8 stdin")?
@@ -650,6 +660,18 @@ fn parse_request(
     }
     if tool == "remote_write" && !values.contains_key("content") {
         return Err("Write content is required. Retry with `--content TEXT` or pipe UTF-8 data to `--file -`".into());
+    }
+    if tool == "remote_create" {
+        let kind = values
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or("Create type is required: file or directory")?;
+        if !matches!(kind, "file" | "directory") {
+            return Err("Create type must be file or directory".into());
+        }
+        if kind == "directory" && values.contains_key("content") {
+            return Err("Directory creation does not accept content".into());
+        }
     }
     Ok((tool.into(), Value::Object(values)))
 }
@@ -1011,7 +1033,7 @@ mod tests {
 
     #[test]
     fn package_version_matches_the_extension_release() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "1.9.0");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "1.9.1");
     }
 
     #[test]
@@ -1079,6 +1101,10 @@ mod tests {
             (
                 &["write", "--binding", "b", "--input", r#"{"content":"x"}"#],
                 "remote_write",
+            ),
+            (
+                &["create", "new.txt", "file", "--binding", "b"],
+                "remote_create",
             ),
             (&["delete", "--binding", "b"], "remote_delete"),
             (&["chmod", "--binding", "b"], "remote_chmod"),

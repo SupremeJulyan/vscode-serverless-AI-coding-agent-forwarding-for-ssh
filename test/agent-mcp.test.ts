@@ -58,6 +58,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       }
       return { ...input, bytes: input.content.length };
     },
+    create: async (input) => ({ ...input, created: true }),
     delete: async (input) => ({ ...input, deleted: true }),
     chmod: async (input) => ({ ...input, changed: true }),
     move: async (input) => ({ ...input, moved: true }),
@@ -92,6 +93,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       'current_remote_file',
       'get_remote_workspace',
       'remote_chmod',
+      'remote_create',
       'remote_delete',
       'remote_download',
       'remote_edit',
@@ -142,6 +144,10 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       }
     });
     assert.equal(JSON.parse((edited.content as any[])[0].text).replacements, 1);
+    const created = await client.callTool({
+      name: 'remote_create', arguments: { path: 'new.txt', type: 'file', content: 'new' }
+    });
+    assert.equal(JSON.parse((created.content as any[])[0].text).created, true);
     const downloaded = await client.callTool({
       name: 'remote_download', arguments: {
         remotePath: 'dist/app.bin', localPath: '/tmp/app.bin'
@@ -202,8 +208,9 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     });
     assert.deepEqual(audited.map((entry) => entry.toolName), [
       'current_remote_file', 'get_remote_workspace', 'remote_list',
-      'remote_read', 'remote_edit', 'remote_download', 'remote_upload', 'remote_delete',
-      'remote_chmod', 'remote_move', 'remote_search', 'remote_list', 'remote_write'
+      'remote_read', 'remote_edit', 'remote_create', 'remote_download', 'remote_upload',
+      'remote_delete', 'remote_chmod', 'remote_move', 'remote_search', 'remote_list',
+      'remote_write'
     ]);
     assert.ok(audited.every((entry) => entry.agentName === 'codex'));
     const large = await client.callTool({ name: 'run_remote_command', arguments: { command: 'large' } });

@@ -19,7 +19,7 @@ const cliToolNames = new Set([
   // Keep already-installed 1.7.8 CLIs working; these aliases are not exposed as MCP tools.
   'safs_get_remote_workspace', 'safs_switch_remote_workspace',
   'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many', 'remote_search',
-  'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move',
+  'remote_edit', 'remote_write', 'remote_create', 'remote_delete', 'remote_chmod', 'remote_move',
   'remote_upload', 'remote_download', 'remote_output', 'run_remote_command',
   'safs_cli_batch'
 ]);

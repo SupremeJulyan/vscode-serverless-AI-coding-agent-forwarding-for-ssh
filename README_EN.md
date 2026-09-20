@@ -177,6 +177,8 @@ printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
   | safs edit --binding "$binding_id" --path README.md --input -
 printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
 safs write --binding "$binding_id" --path short.txt --content 'short text'
+safs create --binding "$binding_id" --path src/new-dir directory
+safs create --binding "$binding_id" --path src/new.txt file --content 'initial text'
 safs exec 'pwd' --binding "$binding_id"
 safs switch --agent 'Codex' --workspace 'workspace-id-from-safs-workspaces' --confirmed
 ```

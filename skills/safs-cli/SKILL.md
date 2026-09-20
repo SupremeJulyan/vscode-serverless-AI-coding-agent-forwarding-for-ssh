@@ -27,7 +27,7 @@ A successful switch cancels the previous task context. Stop immediately and wait
 
 ## Operate safely
 
-- Use structured SAFS commands for all remote file operations: listing, reading, searching, editing, writing, moving, deleting, changing permissions, uploading, and downloading.
+- Use structured SAFS commands for all remote file operations: listing, reading, searching, creating, editing, writing, moving, deleting, changing permissions, uploading, and downloading.
 - Never use local filesystem tools for remote paths. Never use `safs exec` or shell redirection as a fallback for file operations rejected by a structured command.
 - Reserve `safs exec` for task commands such as builds, tests, and version-control inspection.
 - Prefer concise positional forms. Use `safs <command> --help` when exact syntax is needed.

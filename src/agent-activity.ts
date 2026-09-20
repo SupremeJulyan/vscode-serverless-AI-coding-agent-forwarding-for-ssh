@@ -44,7 +44,7 @@ export const agentActivityLimit = 200;
 export const agentActivityStorageKey = 'safs.agentActivity.v1';
 
 const writeTools = new Set([
-  'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move'
+  'remote_edit', 'remote_write', 'remote_create', 'remote_delete', 'remote_chmod', 'remote_move'
 ]);
 const transferTools = new Set(['remote_upload', 'remote_download']);
 
@@ -101,6 +101,12 @@ export function summarizeAgentActivityInput(
   if (toolName === 'run_remote_command') put(summary, 'command', safeText(input.command, 500));
   if (toolName === 'remote_write' && typeof input.content === 'string') {
     summary.contentBytes = Buffer.byteLength(input.content, 'utf8');
+  }
+  if (toolName === 'remote_create') {
+    put(summary, 'type', safeText(input.type, 32));
+    if (typeof input.content === 'string') {
+      summary.contentBytes = Buffer.byteLength(input.content, 'utf8');
+    }
   }
   if (toolName === 'remote_edit' && Array.isArray(input.edits)) {
     summary.editCount = input.edits.length;

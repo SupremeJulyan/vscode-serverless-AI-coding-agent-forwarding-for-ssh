@@ -32,6 +32,8 @@ Use `read-many --input` for multiple bounded reads. `search --mode files` finds 
 safs edit PATH --binding ID --input '{"edits":[{"oldText":"old","newText":"new"}]}'
 safs write PATH --binding ID --content 'short text'
 printf '%s' 'multiline or sensitive content' | safs write PATH --binding ID --file -
+safs create PATH file --binding ID [--content 'initial text']
+safs create PATH directory --binding ID
 safs delete PATH --binding ID
 safs delete PATH --binding ID --input '{"recursive":true}'
 safs chmod PATH 755 --binding ID
