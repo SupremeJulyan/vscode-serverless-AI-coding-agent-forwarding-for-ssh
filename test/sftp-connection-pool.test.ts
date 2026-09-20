@@ -175,6 +175,32 @@ test('retries a connection-level failure once on a fresh session', async () => {
   assert.equal(pool.state('dev'), 'connected');
 });
 
+test('does not invalidate a newer session after a stale wrapper fails', async () => {
+  let attempts = 0;
+  const pool = new SftpConnectionPool(async (hostName) => {
+    attempts += 1;
+    const session = fakeSession(hostName, () => undefined);
+    if (attempts === 1) {
+      session.realpath = async () => {
+        const error = new Error('read ECONNRESET');
+        (error as NodeJS.ErrnoException).code = 'ECONNRESET';
+        throw error;
+      };
+    } else {
+      session.realpath = async (remotePath) => remotePath;
+    }
+    return session;
+  });
+
+  // Both wrappers hold the first pooled session. The first operation replaces
+  // it; the second wrapper is stale but must reuse that newer session.
+  const first = await pool.get('dev');
+  const second = await pool.get('dev');
+  assert.equal(await first.realpath('/one'), '/one');
+  assert.equal(await second.realpath('/two'), '/two');
+  assert.equal(attempts, 2);
+});
+
 test('retries ECONNRESET during the initial connection', async () => {
   let attempts = 0;
   const pool = new SftpConnectionPool(async (hostName) => {

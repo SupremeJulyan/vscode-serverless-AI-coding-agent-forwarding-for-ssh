@@ -48,7 +48,11 @@ class RetryingSftpSession implements SftpSession {
     return op(this.session).catch(async (error: unknown) => {
       if (!isConnectionError(error)) throw error;
       // 连接级错误：失效旧会话并在新连接上重试一次（不递归，最多一次）。
-      const fresh = await this.pool.reconnect(this.hostName);
+      // Only invalidate the session that actually failed. Another wrapper may
+      // have already replaced the pool entry while this operation was waiting
+      // to enter its catch handler; invalidating that newer session would turn
+      // a successful recovery into another disconnect/reconnect cycle.
+      const fresh = await this.pool.reconnect(this.hostName, undefined, this.session);
       this.session = fresh;
       return op(fresh);
     });
@@ -186,15 +190,21 @@ export class SftpConnectionPool {
   }
 
   /** 使当前会话失效并返回新连接（供会话包装器在连接级错误后重试一次）。 */
-  async reconnect(hostName: string, signal?: AbortSignal): Promise<SftpSession> {
-    await this.invalidate(hostName);
+  async reconnect(
+    hostName: string,
+    signal?: AbortSignal,
+    expectedSession?: SftpSession
+  ): Promise<SftpSession> {
+    await this.invalidate(hostName, expectedSession);
     return this.raw(hostName, signal);
   }
 
   /** 使当前会话失效（关闭并释放中继租约），状态置为 reconnecting。幂等。 */
-  async invalidate(hostName: string): Promise<void> {
+  async invalidate(hostName: string, expectedSession?: SftpSession): Promise<void> {
     const entry = this.entries.get(hostName);
-    if (!entry?.session) return;
+    // A stale operation must not invalidate a session installed by another
+    // operation after the stale one failed.
+    if (!entry?.session || (expectedSession && entry.session !== expectedSession)) return;
     const stale = entry.session;
     entry.session = undefined;
     entry.state = 'reconnecting';
