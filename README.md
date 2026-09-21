@@ -10,6 +10,8 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 ![SAFS 完整界面](https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main/images/safs-interface.png)
 
+远程挂载的浏览范围为 `/`，默认打开 SSH 登录家目录。打开／切换目录支持家目录之外的绝对路径（如 `/data/project`），实际访问权限由远程账号决定。Agent 的写入和命令范围以当前打开的工作区为准。
+
 ## 适用场景
 
 - 服务器不能或不方便安装 VS Code Server。

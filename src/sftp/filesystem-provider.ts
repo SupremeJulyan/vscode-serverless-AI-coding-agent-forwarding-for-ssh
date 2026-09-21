@@ -11,11 +11,24 @@ export interface RemoteFolder {
   mountName: string;
   hostName: string;
   remoteRoot: string;
+  /** Initial directory, independent of the browsable mount root. */
+  defaultRemotePath?: string;
+  /** Previous storage namespace retained for restored editor tabs. */
+  legacyMapping?: { workspaceRoot: string; remoteRoot: string };
   /** POSIX URI path backed by a real directory in extension global storage. */
   workspaceRoot: string;
 }
 
+export function isWorkspaceUriPath(folder: RemoteFolder, uriPath: string): boolean {
+  return isRemotePathInsideRoot(folder.workspaceRoot, uriPath)
+    || Boolean(folder.legacyMapping && isRemotePathInsideRoot(folder.legacyMapping.workspaceRoot, uriPath));
+}
+
 export function remotePathForUri(folder: RemoteFolder, uriPath: string): string {
+  if (folder.legacyMapping && isRemotePathInsideRoot(folder.legacyMapping.workspaceRoot, uriPath)) {
+    return path.posix.join(folder.legacyMapping.remoteRoot,
+      path.posix.relative(folder.legacyMapping.workspaceRoot, uriPath));
+  }
   if (isRemotePathInsideRoot(folder.workspaceRoot, uriPath)) {
     return path.posix.join(
       folder.remoteRoot, path.posix.relative(folder.workspaceRoot, uriPath)
@@ -136,7 +149,7 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
     const location = parseRemoteUri(uri.toString());
     const folder = this.registry.get(location.mountName);
     if (!folder) throw vscode.FileSystemError.Unavailable(`Unknown remote folder: ${location.mountName}`);
-    if (!isRemotePathInsideRoot(folder.workspaceRoot, location.remotePath)) {
+    if (!isWorkspaceUriPath(folder, location.remotePath)) {
       throw vscode.FileSystemError.NoPermissions(
         'The URI is outside the storage-backed workspace namespace'
       );

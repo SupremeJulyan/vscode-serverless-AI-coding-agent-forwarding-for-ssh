@@ -10,6 +10,8 @@ SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote
 
 ![Full SAFS interface](https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main/images/safs-interface.png)
 
+Remote mounts browse from `/` and open the SSH login home directory by default. Open/switch directory accepts paths outside home, such as `/data/project`, subject to the remote account permissions. Agent writes and commands remain scoped to the currently opened workspace.
+
 ## When to use SAFS
 
 - VS Code Server cannot or should not be installed on the server.

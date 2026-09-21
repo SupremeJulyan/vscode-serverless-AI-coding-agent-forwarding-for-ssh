@@ -2,12 +2,15 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-test('mount parent opens the resolved default root without recording it as history', async () => {
+test('mount parent opens the login home within the root mount without recording it as history', async () => {
   const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const start = source.indexOf('async function openDirectoryItem');
   const end = source.indexOf('async function openRemoteDirectory', start);
   const body = source.slice(start, end);
-  assert.ok(body.includes('const remoteDirectory = folder.remoteRoot;'));
+  assert.ok(body.includes('const remoteDirectory = folder.defaultRemotePath ?? folder.remoteRoot;'));
+  const setup = source.slice(source.indexOf('async function ensureFolder'), source.indexOf('function folderUri'));
+  assert.ok(setup.includes("session.statResolved('.')"));
+  assert.ok(setup.includes("const remoteRoot = '/';"));
   assert.equal(body.includes('cachedRemoteDirectory'), false);
   assert.equal(body.includes('recordDirectoryHistory'), false);
 });

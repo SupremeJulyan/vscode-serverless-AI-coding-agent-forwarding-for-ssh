@@ -53,7 +53,7 @@ import { RemoteSyncManager, RemoteSyncTask } from './remote-sync';
 import { SyncCoordinator } from './sync-coordination';
 import {
   remotePathForUri, RemoteFolder, RemoteFolderRegistry, SftpFileSystemProvider,
-  workspacePathForRemote
+  workspacePathForRemote, isWorkspaceUriPath
 } from './sftp/filesystem-provider';
 import {
   isRemotePathInsideRoot, parseRemoteUri, remoteFileSystemScheme, remoteUri
@@ -633,14 +633,27 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   const session = await pool.get(resolved.hostConfig.name);
   refreshSafsEntryLabel();
   // realpath + stat 一步完成（SCP 回退下合并为单条 exec）。
-  const { path: remoteRoot, stat } = await session.statResolved(mount.remote_path);
-  if (stat.type !== 'directory') throw new Error(`远程路径不是目录：${remoteRoot}`);
+  const { path: defaultRemotePath, stat } = await session.statResolved('.');
+  if (stat.type !== 'directory') throw new Error(`远程路径不是目录：${defaultRemotePath}`);
+  const remoteRoot = '/';
   const placeholder = await ensureAgentCwdPlaceholder(
     remoteRoot, vscodeContext.globalStorageUri.fsPath, mount.name
   );
   await removeLegacyCliInstructions(placeholder.localPath);
   const workspaceRoot = vscode.Uri.file(placeholder.localPath).path;
-  const folder = { mountName: mount.name, hostName: mount.host, remoteRoot, workspaceRoot };
+  // Preserve old home/configured-root URIs when existing windows and tabs restore.
+  const legacyRoot = mount.remote_path === '.' ? defaultRemotePath
+    : await session.realpath(mount.remote_path).catch(() => undefined);
+  const legacyPlaceholder = legacyRoot && legacyRoot !== remoteRoot
+    ? await ensureAgentCwdPlaceholder(legacyRoot, vscodeContext.globalStorageUri.fsPath, mount.name)
+    : undefined;
+  const folder: RemoteFolder = {
+    mountName: mount.name, hostName: mount.host, remoteRoot, workspaceRoot, defaultRemotePath,
+    ...(legacyPlaceholder && legacyRoot ? { legacyMapping: {
+      workspaceRoot: vscode.Uri.file(legacyPlaceholder.localPath).path, remoteRoot: legacyRoot
+    } } : {})
+  };
+  await ensureAgentCwdSubdirectory(placeholder.localPath, remoteRoot, defaultRemotePath);
   registry.set(folder);
   agentTrace(
     'SFTP',
@@ -649,7 +662,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   return folder;
 }
 
-function folderUri(folder: RemoteFolder, remotePath = folder.remoteRoot): string {
+function folderUri(folder: RemoteFolder, remotePath = folder.defaultRemotePath ?? folder.remoteRoot): string {
   return remoteUri(folder.mountName, workspacePathForRemote(folder, remotePath));
 }
 
@@ -858,7 +871,7 @@ async function openDirectoryItem(requested: MountConfig): Promise<void> {
     progress.report({ message: '正在验证远程目录…' });
     return ensureFolder(requested);
   });
-  const remoteDirectory = folder.remoteRoot;
+  const remoteDirectory = folder.defaultRemotePath ?? folder.remoteRoot;
   await showRemoteShortcutHintOnce(vscodeContext);
   agentTrace('Open', `创建新窗口，workspace=${folderUri(folder, remoteDirectory)}`);
   await vscode.commands.executeCommand(
@@ -896,7 +909,7 @@ async function selectRemoteDirectory(
   const session = await pool.get(folder.hostName);
   const currentPath = location?.mountName === mount.name
     ? location.remotePath
-    : folder.remoteRoot;
+    : folder.defaultRemotePath ?? folder.remoteRoot;
   const requested = await promptRemoteDirectory(
     session, folder.remoteRoot, currentPath, mount.name
   );
@@ -1602,12 +1615,13 @@ async function visualUpload(
   const resolved = resolveMount(config, mount);
   requireConfiguredHostLogin(resolved.hostConfig);
   const session = await pool.get(resolved.hostConfig.name);
-  const remoteRoot = await session.realpath(mount.remote_path);
+  const remoteRoot = '/';
+  const defaultDirectory = await session.realpath('.');
   // 第二步：选择/输入远程目标目录（Tab 补全、回车确认）。
   const picked = forcedTargetDir
-    ?? await promptRemoteDirectory(session, remoteRoot, remoteRoot, mount.name);
+    ?? await promptRemoteDirectory(session, remoteRoot, defaultDirectory, mount.name);
   if (!picked) return false;
-  const targetDir = picked.startsWith('/') ? picked : path.posix.join(remoteRoot, picked);
+  const targetDir = picked.startsWith('/') ? picked : path.posix.join(defaultDirectory, picked);
   bridgeOutput?.info(`[上传] mount=${mount.name}；target=${targetDir}`);
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
@@ -1680,7 +1694,7 @@ async function collectUploadSources(resources: vscode.Uri[]): Promise<string[]> 
 function currentRemoteLocation(): { mountName: string; remotePath: string } | undefined {
   const resolveLocation = (location: { mountName: string; remotePath: string }) => {
     const folder = registry.get(location.mountName);
-    if (!folder || !isRemotePathInsideRoot(folder.workspaceRoot, location.remotePath)) {
+    if (!folder || !isWorkspaceUriPath(folder, location.remotePath)) {
       return undefined;
     }
     return { ...location, remotePath: remotePathForUri(folder, location.remotePath) };
@@ -2318,7 +2332,7 @@ async function openTerminal(
   // absolute paths stored in remote workspace URIs.
   const remoteRoot = folder.remoteRoot;
   let remoteCwd = requestedRemoteCwd
-    ?? (location?.mountName === mount.name ? location.remotePath : folder.remoteRoot);
+    ?? (location?.mountName === mount.name ? location.remotePath : folder.defaultRemotePath ?? folder.remoteRoot);
   // 打开终端始终跟随当前打开的远程文件所在目录（无条件，含重开窗口归位）；
   // 仅“切换/打开文件时实时 cd”才由 safs.terminalFollowsActiveFile 控制。
   const fileDirectory = await activeRemoteFileDirectory(mount.name);
@@ -2913,13 +2927,13 @@ async function localTransferRoot(folder: RemoteFolder): Promise<string> {
   );
 }
 
-/** The remote directory currently open in this window, or the mount root. */
+/** The remote directory currently open in this window, or the login home. */
 function currentWorkspacePath(folder: RemoteFolder): string {
   const location = currentRemoteLocation();
   if (location && location.mountName === folder.mountName) {
     return location.remotePath;
   }
-  return folder.remoteRoot;
+  return folder.defaultRemotePath ?? folder.remoteRoot;
 }
 
 /**
@@ -3871,7 +3885,7 @@ async function restoreRemoteWorkspaces(): Promise<void> {
       const mount = config.mounts.find((candidate) => candidate.name === location.mountName);
       if (!mount) continue;
       const folder = await ensureFolder(mount);
-      if (!isRemotePathInsideRoot(folder.workspaceRoot, location.remotePath)) {
+      if (!isWorkspaceUriPath(folder, location.remotePath)) {
         output.appendLine(
           `工作区使用不受支持的旧 URI，请从 SAFS 面板重新打开：${mount.name}`
         );
@@ -3881,11 +3895,6 @@ async function restoreRemoteWorkspaces(): Promise<void> {
       await writeLastRemoteDirectory(
         localRootForFolder(folder), folder.remoteRoot, openedRemotePath
       );
-      if (folder.remoteRoot !== openedRemotePath) {
-        output.appendLine(
-          `远程根目录已变化：${openedRemotePath} -> ${folder.remoteRoot}`
-        );
-      }
       if (mount.remote_terminal === 'open') {
         // 标记：本次自动连接后，首次远程文件激活时无条件跟随其目录（标签页恢复）。
         restoredFileSyncPending.add(mount.name);
@@ -3995,7 +4004,7 @@ async function forwardedFolders(context: vscode.ExtensionContext): Promise<impor
       const folder = await ensureFolder(mount);
       const workspacePath = current?.mountName === mount.name
         ? currentWorkspacePath(folder)
-        : folder.remoteRoot;
+        : folder.defaultRemotePath ?? folder.remoteRoot;
       return {
         name: mount.name,
         workspaceUri: folderUri(folder, workspacePath),
