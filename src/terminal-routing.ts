@@ -1,5 +1,18 @@
 import type { HostConfig } from './config';
 import type { PlatformKind } from './platform';
+import { isTransientTerminalConnectionFailure } from './terminal-diagnostics';
+
+// Channel-level failures mean the server rejects the ssh2 client's pty/shell
+// negotiation. Connection-level failures mean the gateway drops ssh2 before
+// the session can be used. Both can be served by the system ssh fallback;
+// authentication failures intentionally do not match these patterns.
+const ssh2FallbackChannelPattern = /pseudo-terminal|open shell|start subsystem|channel open/i;
+
+export function shouldFallbackToSystemSsh(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return ssh2FallbackChannelPattern.test(message)
+    || isTransientTerminalConnectionFailure(message);
+}
 
 /**
  * Prefer the in-extension ssh2 terminal when it can connect directly. Its

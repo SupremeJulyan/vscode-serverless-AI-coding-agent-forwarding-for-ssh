@@ -92,7 +92,9 @@ import {
   nextAutoReconnectAttempt, shouldRecoverTerminalExit, terminalDiagnosticPlan,
   terminalReconnectDelayMs
 } from './terminal-diagnostics';
-import { shouldUseBuiltinSshTerminal } from './terminal-routing';
+import {
+  shouldFallbackToSystemSsh, shouldUseBuiltinSshTerminal
+} from './terminal-routing';
 import {
   findRemotePathCandidates, findRemoteTerminalPaths, resolveRemoteTerminalCwdReport,
   resolveRemoteTerminalPath
@@ -328,11 +330,6 @@ async function updateSyncStatusBar(): Promise<void> {
 // （配合标签页恢复，与 safs.terminalFollowsActiveFile 无关）；后续切换文件
 // 是否同步才由该设置控制。
 const restoredFileSyncPending = new Set<string>();
-
-// Channel-level failures mean the server rejects the ssh2 client's pty/shell
-// negotiation (common on NSG/gateway appliances). Fall back to the system ssh
-// CLI in that case; auth failures must NOT fall back (same credentials).
-const builtinSshFallbackPattern = /pseudo-terminal|open shell|start subsystem|channel open/i;
 
 class ConfigActionRequiredError extends Error {
   constructor(
@@ -2441,10 +2438,12 @@ async function openTerminal(
             );
             const entry = managedRemoteTerminals.get(created);
             if (entry) entry.connectionError = error.message;
-            // Server rejected the pty/shell negotiation (gateway appliance):
-            // mark this terminal for a system-ssh retry instead of the
-            // built-in ssh2 transport.
-            if (builtinSshFallbackPattern.test(error.message)) {
+            // A gateway may reject the pty/shell negotiation, or reset the
+            // ssh2 connection before authentication completes. Mark this
+            // terminal for a system-ssh retry instead of repeatedly using the
+            // same built-in transport. Authentication failures do not match
+            // either connection-level pattern and therefore do not fall back.
+            if (shouldFallbackToSystemSsh(error)) {
               if (entry) entry.retryWithSystemSsh = true;
             }
           },
