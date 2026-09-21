@@ -27,6 +27,7 @@ Examples:
 
 Common path/query/command values accept concise positional arguments. The
 existing named options remain available for scripts. Run `safs COMMAND --help`.
+Remote commands accept --agent NAME to identify activity (including batch operations).
 Global options: --compact, --verbose, --config FILE
 Version: safs --version
 "#;
@@ -393,11 +394,12 @@ fn parse_request(
             return Err(format!("{flag} requires a value"));
         }
         let key = &flag[2..];
-        if !allowed.contains(&key) {
+        if key != "agent" && !allowed.contains(&key) {
             return Err(format!("Invalid option for {verb}: {flag}"));
         }
         let value = args.remove(0);
         let json_key = match key {
+            "agent" => "agentName",
             "start-line" => "startLine",
             "line-count" => "lineCount",
             _ => key,
@@ -529,6 +531,9 @@ fn parse_request(
                     .unwrap_or_default();
                 if arguments.contains_key("workspaceId") || arguments.contains_key("mountName") {
                     return Err("Batch arguments must not override workspaceId or mountName".into());
+                }
+                if let Some(agent) = values.get("agentName") {
+                    arguments.entry("agentName").or_insert_with(|| agent.clone());
                 }
                 arguments.insert("workspaceId".into(), workspace.clone());
                 normalized.push(json!({ "name": name, "arguments": arguments }));

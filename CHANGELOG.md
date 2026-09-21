@@ -2,6 +2,9 @@
 
 ## 1.9.2
 
+- 修复同一 SFTP 会话包装器内并发请求的迟到错误误关闭新连接。
+- CLI 支持 `--agent NAME` 标记单次及批量操作来源，并在未指定时保留连接 URL 中的 Agent 名称。
+
 - MCP 工作区路由改为 `list_remote_workspaces` 加显式 `workspaceId`，移除隐式选择与切换工具。
 - CLI 移除 `bind`/`switch`，所有远程操作统一使用 `--workspace`。
 - 删除工作区路由中已无用途的 Agent cwd 占位符匹配、标准化函数和聚焦窗口默认排序；聚焦状态仅用于界面展示。

@@ -2,6 +2,8 @@
 
 Use a `workspaceId` returned by `safs workspaces` as `ID` below.
 
+Pass `--agent "YOUR AGENT NAME"` on remote commands to label activity, for example `safs read README.md --workspace ID --agent Codex`. For `batch`, this name applies to operations without their own `agentName`. If omitted, the router uses the Agent name in the connection URL when present.
+
 ## Workspace
 
 ```bash

@@ -45,14 +45,15 @@ class RetryingSftpSession implements SftpSession {
   }
 
   private withRetry<T>(op: (session: SftpSession) => Promise<T>): Promise<T> {
-    return op(this.session).catch(async (error: unknown) => {
+    const failedSession = this.session;
+    return op(failedSession).catch(async (error: unknown) => {
       if (!isConnectionError(error)) throw error;
       // 连接级错误：失效旧会话并在新连接上重试一次（不递归，最多一次）。
-      // Only invalidate the session that actually failed. Another wrapper may
-      // have already replaced the pool entry while this operation was waiting
+      // Only invalidate the session that actually failed. A concurrent operation
+      // on this or another wrapper may have replaced the pool entry while waiting
       // to enter its catch handler; invalidating that newer session would turn
       // a successful recovery into another disconnect/reconnect cycle.
-      const fresh = await this.pool.reconnect(this.hostName, undefined, this.session);
+      const fresh = await this.pool.reconnect(this.hostName, undefined, failedSession);
       this.session = fresh;
       return op(fresh);
     });

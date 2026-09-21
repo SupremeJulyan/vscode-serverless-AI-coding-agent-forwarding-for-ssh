@@ -135,6 +135,7 @@ test('native CLI lists and executes through the existing SAFS router', async () 
   try {
     const cliUrl = new URL(router.url);
     cliUrl.searchParams.set('source', 'cli');
+    cliUrl.searchParams.set('agent', 'URL Agent');
     await writeCliConnection(temporary, cliUrl.toString());
     const version = await executeCaptured({ command: executable, args: ['--version'] });
     assert.equal(version.exitCode, 0, version.stderr);
@@ -257,12 +258,25 @@ test('native CLI lists and executes through the existing SAFS router', async () 
     assert.equal(syntaxError.stderr.includes('Usage: safs upload'), false);
     assert.ok(activity.some((event) => event.phase === 'start'));
     assert.ok(activity.filter((event) => event.phase === 'start').every(
-      (event) => event.agentName === undefined && event.source === 'cli'
+      (event) => event.agentName === 'URL Agent' && event.source === 'cli'
     ));
-
-    assert.ok(activity.filter((event) => event.phase === 'start').every(
-      (event) => event.agentName === undefined && event.source === 'cli'
-    ));
+    const explicitStart = activity.length;
+    const namedRead = await executeCaptured({ command: executable, args: [
+      '--config', config, 'read', 'named.txt', '--workspace', workspaceId,
+      '--agent', 'Explicit Agent'
+    ] });
+    assert.equal(namedRead.exitCode, 0, namedRead.stderr);
+    const namedBatch = await executeCaptured({ command: executable, args: [
+      '--config', config, 'batch', '--workspace', workspaceId, '--agent', 'Explicit Agent',
+      '--input', JSON.stringify({ operations: [
+        { command: 'read', arguments: { path: 'a.txt' } },
+        { command: 'list', arguments: { path: 'src' } }
+      ] })
+    ] });
+    assert.equal(namedBatch.exitCode, 0, namedBatch.stderr);
+    const namedEvents = activity.slice(explicitStart).filter((event) => event.phase === 'start');
+    assert.equal(namedEvents.length, 3);
+    assert.ok(namedEvents.every((event) => event.agentName === 'Explicit Agent' && event.source === 'cli'));
   } finally {
     await router.stop();
     await backend.stop();

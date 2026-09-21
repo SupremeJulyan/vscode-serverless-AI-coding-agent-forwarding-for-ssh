@@ -201,6 +201,34 @@ test('does not invalidate a newer session after a stale wrapper fails', async ()
   assert.equal(attempts, 2);
 });
 
+test('late concurrent failure on one wrapper preserves the recovered session', async () => {
+  let attempts = 0;
+  const closed: number[] = [];
+  let rejectLate!: (error: Error) => void;
+  const late = new Promise<string>((_, reject) => { rejectLate = reject; });
+  const pool = new SftpConnectionPool(async (hostName) => {
+    const id = ++attempts;
+    const session = fakeSession(hostName, () => { closed.push(id); });
+    session.realpath = async (remotePath) => {
+      if (id === 1 && remotePath === '/late') return late;
+      if (id === 1) throw new Error('ECONNRESET');
+      return remotePath;
+    };
+    return session;
+  });
+  try {
+    const session = await pool.get('dev');
+    const pending = session.realpath('/late');
+    assert.equal(await session.realpath('/first'), '/first');
+    rejectLate(new Error('ECONNRESET'));
+    assert.equal(await pending, '/late');
+    assert.equal(attempts, 2);
+    assert.deepEqual(closed, [1]);
+  } finally {
+    await pool.close();
+  }
+});
+
 test('retries ECONNRESET during the initial connection', async () => {
   let attempts = 0;
   const pool = new SftpConnectionPool(async (hostName) => {

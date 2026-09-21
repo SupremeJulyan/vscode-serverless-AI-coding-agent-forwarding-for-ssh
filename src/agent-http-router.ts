@@ -278,7 +278,7 @@ export class AgentHttpRouter {
       args = { command: publicInput.command, mountName: workspace.mountName };
     }
     const effectiveAgentName = source === 'cli'
-      ? requestAgentName(publicInput.agentName)
+      ? requestAgentName(publicInput.agentName, agentName)
       : agentName;
     try {
       return await this.forward(
