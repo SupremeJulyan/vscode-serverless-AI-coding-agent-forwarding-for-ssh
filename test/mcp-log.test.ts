@@ -91,6 +91,6 @@ test('logs every tool with Agent identity without storing file content', async (
 
 test('untagged MCP URLs are explicitly logged as unknown Agent', () => {
   assert.match(formatMcpToolLogLine({
-    toolName: 'get_remote_workspace', input: {}
+    toolName: 'list_remote_workspaces', input: {}
   }), /\[agent=unknown\]/);
 });

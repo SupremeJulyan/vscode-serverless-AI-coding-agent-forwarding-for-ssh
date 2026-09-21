@@ -13,17 +13,17 @@ const HELP: &str = r#"Usage: safs COMMAND [arguments] [options]
 SAFS is a token-efficient remote workspace CLI for coding agents.
 
 Setup:     install
-Workspace: bind, workspaces, switch, current-file
+Workspace: workspaces, current-file
 Read:      list, read, read-many, search, find, output
 Write:     edit, write, create, delete, chmod, move, upload, download
 Execute:   exec, batch
 
 Examples:
-  safs bind --agent Codex
-  safs list src --binding ID
-  safs read README.md --binding ID --head 80
-  safs search TODO src --binding ID
-  safs exec "npm test" --binding ID
+  safs workspaces
+  safs list src --workspace ID
+  safs read README.md --workspace ID --head 80
+  safs search TODO src --workspace ID
+  safs exec "npm test" --workspace ID
 
 Common path/query/command values accept concise positional arguments. The
 existing named options remain available for scripts. Run `safs COMMAND --help`.
@@ -40,48 +40,36 @@ The default target is .agents/skills/safs-cli in the current project.
 Use -g or --global for the corresponding user-level skills directory.
 "#,
         ),
-        "bind" => Some(
-            r#"Usage: safs bind --agent NAME [--cwd LOCAL_CWD]
-Matches the current cwd (or --cwd) to a SAFS placeholder. If none matches,
-the uniquely focused workspace is used; otherwise candidates are returned.
-The Agent name is stored on the returned binding for activity display.
-"#,
-        ),
         "workspaces" => Some(
             r#"Usage: safs workspaces
 Lists all active SAFS workspaces and their workspaceId values.
 "#,
         ),
-        "switch" => Some(
-            r#"Usage: safs switch --agent NAME --workspace ID --confirmed
-Call only after the user explicitly chooses a workspace. Returns a new bindingId.
-"#,
-        ),
         "current-file" => Some(
-            r#"Usage: safs current-file --binding ID
+            r#"Usage: safs current-file --workspace ID
 Returns the active remote editor file, or null when no remote file is open.
 "#,
         ),
         "list" => Some(
-            r#"Usage: safs list [PATH] --binding ID [--limit N] [--cursor CURSOR]
-Batch form: safs list --binding ID --input '{"paths":["src","test"],"limit":100}'
+            r#"Usage: safs list [PATH] --workspace ID [--limit N] [--cursor CURSOR]
+Batch form: safs list --workspace ID --input '{"paths":["src","test"],"limit":100}'
 "#,
         ),
         "read" => Some(
-            r#"Usage: safs read PATH --binding ID [selection]
+            r#"Usage: safs read PATH --workspace ID [selection]
 Selection: --offset N [--length N] | --head N | --tail N |
            --start-line N [--line-count N]
-Named form: safs read --binding ID --path PATH
+Named form: safs read --workspace ID --path PATH
 "#,
         ),
         "read-many" => Some(
-            r#"Usage: safs read-many --binding ID --input JSON|-
+            r#"Usage: safs read-many --workspace ID --input JSON|-
 Example: --input '{"requests":[{"path":"a.txt"},{"path":"b.txt","head":20}],"maxBytes":16384}'
 "#,
         ),
         "search" => Some(
-            r#"Usage: safs search QUERY [PATH] --binding ID [--mode content|files|count|names]
-       safs find GLOB [PATH] --binding ID
+            r#"Usage: safs search QUERY [PATH] --workspace ID [--mode content|files|count|names]
+       safs find GLOB [PATH] --workspace ID
 Named options --query, --name, and --path remain available.
 files returns paths of files whose CONTENT matches; names matches file BASENAMES.
 Advanced filters use --input JSON: fixedStrings, ignoreCase, contextLines, include,
@@ -89,67 +77,67 @@ and excludeDirs.
 "#,
         ),
         "find" => Some(
-            r#"Usage: safs find GLOB [PATH] --binding ID
+            r#"Usage: safs find GLOB [PATH] --workspace ID
 Finds files by basename. GLOB uses shell-style patterns such as '*.ts'.
-Equivalent to: safs search --binding ID --query GLOB --mode names
+Equivalent to: safs search --workspace ID --query GLOB --mode names
 "#,
         ),
         "edit" => Some(
-            r#"Usage: safs edit PATH --binding ID --input JSON|-
+            r#"Usage: safs edit PATH --workspace ID --input JSON|-
 Example: --input '{"edits":[{"oldText":"old","newText":"new"}],"expectedHash":"SHA256"}'
 "#,
         ),
         "write" => Some(
-            r#"Usage: safs write PATH --binding ID (--file LOCAL_UTF8_FILE|- | --content TEXT)
+            r#"Usage: safs write PATH --workspace ID (--file LOCAL_UTF8_FILE|- | --content TEXT)
 --content is convenient for short, non-sensitive text. Use --file - for multiline
 or sensitive content so it does not appear in command arguments.
 "#,
         ),
         "create" => Some(
-            r#"Usage: safs create PATH TYPE --binding ID [--content TEXT | --file LOCAL_UTF8_FILE|-]
+            r#"Usage: safs create PATH TYPE --workspace ID [--content TEXT | --file LOCAL_UTF8_FILE|-]
 TYPE is `file` or `directory`. Files default to empty content; directories cannot
 receive content. The target must not already exist and its parent must exist.
 "#,
         ),
         "delete" => Some(
-            r#"Usage: safs delete PATH --binding ID [--input '{"recursive":true}']
+            r#"Usage: safs delete PATH --workspace ID [--input '{"recursive":true}']
 recursive=true is required for a non-empty directory.
 "#,
         ),
         "chmod" => Some(
-            r#"Usage: safs chmod PATH MODE --binding ID
+            r#"Usage: safs chmod PATH MODE --workspace ID
 MODE is exactly three octal digits, for example 644 or 755.
 "#,
         ),
         "move" => Some(
-            r#"Usage: safs move --binding ID --input JSON|-
+            r#"Usage: safs move --workspace ID --input JSON|-
 Example: --input '{"sourcePath":"old","targetPath":"new","overwrite":false}'
 "#,
         ),
         "upload" => Some(
-            r#"Usage: safs upload --binding ID --input JSON|-
+            r#"Usage: safs upload --workspace ID --input JSON|-
 Example: --input '{"localPaths":["/absolute/local/path"],"remoteDirectory":"."}'
 "#,
         ),
         "download" => Some(
-            r#"Usage: safs download --binding ID --input JSON|-
+            r#"Usage: safs download --workspace ID --input JSON|-
 Example: --input '{"remotePath":"file","localPath":"/absolute/local/target"}'
 "#,
         ),
         "exec" => Some(
-            r#"Usage: safs exec REMOTE_COMMAND --binding ID [--cwd REMOTE_CWD]
-       safs exec --binding ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
-       safs exec --binding ID [--cwd REMOTE_CWD] --command 'REMOTE_COMMAND'
+            r#"Usage: safs exec REMOTE_COMMAND --workspace ID [--cwd REMOTE_CWD]
+       safs exec --workspace ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
+       safs exec --workspace ID [--cwd REMOTE_CWD] --command 'REMOTE_COMMAND'
 The complete remote command must be passed as one shell argument.
 "#,
         ),
         "output" => Some(
-            r#"Usage: safs output ID stdout|stderr --binding ID [--offset N] [--length N]
+            r#"Usage: safs output ID stdout|stderr --workspace ID [--offset N] [--length N]
 Continues a retained, truncated command stream without rerunning the command.
 "#,
         ),
         "batch" => Some(
-            r#"Usage: safs batch --binding ID --input JSON|-
+            r#"Usage: safs batch --workspace ID --input JSON|-
 Example: --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
 Runs 1 to 50 operations sequentially in one local HTTP request.
 "#,
@@ -327,7 +315,7 @@ fn request_with_context(
 
 fn parse_request(
     mut args: Vec<String>,
-    cwd: String,
+    _cwd: String,
     stdin_content: Option<String>,
 ) -> Result<(String, Value), String> {
     if args.is_empty() {
@@ -354,19 +342,17 @@ fn parse_request(
         let object = input
             .as_object()
             .ok_or("--input must contain a JSON object")?;
-        if object.contains_key("bindingId") || object.contains_key("mountName") {
-            return Err("--input must not override bindingId or mountName".into());
+        if object.contains_key("workspaceId") || object.contains_key("mountName") {
+            return Err("--input must not override workspaceId or mountName".into());
         }
         values.extend(object.clone());
     }
     let allowed = match verb.as_str() {
-        "bind" => &["agent", "cwd"][..],
-        "workspaces" => &[],
-        "switch" => &["agent", "workspace", "confirmed"],
-        "current-file" => &["binding"],
-        "list" => &["binding", "path", "limit", "cursor"],
+        "workspaces" => &[][..],
+        "current-file" => &["workspace"],
+        "list" => &["workspace", "path", "limit", "cursor"],
         "read" => &[
-            "binding",
+            "workspace",
             "path",
             "offset",
             "length",
@@ -375,16 +361,16 @@ fn parse_request(
             "start-line",
             "line-count",
         ],
-        "search" => &["binding", "path", "query", "name", "mode"],
-        "find" => &["binding", "path", "name"],
-        "edit" => &["binding", "path"],
-        "write" => &["binding", "path", "content"],
-        "create" => &["binding", "path", "type", "content"],
-        "delete" => &["binding", "path"],
-        "chmod" => &["binding", "path", "mode"],
-        "upload" | "download" | "move" | "read-many" | "batch" => &["binding"],
-        "output" => &["binding", "id", "stream", "offset", "length"],
-        "exec" => &["binding", "cwd", "command"],
+        "search" => &["workspace", "path", "query", "name", "mode"],
+        "find" => &["workspace", "path", "name"],
+        "edit" => &["workspace", "path"],
+        "write" => &["workspace", "path", "content"],
+        "create" => &["workspace", "path", "type", "content"],
+        "delete" => &["workspace", "path"],
+        "chmod" => &["workspace", "path", "mode"],
+        "upload" | "download" | "move" | "read-many" | "batch" => &["workspace"],
+        "output" => &["workspace", "id", "stream", "offset", "length"],
+        "exec" => &["workspace", "cwd", "command"],
         _ => return Err("Unknown command; use --help".into()),
     };
     let mut remote_command = None;
@@ -399,18 +385,6 @@ fn parse_request(
             break;
         }
         let flag = args.remove(0);
-        if verb == "switch" && flag == "--confirmed" {
-            if values.contains_key("confirmed") {
-                return Err("Duplicate input field: confirmed".into());
-            }
-            if args.first().is_some_and(|value| value == "true") {
-                args.remove(0);
-            } else if args.first().is_some_and(|value| value == "false") {
-                return Err("--confirmed cannot be false".into());
-            }
-            values.insert("confirmed".into(), Value::Bool(true));
-            continue;
-        }
         if !flag.starts_with("--") {
             positional.push(flag);
             continue;
@@ -487,7 +461,7 @@ fn parse_request(
         if verb == "find" {
             if !values.contains_key("query") {
                 return Err(
-                    "--name is required. Example: safs find --binding ID --name '*.ts'".into(),
+                    "--name is required. Example: safs find --workspace ID --name '*.ts'".into(),
                 );
             }
             values.insert("mode".into(), Value::String("names".into()));
@@ -505,43 +479,15 @@ fn parse_request(
             return Err("--mode must be content, files, count, or names".into());
         }
     }
-    let binding = values.remove("binding");
-    let require_binding = || {
-        "--binding is required. Use the bindingId returned by `safs bind` or `safs switch`."
+    let workspace = values.remove("workspace");
+    let require_workspace = || {
+        "--workspace is required. Use the workspaceId returned by `safs workspaces`."
             .to_string()
     };
     let tool = match verb.as_str() {
-        "bind" => {
-            let agent_name = values.remove("agent").ok_or("--agent is required")?;
-            let agent_name = validate_agent_name(
-                agent_name.as_str().ok_or("--agent must be text")?,
-                "--agent",
-            )?;
-            values.insert("agentName".into(), Value::String(agent_name));
-            let agent_cwd = values.remove("cwd").unwrap_or(Value::String(cwd));
-            values.insert("agentCwd".into(), agent_cwd);
-            "get_remote_workspace"
-        }
-        "workspaces" => "cli_list_workspaces",
-        "switch" => {
-            let agent_name = values.remove("agent").ok_or("--agent is required")?;
-            let agent_name = validate_agent_name(
-                agent_name.as_str().ok_or("--agent must be text")?,
-                "--agent",
-            )?;
-            values.insert("agentName".into(), Value::String(agent_name));
-            let workspace = values
-                .remove("workspace")
-                .ok_or("--workspace is required")?;
-            if values.remove("confirmed") != Some(Value::Bool(true)) {
-                return Err("--confirmed is required after user confirmation".into());
-            }
-            values.insert("workspaceId".into(), workspace);
-            values.insert("userConfirmed".into(), Value::Bool(true));
-            "switch_remote_workspace"
-        }
+        "workspaces" => "list_remote_workspaces",
         "batch" => {
-            let binding = binding.ok_or_else(&require_binding)?;
+            let workspace = workspace.ok_or_else(&require_workspace)?;
             let operations = values
                 .remove("operations")
                 .and_then(|value| value.as_array().cloned())
@@ -581,10 +527,10 @@ fn parse_request(
                     .and_then(Value::as_object)
                     .cloned()
                     .unwrap_or_default();
-                if arguments.contains_key("bindingId") || arguments.contains_key("mountName") {
-                    return Err("Batch arguments must not override bindingId or mountName".into());
+                if arguments.contains_key("workspaceId") || arguments.contains_key("mountName") {
+                    return Err("Batch arguments must not override workspaceId or mountName".into());
                 }
-                arguments.insert("bindingId".into(), binding.clone());
+                arguments.insert("workspaceId".into(), workspace.clone());
                 normalized.push(json!({ "name": name, "arguments": arguments }));
             }
             values.clear();
@@ -592,7 +538,7 @@ fn parse_request(
             "safs_cli_batch"
         }
         _ => {
-            values.insert("bindingId".into(), binding.ok_or_else(&require_binding)?);
+            values.insert("workspaceId".into(), workspace.ok_or_else(&require_workspace)?);
             match verb.as_str() {
                 "current-file" => "current_remote_file",
                 "list" => "remote_list",
@@ -630,7 +576,7 @@ fn parse_request(
                         Value::String(
                             remote_command.or(option_command)
                                 .filter(|s| !s.trim().is_empty())
-                                .ok_or("Remote command is required. Retry with `safs exec --binding ID -- 'COMMAND'` or `--command 'COMMAND'`")?,
+                                .ok_or("Remote command is required. Retry with `safs exec --workspace ID -- 'COMMAND'` or `--command 'COMMAND'`")?,
                         ),
                     );
                     if let Some(cwd) = values.remove("cwd") {
@@ -679,19 +625,6 @@ fn parse_request(
 struct RouterConnection {
     url: Url,
     timeout: Option<Duration>,
-}
-
-fn validate_agent_name(value: &str, source: &str) -> Result<String, String> {
-    let normalized = value.trim();
-    if normalized.is_empty()
-        || normalized.chars().count() > 100
-        || normalized.chars().any(char::is_control)
-    {
-        return Err(format!(
-            "{source} must contain 1 to 100 characters without control characters"
-        ));
-    }
-    Ok(normalized.to_owned())
 }
 
 fn router_connection(config_path: &str, endpoint: &str) -> Result<RouterConnection, String> {
@@ -791,7 +724,7 @@ fn result_exit_code(result: &Value) -> i32 {
         .and_then(Value::as_i64)
         .filter(|code| (0..=255).contains(code))
         .unwrap_or_else(|| {
-            if (error_code.is_some() && error_code != Some("WORKSPACE_SELECTION_REQUIRED"))
+            if error_code.is_some()
                 || result.get("status").and_then(Value::as_str) == Some("error")
                 || item_failed
             {
@@ -984,9 +917,7 @@ mod tests {
         );
         for command in [
             "install",
-            "bind",
             "workspaces",
-            "switch",
             "current-file",
             "list",
             "read",
@@ -1033,94 +964,63 @@ mod tests {
 
     #[test]
     fn package_version_matches_the_extension_release() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "1.9.1");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "1.9.2");
     }
 
     #[test]
-    fn validates_cli_agent_names() {
-        assert_eq!(
-            validate_agent_name("  Codex  ", "--agent").unwrap(),
-            "Codex"
-        );
-        assert!(validate_agent_name("", "--agent").is_err());
-        assert!(validate_agent_name("bad\nname", "--agent").is_err());
-        assert!(validate_agent_name(&"x".repeat(101), "--agent").is_err());
-    }
-
-    #[test]
-    fn records_agent_name_only_when_a_binding_is_created() {
-        let (_, bind) = request(
-            strings(&["bind", "--agent", "  Codex  ", "--cwd", "/project"]),
+    fn routes_workspace_ids_without_implicit_selection() {
+        let (tool, read) = request(
+            strings(&["read", "--workspace", "workspace-a", "--path", "README.md"]),
             "/cwd".into(),
         )
         .unwrap();
-        assert_eq!(bind["agentName"], "Codex");
-        assert_eq!(bind["agentCwd"], "/project");
-
-        let (_, read) = request(
-            strings(&["read", "--binding", "binding-a", "--path", "README.md"]),
-            "/cwd".into(),
-        )
-        .unwrap();
-        assert_eq!(read.get("agentName"), None);
-        assert_eq!(read["bindingId"], "binding-a");
+        assert_eq!(tool, "remote_read");
+        assert_eq!(read["workspaceId"], "workspace-a");
     }
 
     #[test]
     fn maps_every_cli_command_to_its_router_operation() {
         let cases: &[(&[&str], &str)] = &[
-            (&["bind", "--agent", "Codex"], "get_remote_workspace"),
-            (&["workspaces"], "cli_list_workspaces"),
+            (&["workspaces"], "list_remote_workspaces"),
+            (&["current-file", "--workspace", "b"], "current_remote_file"),
+            (&["list", "--workspace", "b"], "remote_list"),
+            (&["read", "--workspace", "b"], "remote_read"),
             (
-                &[
-                    "switch",
-                    "--agent",
-                    "Codex",
-                    "--workspace",
-                    "w",
-                    "--confirmed",
-                ],
-                "switch_remote_workspace",
-            ),
-            (&["current-file", "--binding", "b"], "current_remote_file"),
-            (&["list", "--binding", "b"], "remote_list"),
-            (&["read", "--binding", "b"], "remote_read"),
-            (
-                &["read-many", "--binding", "b", "--input", "{}"],
+                &["read-many", "--workspace", "b", "--input", "{}"],
                 "remote_read_many",
             ),
             (
-                &["search", "--binding", "b", "--query", "TODO"],
+                &["search", "--workspace", "b", "--query", "TODO"],
                 "remote_search",
             ),
             (
-                &["find", "--binding", "b", "--name", "*.ts"],
+                &["find", "--workspace", "b", "--name", "*.ts"],
                 "remote_search",
             ),
-            (&["edit", "--binding", "b", "--input", "{}"], "remote_edit"),
+            (&["edit", "--workspace", "b", "--input", "{}"], "remote_edit"),
             (
-                &["write", "--binding", "b", "--input", r#"{"content":"x"}"#],
+                &["write", "--workspace", "b", "--input", r#"{"content":"x"}"#],
                 "remote_write",
             ),
             (
-                &["create", "new.txt", "file", "--binding", "b"],
+                &["create", "new.txt", "file", "--workspace", "b"],
                 "remote_create",
             ),
-            (&["delete", "--binding", "b"], "remote_delete"),
-            (&["chmod", "--binding", "b"], "remote_chmod"),
-            (&["move", "--binding", "b", "--input", "{}"], "remote_move"),
+            (&["delete", "--workspace", "b"], "remote_delete"),
+            (&["chmod", "--workspace", "b"], "remote_chmod"),
+            (&["move", "--workspace", "b", "--input", "{}"], "remote_move"),
             (
-                &["upload", "--binding", "b", "--input", "{}"],
+                &["upload", "--workspace", "b", "--input", "{}"],
                 "remote_upload",
             ),
             (
-                &["download", "--binding", "b", "--input", "{}"],
+                &["download", "--workspace", "b", "--input", "{}"],
                 "remote_download",
             ),
             (
                 &[
                     "output",
-                    "--binding",
+                    "--workspace",
                     "b",
                     "--id",
                     "o",
@@ -1130,7 +1030,7 @@ mod tests {
                 "remote_output",
             ),
             (
-                &["exec", "--binding", "b", "--", "pwd"],
+                &["exec", "--workspace", "b", "--", "pwd"],
                 "run_remote_command",
             ),
         ];
@@ -1145,7 +1045,7 @@ mod tests {
         let (name, args) = request(
             vec![
                 "read",
-                "--binding",
+                "--workspace",
                 "id",
                 "--path",
                 "a",
@@ -1162,7 +1062,7 @@ mod tests {
         assert_eq!(args["startLine"], 2);
         let command = "printf '%s' \"$(pwd)\"";
         let (_, args) = request(
-            vec!["exec", "--binding", "id", "--", command]
+            vec!["exec", "--workspace", "id", "--", command]
                 .into_iter()
                 .map(String::from)
                 .collect(),
@@ -1175,7 +1075,7 @@ mod tests {
     #[test]
     fn accepts_common_command_write_and_filename_aliases() {
         let (_, command) = request(
-            strings(&["exec", "--binding", "id", "--command", "pwd"]),
+            strings(&["exec", "--workspace", "id", "--command", "pwd"]),
             "/cwd".into(),
         )
         .unwrap();
@@ -1184,7 +1084,7 @@ mod tests {
         let (_, write) = request(
             strings(&[
                 "write",
-                "--binding",
+                "--workspace",
                 "id",
                 "--path",
                 "note.txt",
@@ -1197,8 +1097,8 @@ mod tests {
         assert_eq!(write["content"], "hello");
 
         for arguments in [
-            strings(&["search", "--binding", "id", "--name", "*.ts"]),
-            strings(&["find", "--binding", "id", "--name", "*.ts"]),
+            strings(&["search", "--workspace", "id", "--name", "*.ts"]),
+            strings(&["find", "--workspace", "id", "--name", "*.ts"]),
         ] {
             let (name, search) = request(arguments, "/cwd".into()).unwrap();
             assert_eq!(name, "remote_search");
@@ -1211,37 +1111,37 @@ mod tests {
     fn accepts_token_efficient_positional_arguments() {
         let cases: &[(&[&str], &str, &[(&str, &str)])] = &[
             (
-                &["list", "src", "--binding", "b"],
+                &["list", "src", "--workspace", "b"],
                 "remote_list",
                 &[("path", "src")],
             ),
             (
-                &["read", "README.md", "--binding", "b"],
+                &["read", "README.md", "--workspace", "b"],
                 "remote_read",
                 &[("path", "README.md")],
             ),
             (
-                &["search", "TODO", "src", "--binding", "b"],
+                &["search", "TODO", "src", "--workspace", "b"],
                 "remote_search",
                 &[("query", "TODO"), ("path", "src")],
             ),
             (
-                &["find", "*.ts", "test", "--binding", "b"],
+                &["find", "*.ts", "test", "--workspace", "b"],
                 "remote_search",
                 &[("query", "*.ts"), ("path", "test")],
             ),
             (
-                &["chmod", "script.sh", "755", "--binding", "b"],
+                &["chmod", "script.sh", "755", "--workspace", "b"],
                 "remote_chmod",
                 &[("path", "script.sh"), ("mode", "755")],
             ),
             (
-                &["output", "out", "stdout", "--binding", "b"],
+                &["output", "out", "stdout", "--workspace", "b"],
                 "remote_output",
                 &[("outputId", "out"), ("stream", "stdout")],
             ),
             (
-                &["exec", "npm test", "--binding", "b"],
+                &["exec", "npm test", "--workspace", "b"],
                 "run_remote_command",
                 &[("command", "npm test")],
             ),
@@ -1258,7 +1158,7 @@ mod tests {
     #[test]
     fn rejects_ambiguous_or_excess_positional_arguments() {
         let duplicate = request(
-            strings(&["read", "a.txt", "--path", "b.txt", "--binding", "b"]),
+            strings(&["read", "a.txt", "--path", "b.txt", "--workspace", "b"]),
             "/cwd".into(),
         )
         .unwrap_err();
@@ -1266,7 +1166,7 @@ mod tests {
         assert!(duplicate.contains("Usage: safs read"));
 
         let excess = request(
-            strings(&["list", "src", "extra", "--binding", "b"]),
+            strings(&["list", "src", "extra", "--workspace", "b"]),
             "/cwd".into(),
         )
         .unwrap_err();
@@ -1278,7 +1178,7 @@ mod tests {
         let command = request(
             strings(&[
                 "exec",
-                "--binding",
+                "--workspace",
                 "id",
                 "--command",
                 "pwd",
@@ -1294,7 +1194,7 @@ mod tests {
         let search = request(
             strings(&[
                 "search",
-                "--binding",
+                "--workspace",
                 "id",
                 "--query",
                 "TODO",
@@ -1308,62 +1208,28 @@ mod tests {
         assert!(search.contains("files returns paths of files whose CONTENT matches"));
     }
     #[test]
-    fn never_accepts_binding_override_or_unconfirmed_switch() {
-        let inline = r#"{"bindingId":"other"}"#;
+    fn never_accepts_workspace_override() {
+        let inline = r#"{"workspaceId":"other"}"#;
         let result = request(
-            vec!["read", "--binding", "id", "--input", inline]
+            vec!["read", "--workspace", "id", "--input", inline]
                 .into_iter()
                 .map(String::from)
                 .collect(),
             "/cwd".into(),
         );
         assert!(result.is_err());
-        assert!(request(
-            vec!["switch", "--agent", "Codex", "--workspace", "id"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-            "/cwd".into()
-        )
-        .is_err());
-        assert!(request(
-            strings(&[
-                "switch",
-                "--agent",
-                "Codex",
-                "--workspace",
-                "id",
-                "--confirmed",
-                "false",
-            ]),
-            "/cwd".into()
-        )
-        .is_err());
-        assert!(request(
-            strings(&[
-                "switch",
-                "--agent",
-                "Codex",
-                "--workspace",
-                "id",
-                "--confirmed",
-                "true",
-            ]),
-            "/cwd".into()
-        )
-        .is_ok());
     }
     #[test]
-    fn missing_binding_includes_actionable_command_help() {
+    fn missing_workspace_includes_actionable_command_help() {
         let error = request(strings(&["current-file"]), "/cwd".into()).unwrap_err();
-        assert!(error.contains("--binding is required"));
-        assert!(error.contains("bindingId returned by `safs bind` or `safs switch`"));
-        assert!(error.contains("Usage: safs current-file --binding ID"));
+        assert!(error.contains("--workspace is required"));
+        assert!(error.contains("workspaceId returned by `safs workspaces`"));
+        assert!(error.contains("Usage: safs current-file --workspace ID"));
     }
     #[test]
     fn reads_structured_input_and_write_content_from_stdin() {
         let (_, edit) = request_with_context(
-            strings(&["edit", "--binding", "id", "--path", "a", "--input", "-"]),
+            strings(&["edit", "--workspace", "id", "--path", "a", "--input", "-"]),
             "/cwd".into(),
             Some(r#"{"edits":[{"oldText":"a","newText":"b"}]}"#.into()),
         )
@@ -1371,7 +1237,7 @@ mod tests {
         assert_eq!(edit["edits"][0]["newText"], "b");
 
         let (_, write) = request_with_context(
-            strings(&["write", "--binding", "id", "--path", "a", "--file", "-"]),
+            strings(&["write", "--workspace", "id", "--path", "a", "--file", "-"]),
             "/cwd".into(),
             Some("replacement\n".into()),
         )
@@ -1380,13 +1246,8 @@ mod tests {
     }
     #[test]
     fn syntax_errors_include_only_the_relevant_command_usage() {
-        let switch = request(strings(&["switch", "--agent", "Codex"]), "/cwd".into()).unwrap_err();
-        assert!(switch.contains("--workspace is required"));
-        assert!(switch.contains("Usage: safs switch"));
-        assert!(!switch.contains("Usage: safs read "));
-
         let read = request(
-            strings(&["read", "--binding", "id", "--input", "not-json"]),
+            strings(&["read", "--workspace", "id", "--input", "not-json"]),
             "/cwd".into(),
         )
         .unwrap_err();
@@ -1398,7 +1259,7 @@ mod tests {
         let inline = request(
             vec![
                 "list",
-                "--binding",
+                "--workspace",
                 "id",
                 "--input",
                 r#"{"path":"gm_tests","limit":10}"#,
@@ -1412,7 +1273,7 @@ mod tests {
         assert_eq!(inline.1["path"], "gm_tests");
         assert_eq!(inline.1["limit"], 10);
         let bad = request(
-            vec!["list", "--binding", "id", "--input", "not-json"]
+            vec!["list", "--workspace", "id", "--input", "not-json"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
@@ -1432,10 +1293,6 @@ mod tests {
             result_exit_code(&json!({"results": [{"ok": false, "result": {"code": "FAILED"}}]})),
             1
         );
-        assert_eq!(
-            result_exit_code(&json!({"code": "WORKSPACE_SELECTION_REQUIRED"})),
-            0
-        );
         assert!(should_report_operation_error(
             "run_remote_command",
             &json!({"code": "WORKSPACE_BOUNDARY_VIOLATION", "message": "outside"}),
@@ -1451,7 +1308,7 @@ mod tests {
     fn builds_batches_and_compacts_routine_metadata() {
         let input = r#"{"operations":[{"command":"read","arguments":{"path":"a"}},{"command":"search","arguments":{"query":"TODO"}}]}"#;
         let (name, args) = request(
-            vec!["batch", "--binding", "id", "--input", input]
+            vec!["batch", "--workspace", "id", "--input", input]
                 .into_iter()
                 .map(String::from)
                 .collect(),
@@ -1459,7 +1316,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(name, "safs_cli_batch");
-        assert_eq!(args["operations"][0]["arguments"]["bindingId"], "id");
+        assert_eq!(args["operations"][0]["arguments"]["workspaceId"], "id");
         let mut result = json!({"status":"ok","truncated":false,"hasMore":false,"content":"x"});
         compact_result(&mut result);
         assert_eq!(result, json!({"content":"x"}));
@@ -1468,7 +1325,7 @@ mod tests {
     #[test]
     fn maps_current_file_for_direct_and_batch_calls() {
         let (name, args) = request(
-            vec!["current-file", "--binding", "id"]
+            vec!["current-file", "--workspace", "id"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
@@ -1476,11 +1333,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(name, "current_remote_file");
-        assert_eq!(args["bindingId"], "id");
+        assert_eq!(args["workspaceId"], "id");
 
         let input = r#"{"operations":[{"command":"current-file"}]}"#;
         let (_, args) = request(
-            vec!["batch", "--binding", "id", "--input", input]
+            vec!["batch", "--workspace", "id", "--input", input]
                 .into_iter()
                 .map(String::from)
                 .collect(),
@@ -1488,6 +1345,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(args["operations"][0]["name"], "current_remote_file");
-        assert_eq!(args["operations"][0]["arguments"]["bindingId"], "id");
+        assert_eq!(args["operations"][0]["arguments"]["workspaceId"], "id");
     }
 }

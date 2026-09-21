@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
-import { AgentHttpRouter } from '../src/agent-http-router';
+import { AgentHttpRouter, workspaceIdFor } from '../src/agent-http-router';
 import { cliConfigPath, writeCliConnection } from '../src/cli-integration';
 import { bundledNativeCli, nativeCliPlatform } from '../src/native-cli';
 import { executeCaptured } from '../src/process';
@@ -39,8 +39,8 @@ test('native CLI installs its bundled Agent Skill without a router', async () =>
     const skill = await readFile(join(skillRoot, 'SKILL.md'), 'utf8');
     const commands = await readFile(join(skillRoot, 'references', 'commands.md'), 'utf8');
     assert.match(skill, /^---\nname: safs-cli\n/);
-    assert.match(skill, /safs bind --agent/);
-    assert.match(commands, /safs read PATH --binding ID/);
+    assert.match(skill, /safs workspaces/);
+    assert.match(commands, /safs read PATH --workspace ID/);
 
     const globalCodex = await executeCaptured({
       command: executable,
@@ -65,7 +65,7 @@ test('native CLI installs its bundled Agent Skill without a router', async () =>
   }
 });
 
-test('native CLI binds and executes through the existing SAFS router', async () => {
+test('native CLI lists and executes through the existing SAFS router', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-e2e-'));
   let runs = 0;
   let currentFileReads = 0;
@@ -120,7 +120,8 @@ test('native CLI binds and executes through the existing SAFS router', async () 
   await backend.start();
   const router = new AgentHttpRouter(await freePort(), 'native-router', {
     discover: () => [{
-      instanceId: 'native-window', workspaceRoot: '/project', host: 'dev',
+      instanceId: 'native-window', workspaceRoot: '/project',
+      workspaceUri: 'safs://dev/project', host: 'dev',
       agentCwd: temporary, focused: true, mcpUrl: backend.url
     } as any]
   });
@@ -148,27 +149,25 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     ] });
     assert.equal(workspaces.exitCode, 0, workspaces.stderr);
     assert.deepEqual(JSON.parse(workspaces.stdout), { workspaces: [{
-      workspaceId: 'native-window', workspaceRoot: '/project', host: 'dev', mode: 'workspace'
+      workspaceId: workspaceIdFor({
+        instanceId: 'native-window', workspaceUri: 'safs://dev/project', host: 'dev'
+      }), workspaceRoot: '/project', host: 'dev', mode: 'workspace'
     }] });
-    const bind = await executeCaptured({ command: executable, args: [
-      '--config', config, 'bind', '--agent', 'Recorded Agent', '--cwd', temporary
-    ] });
-    assert.equal(bind.exitCode, 0, bind.stderr);
-    const bindingId = JSON.parse(bind.stdout).bindingId;
+    const workspaceId = JSON.parse(workspaces.stdout).workspaces[0].workspaceId as string;
     const positionalRead = await executeCaptured({ command: executable, args: [
-      '--config', config, 'read', 'concise.txt', '--binding', bindingId
+      '--config', config, 'read', 'concise.txt', '--workspace', workspaceId
     ] });
     assert.equal(positionalRead.exitCode, 0, positionalRead.stderr);
     assert.equal(JSON.parse(positionalRead.stdout).content, 'content:concise.txt');
     const run = await executeCaptured({ command: executable, args: [
-      '--config', config, 'exec', 'exit 7', '--binding', bindingId
+      '--config', config, 'exec', 'exit 7', '--workspace', workspaceId
     ] });
     assert.equal(run.exitCode, 7);
     assert.equal(run.stdout, 'native-out');
     assert.equal(run.stderr, 'native-err');
     assert.equal(runs, 1);
     const blockedRun = await executeCaptured({ command: executable, args: [
-      '--config', config, 'exec', '--binding', bindingId, '--', 'blocked-write'
+      '--config', config, 'exec', '--workspace', workspaceId, '--', 'blocked-write'
     ] });
     assert.equal(blockedRun.exitCode, 1);
     assert.equal(blockedRun.stdout, '');
@@ -178,7 +177,7 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     );
     assert.equal(runs, 1);
     const currentFile = await executeCaptured({ command: executable, args: [
-      '--config', config, 'current-file', '--binding', bindingId
+      '--config', config, 'current-file', '--workspace', workspaceId
     ] });
     assert.equal(currentFile.exitCode, 0, currentFile.stderr);
     assert.deepEqual(JSON.parse(currentFile.stdout), {
@@ -202,7 +201,7 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     const edit = await executeCaptured({
       command: executable,
       args: [
-        '--config', config, 'edit', '--binding', bindingId,
+        '--config', config, 'edit', '--workspace', workspaceId,
         '--path', 'a.txt', '--input', '-'
       ],
       stdin: JSON.stringify({ edits: [{ oldText: 'a', newText: 'b' }] })
@@ -210,14 +209,14 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     assert.equal(edit.exitCode, 0, edit.stderr);
     for (const call of structuredCalls) {
       const result = await executeCaptured({ command: executable, args: [
-        '--config', config, call[0], '--binding', bindingId, ...call.slice(1)
+        '--config', config, call[0], '--workspace', workspaceId, ...call.slice(1)
       ] });
       assert.equal(result.exitCode, 0, `${call[0]}: ${result.stderr}`);
     }
     const write = await executeCaptured({
       command: executable,
       args: [
-        '--config', config, 'write', '--binding', bindingId,
+        '--config', config, 'write', '--workspace', workspaceId,
         '--path', 'write.txt', '--file', '-'
       ],
       stdin: 'replacement'
@@ -229,7 +228,7 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     );
     const batchStarts = activity.filter((event) => event.phase === 'start').length;
     const batch = await executeCaptured({ command: executable, args: [
-      '--config', config, '--compact', 'batch', '--binding', bindingId, '--input',
+      '--config', config, '--compact', 'batch', '--workspace', workspaceId, '--input',
       JSON.stringify({ operations: [
         { command: 'read', arguments: { path: 'a.txt' } },
         { command: 'list', arguments: { path: 'src' } }
@@ -245,13 +244,13 @@ test('native CLI binds and executes through the existing SAFS router', async () 
       batchStarts + 2
     );
     const conciseError = await executeCaptured({ command: executable, args: [
-      '--config', config, 'list', '--binding', bindingId, '--path', 'forbidden'
+      '--config', config, 'list', '--workspace', workspaceId, '--path', 'forbidden'
     ] });
     assert.equal(conciseError.exitCode, 1);
     assert.match(conciseError.stderr, /REMOTE_TOOL_ERROR: denied detail/);
     assert.equal(conciseError.stderr.includes('{"code"'), false);
     const syntaxError = await executeCaptured({ command: executable, args: [
-      '--config', config, 'read', '--binding', bindingId, '--unknown', 'value'
+      '--config', config, 'read', '--workspace', workspaceId, '--unknown', 'value'
     ] });
     assert.equal(syntaxError.exitCode, 1);
     assert.match(syntaxError.stderr, /Invalid option for read: --unknown/);
@@ -259,34 +258,12 @@ test('native CLI binds and executes through the existing SAFS router', async () 
     assert.equal(syntaxError.stderr.includes('Usage: safs upload'), false);
     assert.ok(activity.some((event) => event.phase === 'start'));
     assert.ok(activity.filter((event) => event.phase === 'start').every(
-      (event) => event.agentName === 'Recorded Agent' && event.source === 'cli'
+      (event) => event.agentName === undefined && event.source === 'cli'
     ));
 
-    const overriddenBind = await executeCaptured({
-      command: executable,
-      args: [
-        '--config', config, 'bind', '--agent', 'Override Agent', '--cwd', temporary
-      ]
-    });
-    assert.equal(overriddenBind.exitCode, 0, overriddenBind.stderr);
-    const overriddenBindingId = JSON.parse(overriddenBind.stdout).bindingId;
-    const overriddenRead = await executeCaptured({
-      command: executable,
-      args: [
-        '--config', config, 'read', '--binding', overriddenBindingId, '--path', 'override.txt'
-      ]
-    });
-    assert.equal(overriddenRead.exitCode, 0, overriddenRead.stderr);
-    assert.ok(activity.some((event) =>
-      event.phase === 'start' && event.agentName === 'Override Agent' && event.source === 'cli'
+    assert.ok(activity.filter((event) => event.phase === 'start').every(
+      (event) => event.agentName === undefined && event.source === 'cli'
     ));
-
-    const missingAgent = await executeCaptured({
-      command: executable,
-      args: ['--config', config, 'bind', '--cwd', temporary]
-    });
-    assert.equal(missingAgent.exitCode, 1);
-    assert.match(missingAgent.stderr, /--agent is required/);
   } finally {
     await router.stop();
     await backend.stop();

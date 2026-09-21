@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.2
+
+- MCP 工作区路由改为 `list_remote_workspaces` 加显式 `workspaceId`，移除隐式选择与切换工具。
+- CLI 移除 `bind`/`switch`，所有远程操作统一使用 `--workspace`。
+- 插件与原生 CLI 版本升级到 1.9.2。
+
 ## 1.9.1
 
 - MCP 新增 `remote_create`，CLI 新增 `safs create`，可在当前工作区内创建文件或目录。

@@ -7,21 +7,19 @@ import { z } from 'zod';
 const workspaceInstructions = [
   'SAFS tools operate on remote files, not the local host filesystem. Do not call SAFS tools for ordinary local workspaces. Use only for explicit SAFS tasks or known safs:// context.',
   'For SAFS remote operations, use the MCP tools only. Never pass remote paths to local filesystem tools or a local shell.',
-  'Relative paths use the bound workspace root. Use search to locate relevant files and bounded reads for evidence; batch independent selections with remote_read_many.',
+  'Relative paths use the selected workspace root. Use search to locate relevant files and bounded reads for evidence; batch independent selections with remote_read_many.',
   'Prefer remote_edit for small edits and remote_write for full replacements. When available, use structured delete/move/chmod tools for those changes.',
   'Command execution and shell redirection are allowed only inside the selected workspaceRoot. They are rejected when they change directory or write outside the workspace root. Prefer structured SAFS file tools when available for exact, auditable edits.',
   'Inspect truncation and per-item status. For commands, a nonzero exitCode means failure. For searches, inspect status. Continue reads with returned cursors/offsets; fetch retained output with remote_output instead of rerunning commands. Binary/large transfers use transfer tools when available.'
 ].join(' ');
 
 export const directAgentMcpInstructions = workspaceInstructions +
-  ' Call get_remote_workspace once to identify this window workspace.';
+  ' This MCP server is already scoped to the current VS Code workspace.';
 
 export const routedAgentMcpInstructions = workspaceInstructions + ' ' + [
-  'Initially bind with get_remote_workspace(agentCwd=the absolute cwd on the Agent machine). An exact placeholder cwd or one uniquely focused window can bind automatically.',
-  'Inspect workspace.mode in the binding result. A terminal binding permits only run_remote_command for remote operations and fixes its working directory to that terminal; file, search, and transfer operations are unavailable for that binding. The workspace-selection tools remain available. Other window bindings keep their own modes.',
-  'If candidates are returned, show them and wait for the user to choose. Never select in the same turn as asking or infer consent from a single candidate. Only after the reply call switch_remote_workspace(workspaceId, userConfirmed=true).',
-  'Call switch_remote_workspace without arguments to list workspaces before a user-directed change. A successful switch cancels the old task: stop and wait for a new request.',
-  'Pass bindingId to subsequent tools. It stays pinned to the selected VS Code window; if that window closes or reloads, stop and request a new binding instead of silently switching to another window.'
+  'Initially call list_remote_workspaces to see every active SAFS workspace and its workspaceId. If there are multiple candidates, show them and ask the user which one to use.',
+  'Inspect workspace.mode for the chosen workspace. A terminal workspace permits only run_remote_command for remote operations and fixes its working directory to that terminal; file, search, and transfer operations are unavailable for that workspace. Other workspaces remain available.',
+  'Pass the explicitly chosen workspaceId to every routed operation. It is the exact VS Code window route key; if that window closes or reloads, report the workspace as unavailable and never fall back to another window.'
 ].join(' ');
 
 export const terminalAgentMcpInstructions = [
@@ -32,19 +30,19 @@ export const terminalAgentMcpInstructions = [
 ].join(' ');
 
 export const terminalCliInstructions = [
-  'This binding is in SAFS terminal-only mode.',
-  'Use only safs exec --binding <bindingId> -- <command>. Do not pass --cwd.',
+  'This workspace is in SAFS terminal-only mode.',
+  'Use only safs exec --workspace <workspaceId> -- <command>. Do not pass --cwd.',
   'Commands may create or modify files inside the selected workspaceRoot, but they are rejected if they change directory or write outside that workspaceRoot.',
   'All SAFS file, search, transfer, batch, and retained-output commands are disabled until terminal mode is stopped in Agent Activity.'
 ].join(' ');
 
 export const terminalMcpOnlyToolMessage =
-  'This SAFS binding is in terminal mode. The requested operation is unavailable. ' +
+  'This SAFS workspace is in terminal mode. The requested operation is unavailable. ' +
   'Use the only available MCP remote-operation tool: run_remote_command.';
 
 export const terminalCliOnlyCommandMessage =
   'This SAFS workspace is in terminal mode. The requested command is unavailable. ' +
-  "Use the only available CLI command: safs exec --binding <bindingId> -- 'COMMAND'. Do not pass --cwd.";
+  "Use the only available CLI command: safs exec --workspace <workspaceId> -- 'COMMAND'. Do not pass --cwd.";
 
 export function terminalMcpOnlyToolError() {
   return {
@@ -63,8 +61,7 @@ const extendedTools = new Set(['current_remote_file', 'remote_delete', 'remote_c
 const terminalTools = new Set<AgentMcpToolName>(['run_remote_command']);
 
 export type AgentMcpToolName =
-  | 'get_remote_workspace'
-  | 'switch_remote_workspace'
+  | 'list_remote_workspaces'
   | 'current_remote_file'
   | 'remote_list'
   | 'remote_read'
@@ -106,28 +103,24 @@ const textReadSchema = {
 function toolDefinitions(
   routed: boolean, profile?: AgentToolProfile
 ): AgentMcpToolDefinition[] {
-  const binding: Record<string, z.ZodTypeAny> = routed
-    ? { bindingId: z.string().min(1).describe('Binding returned by get_remote_workspace or switch_remote_workspace.') }
+  const workspaceSelector: Record<string, z.ZodTypeAny> = routed
+    ? { workspaceId: z.string().min(1).describe('Workspace ID returned by list_remote_workspaces.') }
     : {};
   const definitions: AgentMcpToolDefinition[] = [
-    {
-      name: 'get_remote_workspace',
-      title: routed ? 'Bind a SAFS remote workspace' : 'Bind this SAFS remote workspace',
-      description: routed
-        ? 'Initially binds a SAFS workspace. agentCwd is the absolute local cwd on the Agent machine, usually a SAFS placeholder; never pass a remote path or workspaceRoot. Resolution uses a unique placeholder match, then a uniquely focused window only when no placeholder matches. This tool never changes an existing bindingId. If selection is ambiguous, show the candidates to the user and wait for an explicit choice before calling switch_remote_workspace. Returns workspace (including its mode) and bindingId.'
-        : 'Returns the SAFS workspace served by this exact VS Code window for later remote tool calls.',
-      inputSchema: routed ? {
-        agentCwd: z.string().min(1).describe('Absolute current working directory on the Agent machine; not a remote path.')
-      } : {},
+    ...(routed ? [{
+      name: 'list_remote_workspaces' as const,
+      title: 'List SAFS remote workspaces',
+      description: 'Lists every active SAFS remote workspace. Each item includes a workspaceId that must be passed explicitly to every subsequent remote operation. This tool does not select, switch, or store a current workspace.',
+      inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
-    },
+    }] : []),
     {
       name: 'current_remote_file',
       title: 'Get the currently open remote file',
       description: routed
         ? 'Returns the remote file open in the active VS Code editor of the bound window, or null when none is open. Fields are path, relative (from the mount root), size, modified, dirty, and exists.'
         : 'Returns the remote file open in the active VS Code editor of this window, or null when none is open. Fields are path, relative (from the mount root), size, modified, dirty, and exists.',
-      inputSchema: binding,
+      inputSchema: workspaceSelector,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     {
@@ -135,7 +128,7 @@ function toolDefinitions(
       title: 'List a remote directory',
       description: 'Lists directory entries directly over SFTP. Use either path/cursor for one directory or paths for a batch; never combine paths with path or cursor. Omitting path lists workspaceRoot. Relative paths start at workspaceRoot; an explicit absolute path may perform read-only inspection outside it. limit defaults to 100 and is shared by a batch of up to 16 paths. Results are sorted and include path, entries, total, truncated, and optionally nextCursor. A changed directory invalidates its cursor; resume batched paths individually.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         path: z.string().optional(),
         paths: z.array(z.string().min(1)).min(1).max(16).optional(),
         limit: z.number().int().min(1).max(10000).optional(),
@@ -148,7 +141,7 @@ function toolDefinitions(
       title: 'Read a remote text file',
       description: 'Reads a bounded UTF-8 text chunk directly over SFTP. Relative paths start at workspaceRoot; an explicit absolute path may perform read-only inspection outside it. Choose at most one selector: offset (bytes), head, tail, or startLine with optional lineCount. length is the content-byte budget, default 8192 and maximum 65536. Tail is limited to the last length bytes; selectionTruncated means the requested lines did not fit. Line lookup scans at most 16 MiB. Binary or invalid UTF-8 content is rejected; remote_download is available only when that file is inside workspaceRoot. Continue truncated reads with nextOffset.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         ...textReadSchema
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
@@ -156,7 +149,7 @@ function toolDefinitions(
     {
       name: 'remote_read_many', title: 'Read selected chunks from multiple files',
       description: 'Reads up to 16 independent text selections using the same path and selector rules as remote_read. maxBytes is a shared content-byte budget, default 16384 and maximum 65536. Each item is ok, error, or not_read when the budget is exhausted; one failure does not stop later items. Returns results, contentBytes, and maxBytes.',
-      inputSchema: { ...binding, requests: z.array(z.object(textReadSchema)).min(1).max(16),
+      inputSchema: { ...workspaceSelector, requests: z.array(z.object(textReadSchema)).min(1).max(16),
         maxBytes: z.number().int().min(4).max(65536).optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -165,7 +158,7 @@ function toolDefinitions(
       title: 'Edit a remote text file',
       description: 'Atomically applies exact text replacements to an existing UTF-8 file inside workspaceRoot. Each oldText must match exactly once; all edits are validated in order before anything is written. expectedHash accepts the hash returned by a previous remote_edit to reject later unrelated changes. The source and result are capped at 1 MiB. Returns path, replacements, bytes, beforeHash, and the new hash.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         path: z.string().min(1),
         edits: z.array(z.object({
           oldText: z.string().min(1),
@@ -179,7 +172,7 @@ function toolDefinitions(
       name: 'remote_write',
       title: 'Write a remote file',
       description: 'Creates or completely replaces one UTF-8 file inside workspaceRoot directly over SFTP. The parent directory must already exist; use remote_edit for small changes and remote_upload for large content. Returns the normalized path and UTF-8 byte count.',
-      inputSchema: { ...binding, path: z.string().min(1), content: z.string() },
+      inputSchema: { ...workspaceSelector, path: z.string().min(1), content: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
     {
@@ -187,7 +180,7 @@ function toolDefinitions(
       title: 'Create a remote file or directory',
       description: 'Creates one new empty or UTF-8 file, or one directory, inside workspaceRoot directly over SFTP. The target must not already exist and its parent directory must already exist. type is file or directory; content is allowed only for files.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         path: z.string().min(1),
         type: z.enum(['file', 'directory']),
         content: z.string().optional()
@@ -199,7 +192,7 @@ function toolDefinitions(
       title: 'Delete a remote file or directory',
       description: 'Deletes a path directly over SFTP after verifying it stays inside the current remote workspace. Set recursive=true for a non-empty directory. The workspace root itself cannot be deleted.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         path: z.string().min(1),
         recursive: z.boolean().optional()
       },
@@ -210,7 +203,7 @@ function toolDefinitions(
       title: 'Change remote file permissions',
       description: 'Changes one remote file or directory mode directly over SFTP after real-path workspace validation. mode is exactly three octal digits such as 644 or 755; setuid, setgid, and sticky bits are not accepted.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         path: z.string().min(1),
         mode: z.string().regex(/^[0-7]{3}$/)
       },
@@ -221,7 +214,7 @@ function toolDefinitions(
       title: 'Move or rename a remote path',
       description: 'Moves or renames a remote file or directory directly over SFTP. Both paths and their real parents must stay inside the current remote workspace. overwrite defaults to false. The workspace root itself cannot be moved.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         sourcePath: z.string().min(1),
         targetPath: z.string().min(1),
         overwrite: z.boolean().optional()
@@ -233,7 +226,7 @@ function toolDefinitions(
       title: 'Upload local files to the remote workspace',
       description: 'Streams up to 100 local files or folders to a directory inside workspaceRoot with VS Code progress and cancellation. The Agent supplies paths directly; no picker opens and file bytes do not pass through the MCP conversation. localPaths must be absolute existing paths inside the bound workspace\'s SAFS staging root, normally the placeholder matched by agentCwd. Relative remoteDirectory starts at workspaceRoot. Returns completed and the normalized remoteDirectory.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         localPaths: z.array(z.string().min(1)).min(1).max(100),
         remoteDirectory: z.string().min(1)
       },
@@ -244,7 +237,7 @@ function toolDefinitions(
       title: 'Download a remote file or folder locally',
       description: 'Streams a file or folder from inside workspaceRoot to the local SAFS staging root with VS Code progress and cancellation. Relative remotePath starts at workspaceRoot. localPath is the exact absolute destination inside the bound workspace\'s staging root, normally the placeholder matched by agentCwd; an existing destination may be replaced. No picker opens. Returns completed plus the normalized remotePath and localPath.',
       inputSchema: {
-        ...binding,
+        ...workspaceSelector,
         remotePath: z.string().min(1),
         localPath: z.string().min(1)
       },
@@ -255,7 +248,7 @@ function toolDefinitions(
       title: 'Search remote files',
       description: 'Searches read-only on the remote SSH host. Relative paths start at workspaceRoot; an explicit absolute path may inspect outside it. Modes: content (default, matching lines), files (files whose content matches), count (per-file content match counts, including zeros), and names (files whose basename matches a shell glob such as *.ts). content/files/count use basic grep regex unless fixedStrings=true. names supports ignoreCase but not fixedStrings or contextLines. include filters basenames; excludeDirs replaces the default dependency/build exclusions, and [] searches every directory. Returns mode, status (matches, no_matches, or error), exitCode, stdout/stderr preview, returnedLineCount, and truncation/continuation metadata when needed.',
       inputSchema: {
-        ...binding, query: z.string().min(1), path: z.string().optional(),
+        ...workspaceSelector, query: z.string().min(1), path: z.string().optional(),
         mode: z.enum(['content', 'files', 'count', 'names']).optional(),
         fixedStrings: z.boolean().optional(), ignoreCase: z.boolean().optional(),
         contextLines: z.number().int().min(0).max(20).optional(),
@@ -267,7 +260,7 @@ function toolDefinitions(
     {
       name: 'remote_output', title: 'Read retained command output',
       description: 'Reads retained stdout or stderr without rerunning a command or search. Use outputId and the selected stream nextOffset from its preview. offset defaults to 0; length defaults to 8192 bytes and is capped at 65536. Handles expire after 10 minutes or earlier under memory pressure. retentionTruncated means the original capture was incomplete.',
-      inputSchema: { ...binding, outputId: z.string().regex(/^[a-f0-9]{32}$/),
+      inputSchema: { ...workspaceSelector, outputId: z.string().regex(/^[a-f0-9]{32}$/),
         stream: z.enum(['stdout', 'stderr']), offset: z.number().int().min(0).optional(),
         length: z.number().int().min(4).max(65536).optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
@@ -284,22 +277,10 @@ function toolDefinitions(
           : 'Runs a task command such as a build or test on the selected SSH host. The default working directory is workspaceRoot; relative remoteCwd starts there and every remoteCwd must remain inside it. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.',
       inputSchema: profile === 'terminal'
         ? { command: z.string().min(1) }
-        : { ...binding, command: z.string().min(1), remoteCwd: z.string().optional() },
+        : { ...workspaceSelector, command: z.string().min(1), remoteCwd: z.string().optional() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
     }
   ];
-  if (routed) {
-    definitions.splice(1, 0, {
-      name: 'switch_remote_workspace',
-      title: 'Switch SAFS remote workspace',
-      description: 'Use exactly one of two forms. Call with no arguments to list active candidates. After showing them and receiving an explicit user choice in a later turn, call with both workspaceId and userConfirmed=true. Never infer confirmation from one candidate. Success returns workspace and a new bindingId, cancels the previous task, and requires stopping immediately for a new user request.',
-      inputSchema: {
-        workspaceId: z.string().min(1).optional().describe('Candidate workspaceId explicitly chosen by the user; omit only when listing.'),
-        userConfirmed: z.literal(true).optional().describe('Must be true with workspaceId, and only after an explicit user reply; omit when listing.')
-      },
-      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
-    });
-  }
   return definitions;
 }
 

@@ -32,7 +32,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.9.1');
+  assert.equal(manifest.version, '1.9.2');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -234,22 +234,17 @@ test('SAFS MCP is opt-in for remote context instead of mandatory in every worksp
   assert.equal(tools.includes('Before reading files, editing, searching'), false);
   assert.ok(tools.includes('Do not call SAFS tools for ordinary local workspaces'));
   assert.ok(tools.includes('Use only for explicit SAFS tasks or known safs:// context'));
-  assert.ok(tools.includes("'get_remote_workspace'"));
-  assert.ok(tools.includes("'switch_remote_workspace'"));
+  assert.ok(tools.includes("'list_remote_workspaces'"));
   assert.ok(direct.includes('registerAgentMcpTools'));
   assert.ok(router.includes('registerAgentMcpTools'));
   assert.equal(direct.includes('safs_list_remote_workspaces'), false);
   assert.equal(router.includes('safs_list_remote_workspaces'), false);
   assert.equal(direct.includes('safs_select_remote_workspace'), false);
   assert.equal(router.includes('safs_select_remote_workspace'), false);
-  assert.ok(tools.includes('agentCwd'));
   assert.ok(tools.includes('workspaceId'));
   assert.ok(router.includes('instanceId'));
-  assert.ok(tools.includes('userConfirmed: z.literal(true).optional()'));
-  assert.ok(tools.includes('Never select in the same turn as asking'));
-  assert.ok(router.includes('mustWaitForNewUserRequest: true'));
-  assert.ok(tools.includes('Use exactly one of two forms'));
-  assert.ok(tools.includes('receiving an explicit user choice in a later turn'));
+  assert.equal(router.includes('mustWaitForNewUserRequest: true'), false);
+  assert.ok(tools.includes('This tool does not select, switch, or store a current workspace'));
   const extension = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.equal(extension.includes('vscode.lm.registerTool'), false);
   assert.equal(extension.includes("'safs_listRemoteFiles'"), false);

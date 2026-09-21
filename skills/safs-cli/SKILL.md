@@ -7,23 +7,23 @@ description: Operate an SSH/SFTP remote workspace through the installed SAFS CLI
 
 SAFS exposes a remote workspace through the global `safs` command while the SAFS VS Code extension is running.
 
-## Start a task
+## Select a workspace
 
-Bind once from the Agent's current working directory and retain the returned `bindingId`:
-
-```bash
-safs bind --agent "<agent name>"
-```
-
-Pass `--binding <bindingId>` to every later workspace command. Do not guess, cache across tasks, or silently replace an invalid or expired binding.
-
-If binding reports multiple candidates, show them to the user and wait for an explicit choice. Then run:
+List active SAFS workspaces and ask the user to choose when there is more than one:
 
 ```bash
-safs switch --agent "<agent name>" --workspace <workspaceId> --confirmed
+safs workspaces
 ```
 
-A successful switch cancels the previous task context. Stop immediately and wait for the user's next request.
+Pass the selected `workspaceId` explicitly to every later workspace command:
+
+```bash
+safs read README.md --workspace <workspaceId>
+```
+
+Do not infer a workspace from focus, host, path, or a previous task. If the selected ID is no longer active, list workspaces again and ask the user to choose.
+
+Workspace selection does not cancel operations targeting other workspace IDs. Always keep the selected ID with each command.
 
 ## Operate safely
 

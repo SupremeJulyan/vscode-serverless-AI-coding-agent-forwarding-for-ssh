@@ -72,7 +72,7 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 3. 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。
 4. 打开该连接的远程目录。
 5. 重启 Agent 并新建对话，然后通过 `/mcp` 或 MCP 管理界面确认存在 `safs` 服务。
-6. 告诉 Agent：`use safs mcp`, Agent 会让你选择绑定哪个工作区（如果Agent在vscode里运行则自动绑定当前打开远程工作区）。
+6. 告诉 Agent：`use safs mcp`，Agent 会让你选择操作哪个工作区（如果 Agent 在 VS Code 中运行则可根据当前 cwd 自动选择）。
 
 插件首次启动时会检查 `ALL_PROXY`、`HTTPS_PROXY` 和 `HTTP_PROXY` 等环境变量。检测到代理环境变量且 `NO_PROXY` 未完整覆盖本机回环地址时，会提示可能影响 Agent 本机转发连接；这不代表代理软件开启了全局模式。可设置 `NO_PROXY=localhost,127.0.0.1,::1`，然后重启 Agent，让本机转发请求绕过代理。
 
@@ -80,17 +80,15 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 设置 `safs.agentInterface` 支持两种模式：
 
 - `mcp`（默认）：所有操作使用 MCP，加载 `safs.agentMcpToolProfile` 选择的完整或核心工具集；切换到该模式会卸载全局 CLI，并清理 SAFS 安装到各 Agent 用户目录中的 Skill。
-- `cli`：切换到该模式时安装或更新全局 `safs` CLI 与用户级 Skill，同时复制 MCP 卸载提示词；将提示词粘贴给 Agent、完成注销并重启 Agent 后，运行 `safs bind --agent "<Agent 名称>"`，此后完全通过 CLI 操作。
+- `cli`：切换到该模式时安装或更新全局 `safs` CLI 与用户级 Skill，同时复制 MCP 卸载提示词；将提示词粘贴给 Agent、完成注销并重启 Agent 后，运行 `safs workspaces` 获取 `workspaceId`，此后每个 CLI 命令显式传入目标工作区。
 
 MCP 与 CLI 模式互斥。通过命令面板运行 `SAFS: 安装或更新全局 CLI` 会在需要时先切换到 CLI 模式，然后安装或修复 CLI 和 Skill，并复制 MCP 卸载提示词。
 
-绑定固定到具体 VS Code 窗口。即使另一窗口打开相同挂载和目录，原窗口关闭后旧绑定也会
-失效；需要重新绑定。首次绑定若多个窗口的占位路径相同，需明确选择目标窗口。
+每个 `workspaceId` 精确对应一个 VS Code 窗口中的远程工作区。即使另一窗口打开相同挂载
+和目录，两个工作区 ID 也不同；窗口或远程目录变化后旧 ID 会失效，SAFS 不会回退到当前
+焦点窗口。多个候选时必须明确选择目标 ID。
 
-MCP 的绑定结果返回目标工作区和 `bindingId`。切换工作区必须先列出候选并等待用户明确
-选择，切换成功后 Agent 会停止当前任务并等待新的用户请求。
-
-无论使用哪种模式，SAFS 后端都会按绑定结果中的 `workspaceRoot` 校验写操作，无需依赖
+无论使用哪种模式，SAFS 后端都会按 `workspaceId` 对应记录中的 `workspaceRoot` 校验写操作，无需依赖
 Agent 根据提示词自行判断边界。远程文件的读取、搜索、创建、修改、移动、删除和传输应
 使用对应的 SAFS 结构化命令；`safs exec` 仅用于构建、测试等任务命令，不应用来执行
 文件操作。边界拒绝会标记为不可重试，并明确禁止改用 `safs exec` 绕过；CLI 会直接显示
@@ -116,12 +114,12 @@ Agent 根据提示词自行判断边界。远程文件的读取、搜索、创�
 SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命令继承该终端当前的用户
 权限和环境变量，下方会显示绑定的终端及目录。
 
-共享 MCP 地址始终提供相同的工具列表。Agent 调用 `get_remote_workspace` 后，绑定结果中的
-`workspace.mode` 会明确标出该窗口是 `workspace` 还是 `terminal`。绑定到终端模式窗口时，
+共享 MCP 地址始终提供相同的工具列表。Agent 调用 `list_remote_workspaces` 后，每项结果中的
+`workspaceId` 和 `workspace.mode` 会明确标出目标窗口是 `workspace` 还是 `terminal`。选中终端模式工作区时，
 只有 `run_remote_command` 可以执行远程操作；文件、搜索、传输及长输出续读会被拒绝。
-其他窗口的工作区绑定不受影响。CLI 仍保留 `bind`/`workspaces`/`switch` 用于路由；终端绑定
-只允许 `safs exec --binding <bindingId> -- 'COMMAND'` 执行远程操作，且不能用 `--cwd` 覆盖
-终端目录。切换绑定需按工作区选择流程确认。
+其他窗口的工作区不受影响。CLI 使用 `workspaces` 列出目标 ID；终端工作区
+只允许 `safs exec --workspace <workspaceId> -- 'COMMAND'` 执行远程操作，且不能用 `--cwd` 覆盖
+终端目录。每个命令都必须显式传入 `--workspace <workspaceId>`。
 
 终端模式只在当前窗口会话内有效；终端关闭或在当前窗口切换远程目录后会退出。
 若在新窗口打开远程目录，原窗口仍保持终端模式。转发期间不要在该终端中同时操作前台程序。
@@ -138,24 +136,23 @@ SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命�
 CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。切换到 CLI 模式会安装当前扩展环境对应的程序与用户级 `~/.agents/skills/safs-cli`；运行 `SAFS: 安装或更新全局 CLI` 也会切换到该模式并主动安装或修复。扩展会读取 CLI 的真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。进入 CLI 模式或在全局首次开启 Agent 转发时，扩展会复制 MCP 卸载提示词；请粘贴给 Agent，注销用户级 `safs` MCP 后重启 Agent。之后在Agent 里`输入使用safs-cli`，或者`/safs-cli` 即可使用这Skill。
 
 
-`safs bind` 或 `safs switch` 返回的 `bindingId` 通过 `--binding` 显式传给后续命令，
+`safs workspaces` 返回的 `workspaceId` 通过 `--workspace` 显式传给每个命令，
 确保固定 CLI 入口后的每次操作仍指向用户选定的 VS Code 窗口。结构化 JSON 和写入内容
 支持从 stdin 读取，避免长内容的 Shell 转义：
 
 ```sh
-safs bind --agent 'Codex'
-binding_id='binding-id-from-safs-bind'
-safs read README.md --binding "$binding_id"
-safs find --binding "$binding_id" --name '*.ts'
-safs search --binding "$binding_id" --query TODO --mode files # 内容匹配文件，不是文件名
+safs workspaces
+workspace_id='workspace-id-from-safs-workspaces'
+safs read README.md --workspace "$workspace_id"
+safs find --workspace "$workspace_id" --name '*.ts'
+safs search --workspace "$workspace_id" --query TODO --mode files # 内容匹配文件，不是文件名
 printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
-  | safs edit --binding "$binding_id" --path README.md --input -
-printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
-safs write --binding "$binding_id" --path short.txt --content 'short text'
-safs create --binding "$binding_id" --path src/new-dir directory
-safs create --binding "$binding_id" --path src/new.txt file --content 'initial text'
-safs exec 'pwd' --binding "$binding_id"
-safs switch --agent 'Codex' --workspace 'workspace-id-from-safs-workspaces' --confirmed
+  | safs edit --workspace "$workspace_id" --path README.md --input -
+printf '%s' 'new content' | safs write --workspace "$workspace_id" --path notes.txt --file -
+safs write --workspace "$workspace_id" --path short.txt --content 'short text'
+safs create --workspace "$workspace_id" --path src/new-dir directory
+safs create --workspace "$workspace_id" --path src/new.txt file --content 'initial text'
+safs exec 'pwd' --workspace "$workspace_id"
 ```
 
 `search --mode files` 返回“内容匹配的文件路径”；按文件名查找请使用 `find --name`、
@@ -197,7 +194,7 @@ CLI 语法或参数错误会直接附带当前子命令的正确 Usage，不需�
 
 SAFS 在本地 VS Code 扩展进程中建立 SSH/SFTP 连接，将远程目录映射为 `safs://` 虚拟文件系统。文件浏览与编辑通过 SFTP 完成，终端和 Agent 命令通过 SSH 执行，因此服务器无需安装 VS Code Server 或 Agent。
 
-启用 Agent 转发后，每个远程窗口都会启动仅本机可访问的 MCP 服务。多个窗口共用固定的本地路由入口；Agent 首次调用时绑定到具体窗口，后续操作沿用该绑定，避免将命令发到错误的服务器或工作区。
+启用 Agent 转发后，每个远程窗口都会启动仅本机可访问的 MCP 服务。多个窗口共用固定的本地路由入口；每次路由操作都显式携带 `workspaceId`，精确指向目标窗口，避免将命令发到错误的服务器或工作区。
 
 结构化写入被限制在当前远程工作区。Agent 发起的 SSH 命令若命中高风险规则，默认会被拒绝并记录脱敏审计日志。但 SSH 命令不是沙箱：获准执行后仍拥有登录账号的权限，建议使用非 root、最小权限账号并禁用免密提权。
 

@@ -72,7 +72,7 @@ The first time you open the configured remote home from a parent connection node
 3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself.
 4. Open the remote directory for that connection.
 5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
-6. Tell the Agent: `use safs mcp`. The Agent will ask you to choose which workspace to bind; when it is running inside VS Code, it can bind to the currently open remote workspace automatically.
+6. Tell the Agent: `use safs mcp`. The Agent will ask you to choose which workspace to operate on; when it is running inside VS Code, it can select the current remote workspace automatically.
 
 On its first startup, the extension checks environment variables such as `ALL_PROXY`, `HTTPS_PROXY`, and `HTTP_PROXY`. If proxy environment variables are present and `NO_PROXY` does not fully cover loopback, SAFS warns that local Agent forwarding connections may be affected; this does not mean the proxy application is in global mode. You can set `NO_PROXY=localhost,127.0.0.1,::1` and restart the Agent to bypass the proxy for local forwarding requests.
 
@@ -80,19 +80,16 @@ You can also switch to **CLI mode**:
 Set `safs.agentInterface` to choose between the two modes:
 
 - `mcp` (default): every operation uses the MCP tool set selected by `safs.agentMcpToolProfile`. Switching to this mode uninstalls the global CLI and removes SAFS-managed Skills from the supported Agent user directories.
-- `cli`: switching to this mode installs or updates the global `safs` CLI and user-level Skill, then copies an MCP removal prompt. Paste it into the Agent, unregister MCP, and restart the Agent. The Agent then runs `safs bind --agent "<Agent name>"` and uses CLI exclusively.
+- `cli`: switching to this mode installs or updates the global `safs` CLI and user-level Skill, then copies an MCP removal prompt. Paste it into the Agent, unregister MCP, and restart the Agent. The Agent then runs `safs workspaces` and passes the selected `workspaceId` to every CLI command.
 
 MCP and CLI modes are mutually exclusive. Running `SAFS: Install or Update Global CLI` from the Command Palette switches to CLI mode when necessary, installs or repairs the CLI and Skill, and copies the MCP removal prompt.
 
-Bindings remain pinned to a specific VS Code window. If that window closes, its binding expires
-even when another window has the same mount and directory. When multiple windows share a
-placeholder path, an initial bind requires an explicit choice.
+Each `workspaceId` routes to exactly one remote workspace in one VS Code window. Even when another
+window has the same mount and directory, its workspace ID is different. When the window or remote
+directory changes, the old ID expires; SAFS never falls back to the currently focused window. When
+there are multiple candidates, the Agent must ask the user to choose an ID.
 
-In MCP mode, a successful bind returns the target workspace and `bindingId`. Switching first lists
-candidates and waits for an explicit user choice; after a successful switch, the Agent stops the
-current task and waits for a new user request.
-
-In every mode, the SAFS backend validates write operations against the bound `workspaceRoot`, so
+In every mode, the SAFS backend validates write operations against the `workspaceRoot` for the selected `workspaceId`, so
 the boundary does not depend on the Agent interpreting a prompt. Use the corresponding structured
 SAFS commands for remote reads, searches, creation, edits, moves, deletion, and transfers. Reserve
 `safs exec` for task commands such as builds and tests, never for file operations. A boundary
@@ -124,13 +121,13 @@ environment; the bound terminal and directory are shown below the status.
 Use **Switch Workspace** to select and open a remote directory in the current window; cancelling
 the picker leaves the current mode unchanged.
 
-The shared MCP URL always exposes a stable tool list. After `get_remote_workspace`, the binding
-result reports `workspace.mode` as `workspace` or `terminal`. A terminal binding permits only
+The shared MCP URL always exposes a stable tool list. Call `list_remote_workspaces` to obtain
+the explicit `workspaceId` and inspect `workspace.mode` as `workspace` or `terminal`. A terminal workspace permits only
 `run_remote_command` for remote operations; file, search, transfer, and retained-output calls
-are rejected. Bindings to other workspace windows remain unaffected. The CLI keeps
-`bind`/`workspaces`/`switch` for routing; a terminal binding permits only
-`safs exec --binding <bindingId> -- 'COMMAND'` for remote operations, and `--cwd` cannot override
-the terminal directory. Switching a binding still requires the workspace selection flow.
+are rejected. Other workspace windows remain unaffected. The CLI keeps `workspaces`, while
+the `workspaces` command lists the explicit IDs; a terminal workspace permits only
+`safs exec --workspace <workspaceId> -- 'COMMAND'` for remote operations, and `--cwd` cannot override
+the terminal directory. Every command must pass `--workspace <workspaceId>` explicitly.
 
 Terminal Mode lasts only for the current window session. Closing the terminal or switching the
 remote directory in the current window exits Terminal Mode. Opening a remote directory in a new
@@ -147,7 +144,7 @@ To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed man
 
 #### CLI mode
 
-CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. Switching to CLI mode installs the executable and the user-level `~/.agents/skills/safs-cli`; `SAFS: Install or Update Global CLI` also switches modes and installs or repairs both. The executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. When CLI mode is selected, or when Agent forwarding is enabled globally for the first time, the extension copies the MCP removal prompt. Paste it into the Agent, remove the user-level `safs` MCP registration, and restart the Agent. It can then load the Skill on demand and starts with `safs bind --agent "<Agent name>"`. Switching back to MCP mode, or running the forwarding uninstall command while in CLI mode, removes the global CLI and every SAFS-managed Skill under the `.agents`, `.claude`, `.codex`, and `.copilot` user directories. Use CLI mode when an Agent does not support MCP or when you want a CLI-only workflow. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
+CLI uses the native `safs` executable bundled with the extension. Binaries for all six platforms are installed with the extension, so no runtime download is required. Switching to CLI mode installs the executable and the user-level `~/.agents/skills/safs-cli`; `SAFS: Install or Update Global CLI` also switches modes and installs or repairs both. The executable's real version is checked and automatically replaced from the current extension package if it differs or is too old to report a version. When CLI mode is selected, or when Agent forwarding is enabled globally for the first time, the extension copies the MCP removal prompt. Paste it into the Agent, remove the user-level `safs` MCP registration, and restart the Agent. It can then load the Skill on demand and starts with `safs workspaces`. Switching back to MCP mode, or running the forwarding uninstall command while in CLI mode, removes the global CLI and every SAFS-managed Skill under the `.agents`, `.claude`, `.codex`, and `.copilot` user directories. Use CLI mode when an Agent does not support MCP or when you want a CLI-only workflow. The native CLI no longer provides the stdio `mcp-bridge`; MCP mode connects directly to the Streamable HTTP URL in the copied prompt.
 
 You can also install a project-level Skill directly, following the Playwright CLI pattern:
 
@@ -157,30 +154,28 @@ safs install --skills
 
 The default target is `.agents/skills/safs-cli` in the current project; add `-g` for the user-level directory. Use `--skills=claude`, `--skills=codex`, or `--skills=copilot` for an Agent-specific directory. Skill content is embedded in the binary, so installation and updates do not require network access.
 
-CLI installation is global and Agent-independent. The Agent name is recorded only when
-`bind` creates a binding; later operations inherit it through `--binding`. The label is
-used for the activity view, diagnostics, and binding isolation, not local router
-authentication. Multiple Agents can therefore share one `safs` command.
+CLI installation is global and Agent-independent. Workspace selection is stateless: the
+`workspaceId` returned by `safs workspaces` is passed explicitly to each operation.
+Multiple Agents can therefore share one `safs` command without sharing an implicit workspace.
 
-Pass the `bindingId` returned by `safs bind` or `safs switch` explicitly through
-`--binding`, ensuring every operation behind the fixed CLI endpoint still targets
-the selected VS Code window. Structured JSON and write content can be read from
+Pass the selected `workspaceId` explicitly through `--workspace`, ensuring every
+operation behind the fixed CLI endpoint still targets the selected VS Code window.
+Structured JSON and write content can be read from
 stdin to avoid quoting long values in the shell:
 
 ```sh
-safs bind --agent 'Codex'
-binding_id='binding-id-from-safs-bind'
-safs read README.md --binding "$binding_id"
-safs find --binding "$binding_id" --name '*.ts'
-safs search --binding "$binding_id" --query TODO --mode files # content matches, not filenames
+safs workspaces
+workspace_id='workspace-id-from-safs-workspaces'
+safs read README.md --workspace "$workspace_id"
+safs find --workspace "$workspace_id" --name '*.ts'
+safs search --workspace "$workspace_id" --query TODO --mode files # content matches, not filenames
 printf '%s' '{"edits":[{"oldText":"old","newText":"new"}]}' \
-  | safs edit --binding "$binding_id" --path README.md --input -
-printf '%s' 'new content' | safs write --binding "$binding_id" --path notes.txt --file -
-safs write --binding "$binding_id" --path short.txt --content 'short text'
-safs create --binding "$binding_id" --path src/new-dir directory
-safs create --binding "$binding_id" --path src/new.txt file --content 'initial text'
-safs exec 'pwd' --binding "$binding_id"
-safs switch --agent 'Codex' --workspace 'workspace-id-from-safs-workspaces' --confirmed
+  | safs edit --workspace "$workspace_id" --path README.md --input -
+printf '%s' 'new content' | safs write --workspace "$workspace_id" --path notes.txt --file -
+safs write --workspace "$workspace_id" --path short.txt --content 'short text'
+safs create --workspace "$workspace_id" --path src/new-dir directory
+safs create --workspace "$workspace_id" --path src/new.txt file --content 'initial text'
+safs exec 'pwd' --workspace "$workspace_id"
 ```
 
 `search --mode files` returns paths of files whose contents match. To search by
@@ -225,7 +220,7 @@ See the SAFS page in VS Code Settings for additional advanced options.
 
 SAFS establishes SSH/SFTP connections inside the local VS Code extension process and maps a remote directory to a `safs://` virtual file system. Browsing and editing use SFTP, while terminals and Agent commands run over SSH. The server therefore needs neither VS Code Server nor an Agent.
 
-With Agent Forwarding enabled, every remote window starts an MCP service accessible only from the local machine. Multiple windows share a stable local routing endpoint. On its first call, the Agent binds to a specific window and keeps that binding for later operations, preventing commands from being sent to the wrong server or workspace.
+With Agent Forwarding enabled, every remote window starts an MCP service accessible only from the local machine. Multiple windows share a stable local routing endpoint. Each routed operation carries an explicit `workspaceId`, so the router can select the exact window and never fall back to focus or a matching remote path.
 
 Structured writes are restricted to the current remote workspace. An SSH command matching a high-risk rule is denied by default and recorded in a redacted audit log. SSH commands are not a sandbox, however: an allowed command still has all permissions of the login account. Use a non-root, least-privilege account and disable passwordless privilege escalation.
 

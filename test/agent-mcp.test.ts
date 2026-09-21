@@ -91,7 +91,6 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
       'current_remote_file',
-      'get_remote_workspace',
       'remote_chmod',
       'remote_create',
       'remote_delete',
@@ -114,16 +113,6 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
     assert.deepEqual(JSON.parse(currentFileText), {
       path: '/srv/project/README.md', relative: 'README.md', size: 12,
       modified: 123, dirty: false, exists: true
-    });
-    const route = await client.callTool({
-      name: 'get_remote_workspace', arguments: {}
-    });
-    const routeText = (route.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
-    assert.deepEqual(JSON.parse(routeText), {
-      workspace: {
-        workspaceRoot: '/srv/project',
-        host: 'dev'
-      }
     });
     const listed = await client.callTool({
       name: 'remote_list', arguments: { path: '.', limit: 10 }
@@ -207,7 +196,7 @@ test('serves direct SFTP file and SSH command tools through MCP', async () => {
       message: 'Path is outside the workspace.'
     });
     assert.deepEqual(audited.map((entry) => entry.toolName), [
-      'current_remote_file', 'get_remote_workspace', 'remote_list',
+      'current_remote_file', 'remote_list',
       'remote_read', 'remote_edit', 'remote_create', 'remote_download', 'remote_upload',
       'remote_delete', 'remote_chmod', 'remote_move', 'remote_search', 'remote_list',
       'remote_write'

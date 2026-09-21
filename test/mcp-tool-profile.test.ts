@@ -17,15 +17,15 @@ test('core profile keeps typed editing and output continuation but omits extende
     const names = tools.map(t => t.name);
     assert.ok(names.includes('remote_edit'));
     assert.ok(names.includes('remote_output'));
-    assert.ok(names.includes('switch_remote_workspace'));
+    assert.ok(names.includes('list_remote_workspaces'));
     assert.ok(!names.includes('remote_upload'));
     assert.ok(!names.includes('remote_delete'));
-    const result = await client.callTool({ name: 'remote_output', arguments: { bindingId: 'x', outputId: 'invalid' } });
+    const result = await client.callTool({ name: 'remote_output', arguments: { workspaceId: 'x', outputId: 'invalid' } });
     assert.equal(result.isError, true);
   } finally { await client.close(); await server.close(); }
 });
 
-test('terminal profile exposes exactly one command tool without binding or cwd inputs', async () => {
+test('terminal profile exposes exactly one command tool without workspace selector or cwd inputs', async () => {
   const server = new McpServer({ name: 'test', version: '1' });
   registerAgentMcpTools(server, {
     routed: true,

@@ -182,11 +182,6 @@ export class AgentMcpServer {
         return toolError(error);
       }
     };
-    // name/workspaceUri 是内部路由标识，不对 Agent 暴露。
-    const publicFolder = (info: RemoteFolderInfo) => ({
-      workspaceRoot: info.workspaceRoot,
-      host: info.host
-    });
     const publicCurrentFile = (value: unknown): unknown => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
       const { mountName: _mountName, ...publicValue } = value as Record<string, unknown>;
@@ -208,16 +203,9 @@ export class AgentMcpServer {
       profile,
       invoke: (name, input) => {
         switch (name) {
-          case 'get_remote_workspace':
+          case 'list_remote_workspaces':
             return invoke(name, input, async () => {
-              const current = await this.callbacks.currentWorkspace();
-              return current ? {
-                workspace: publicFolder(current)
-              } : { workspace: null };
-            });
-          case 'switch_remote_workspace':
-            return invoke(name, input, async () => {
-              throw new Error('Workspace switching is only available through the SAFS router');
+              throw new Error('Workspace listing is only available through the SAFS router');
             });
           case 'current_remote_file':
             return invoke(name, input, async () => publicCurrentFile(

@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -603,7 +603,7 @@
           "enum": ["full", "core"],
           "default": "full",
           "scope": "machine",
-          "description": "Tool profile used only in mcp mode. core exposes binding, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. Use the same setting in all windows and restart the Agent after changing it."
+          "description": "Tool profile used only in mcp mode. core exposes workspace selection, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. Use the same setting in all windows and restart the Agent after changing it."
         },
         "safs.agentMcpMaxOutputBytes": {
           "type": "number",
