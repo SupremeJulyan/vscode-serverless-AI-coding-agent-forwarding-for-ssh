@@ -72,7 +72,7 @@ The first time you open the configured remote home from a parent connection node
 3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself.
 4. Open the remote directory for that connection.
 5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
-6. Tell the Agent: `use safs mcp`. The Agent will ask you to choose which workspace to operate on; when it is running inside VS Code, it can select the current remote workspace automatically.
+6. Tell the Agent: `use safs mcp`. The Agent lists the active workspaces and asks you to choose one explicitly; later operations use its returned `workspaceId`.
 
 On its first startup, the extension checks environment variables such as `ALL_PROXY`, `HTTPS_PROXY`, and `HTTP_PROXY`. If proxy environment variables are present and `NO_PROXY` does not fully cover loopback, SAFS warns that local Agent forwarding connections may be affected; this does not mean the proxy application is in global mode. You can set `NO_PROXY=localhost,127.0.0.1,::1` and restart the Agent to bypass the proxy for local forwarding requests.
 

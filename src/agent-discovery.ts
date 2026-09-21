@@ -17,8 +17,6 @@ export interface AgentWorkspaceRecord {
   workspaceRoot: string;
   /** This window currently exposes only command execution in its selected visible terminal. */
   terminalCommandOnly?: true;
-  /** Local empty directory used as cwd by an Agent started in this VS Code window. */
-  agentCwd?: string;
   host: string;
   mcpUrl: string;
   updatedAt: string;
@@ -94,9 +92,7 @@ export function discoverAgentWorkspaces(
       // A missing discovery directory means no active remote window there.
     }
   }
-  records.sort((left, right) =>
-    Number(right.focused) - Number(left.focused) || right.updatedAtMs - left.updatedAtMs
-  );
+  records.sort((left, right) => right.updatedAtMs - left.updatedAtMs);
   return records;
 }
 

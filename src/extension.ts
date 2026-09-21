@@ -240,7 +240,7 @@ function updateSafsStatusBar(
     : '$(sparkle) Agent 已聚焦当前窗口😏';
   forwardingFocusStatusBar.tooltip = focusedAgentSource
     ? `${source} 正在通过本窗口的远程连接干活${mirrorHint}`
-    : `本窗口是 Agent MCP 的默认路由目标${mirrorHint}`;
+    : `本窗口已参与 Agent MCP 转发${mirrorHint}`;
   if (agentFocus) forwardingFocusStatusBar.show();
   else forwardingFocusStatusBar.hide();
 }
@@ -644,7 +644,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   registry.set(folder);
   agentTrace(
     'SFTP',
-    `挂载 ${mount.name} 验证完成，remoteRoot=${remoteRoot}，agentCwd=${placeholder.localPath}`
+    `挂载 ${mount.name} 验证完成，remoteRoot=${remoteRoot}，stagingRoot=${placeholder.localPath}`
   );
   return folder;
 }
@@ -3737,7 +3737,7 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
           ? 'Agent 转发：已启用（未转发）'
           : 'Agent 转发：已关闭',
       focused
-        ? 'MCP 绑定：聚焦窗口（默认路由目标）'
+        ? 'MCP 绑定：当前聚焦窗口（仅用于状态展示）'
         : forwarding
           ? 'MCP 绑定：其他窗口'
           : 'MCP 绑定：无',
@@ -4344,7 +4344,6 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     workspaceUri: folderUri(folder, editorWorkspacePath),
     mountName: mount.name,
     workspaceRoot: workspacePath,
-    agentCwd: vscode.Uri.parse(folderUri(folder, editorWorkspacePath)).fsPath,
     host: mount.host,
     mcpUrl: mcp.url,
     ...(terminalCommandOnly ? { terminalCommandOnly: true } : {})

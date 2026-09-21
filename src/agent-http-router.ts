@@ -62,16 +62,6 @@ function requestAgentName(value: unknown, fallback?: string): string | undefined
   return normalized || fallback;
 }
 
-/** Normalize native Windows and WSL views of the same local Agent cwd. */
-export function canonicalAgentCwd(value: string): string {
-  let normalized = value.trim().replace(/\\/g, '/');
-  const drive = /^([A-Za-z]):\/(.*)$/.exec(normalized);
-  if (drive) normalized = `/mnt/${drive[1].toLowerCase()}/${drive[2]}`.toLowerCase();
-  if (/^\/mnt\/[a-z]\//i.test(normalized)) normalized = normalized.toLowerCase();
-  normalized = normalized.replace(/\/{2,}/g, '/').replace(/\/$/, '');
-  return normalized || '/';
-}
-
 /**
  * Return the opaque public route key for one discovered remote workspace.
  * The VS Code instance id alone is window-scoped and can survive a remote

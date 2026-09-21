@@ -224,7 +224,7 @@ function toolDefinitions(
     {
       name: 'remote_upload',
       title: 'Upload local files to the remote workspace',
-      description: 'Streams up to 100 local files or folders to a directory inside workspaceRoot with VS Code progress and cancellation. The Agent supplies paths directly; no picker opens and file bytes do not pass through the MCP conversation. localPaths must be absolute existing paths inside the bound workspace\'s SAFS staging root, normally the placeholder matched by agentCwd. Relative remoteDirectory starts at workspaceRoot. Returns completed and the normalized remoteDirectory.',
+      description: 'Streams up to 100 local files or folders to a directory inside workspaceRoot with VS Code progress and cancellation. The Agent supplies paths directly; no picker opens and file bytes do not pass through the MCP conversation. localPaths must be absolute existing paths inside the bound workspace\'s SAFS staging root. Relative remoteDirectory starts at workspaceRoot. Returns completed and the normalized remoteDirectory.',
       inputSchema: {
         ...workspaceSelector,
         localPaths: z.array(z.string().min(1)).min(1).max(100),
@@ -235,7 +235,7 @@ function toolDefinitions(
     {
       name: 'remote_download',
       title: 'Download a remote file or folder locally',
-      description: 'Streams a file or folder from inside workspaceRoot to the local SAFS staging root with VS Code progress and cancellation. Relative remotePath starts at workspaceRoot. localPath is the exact absolute destination inside the bound workspace\'s staging root, normally the placeholder matched by agentCwd; an existing destination may be replaced. No picker opens. Returns completed plus the normalized remotePath and localPath.',
+      description: 'Streams a file or folder from inside workspaceRoot to the local SAFS staging root with VS Code progress and cancellation. Relative remotePath starts at workspaceRoot. localPath is the exact absolute destination inside the bound workspace\'s staging root; an existing destination may be replaced. No picker opens. Returns completed plus the normalized remotePath and localPath.',
       inputSchema: {
         ...workspaceSelector,
         remotePath: z.string().min(1),

@@ -121,8 +121,7 @@ test('native CLI lists and executes through the existing SAFS router', async () 
   const router = new AgentHttpRouter(await freePort(), 'native-router', {
     discover: () => [{
       instanceId: 'native-window', workspaceRoot: '/project',
-      workspaceUri: 'safs://dev/project', host: 'dev',
-      agentCwd: temporary, focused: true, mcpUrl: backend.url
+      workspaceUri: 'safs://dev/project', host: 'dev', focused: true, mcpUrl: backend.url
     } as any]
   });
   await router.start();

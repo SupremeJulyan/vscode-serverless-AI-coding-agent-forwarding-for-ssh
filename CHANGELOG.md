@@ -4,6 +4,8 @@
 
 - MCP 工作区路由改为 `list_remote_workspaces` 加显式 `workspaceId`，移除隐式选择与切换工具。
 - CLI 移除 `bind`/`switch`，所有远程操作统一使用 `--workspace`。
+- 删除工作区路由中已无用途的 Agent cwd 占位符匹配、标准化函数和聚焦窗口默认排序；聚焦状态仅用于界面展示。
+- 更新 MCP/CLI 文档，明确要求用户选择 `workspaceId`，避免误以为会按 cwd 或窗口焦点自动选择。
 - 插件与原生 CLI 版本升级到 1.9.2。
 
 ## 1.9.1

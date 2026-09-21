@@ -72,7 +72,7 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 3. 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。
 4. 打开该连接的远程目录。
 5. 重启 Agent 并新建对话，然后通过 `/mcp` 或 MCP 管理界面确认存在 `safs` 服务。
-6. 告诉 Agent：`use safs mcp`，Agent 会让你选择操作哪个工作区（如果 Agent 在 VS Code 中运行则可根据当前 cwd 自动选择）。
+6. 告诉 Agent：`use safs mcp`，Agent 会列出工作区并让你明确选择目标；后续操作都使用返回的 `workspaceId`。
 
 插件首次启动时会检查 `ALL_PROXY`、`HTTPS_PROXY` 和 `HTTP_PROXY` 等环境变量。检测到代理环境变量且 `NO_PROXY` 未完整覆盖本机回环地址时，会提示可能影响 Agent 本机转发连接；这不代表代理软件开启了全局模式。可设置 `NO_PROXY=localhost,127.0.0.1,::1`，然后重启 Agent，让本机转发请求绕过代理。
 

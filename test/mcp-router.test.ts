@@ -3,9 +3,7 @@ import * as http from 'node:http';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import {
-  AgentHttpRouter, agentTaggedMcpUrl, canonicalAgentCwd, workspaceIdFor
-} from '../src/agent-http-router';
+import { AgentHttpRouter, agentTaggedMcpUrl, workspaceIdFor } from '../src/agent-http-router';
 import { AgentMcpServer } from '../src/agent-mcp';
 import { DiscoveredAgentWorkspace } from '../src/agent-discovery';
 
@@ -37,8 +35,7 @@ function callbacks(label: string) {
 function record(
   instanceId: string, mcpUrl: string,
   workspace: {
-    mountName?: string; workspaceRoot?: string; host?: string; focused?: boolean;
-    agentCwd?: string; terminalCommandOnly?: true;
+    mountName?: string; workspaceRoot?: string; host?: string; focused?: boolean; terminalCommandOnly?: true;
   } = {}
 ): DiscoveredAgentWorkspace {
   const updatedAt = new Date().toISOString();
@@ -52,7 +49,6 @@ function record(
     mountName: workspace.mountName ?? 'A',
     workspaceRoot: workspace.workspaceRoot ?? '/srv/a',
     terminalCommandOnly: workspace.terminalCommandOnly,
-    agentCwd: workspace.agentCwd,
     host: workspace.host ?? 'dev',
     mcpUrl,
     updatedAt,
@@ -82,11 +78,6 @@ test('adds an encoded Agent source label without changing the router token', () 
   assert.equal(tagged.searchParams.get('source'), 'cli');
 });
 
-test('normalizes Windows and WSL views of the same Agent cwd', () => {
-  assert.equal(canonicalAgentCwd('C:\\Users\\Me\\SAFS\\'), '/mnt/c/users/me/safs');
-  assert.equal(canonicalAgentCwd('/mnt/c/Users/Me/SAFS'), '/mnt/c/users/me/safs');
-});
-
 test('a terminal workspace permits only commands without changing other workspace routes', async () => {
   const backend = new AgentMcpServer(0, 'terminal-backend', {
     ...callbacks('terminal'),
@@ -110,12 +101,10 @@ test('a terminal workspace permits only commands without changing other workspac
     workspaces = [
       record('ordinary-window', backend.url, {
         workspaceRoot: '/home/ordinary/project',
-        agentCwd: '/local/ordinary',
         focused: true
       }),
       record('terminal-window', backend.url, {
         workspaceRoot: '/home/switched-user/project',
-        agentCwd: '/local/project',
         focused: false,
         terminalCommandOnly: true
       })
@@ -224,11 +213,9 @@ test('agents bound to separate windows retain their own modes across focus chang
     await Promise.all([terminalBackend.start(), workspaceBackend.start()]);
     workspaces = [
       record('window-A', terminalBackend.url, {
-        agentCwd: '/local/A', focused: true, terminalCommandOnly: true
+        focused: true, terminalCommandOnly: true
       }),
-      record('window-B', workspaceBackend.url, {
-        agentCwd: '/local/B', focused: false
-      })
+      record('window-B', workspaceBackend.url, { focused: false })
     ];
     await router.start();
     await agentA.connect(new StreamableHTTPClientTransport(
@@ -358,11 +345,10 @@ test('a workspaceId never moves to another window with the same remote path', as
     workspaces = [
       record('window-A', terminalBackend.url, {
         host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
-        agentCwd: '/placeholder/A', focused: true, terminalCommandOnly: true
+        focused: true, terminalCommandOnly: true
       }),
       record('window-B', workspaceBackend.url, {
-        host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a',
-        agentCwd: '/placeholder/shared', focused: false
+        host: 'host-a', mountName: 'A', workspaceRoot: '/srv/a', focused: false
       })
     ];
     await router.start();
@@ -373,7 +359,6 @@ test('a workspaceId never moves to another window with the same remote path', as
 
     workspaces = workspaces.map((workspace) => ({
       ...workspace,
-      agentCwd: '/placeholder/shared',
       focused: workspace.instanceId === 'window-B'
     }));
     const bSelected = await client.callTool({ name: 'list_remote_workspaces', arguments: {} });
@@ -420,11 +405,11 @@ test('workspace listing returns stable IDs and expired IDs stay invalid', async 
     await Promise.all([first.start(), second.start()]);
     workspaces = [
       record('window-a', first.url, {
-        host: 'host-a', workspaceRoot: '/srv/a', agentCwd: 'C:\\local\\agent-cwd\\a',
+        host: 'host-a', workspaceRoot: '/srv/a',
         focused: false
       }),
       record('window-b', second.url, {
-        host: 'host-b', workspaceRoot: '/srv/b', agentCwd: '/local/agent-cwd/b',
+        host: 'host-b', workspaceRoot: '/srv/b',
         focused: true
       })
     ];
@@ -479,7 +464,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
     assert.deepEqual(await client.listResources(), { resources: [] });
     assert.deepEqual(await client.listResourceTemplates(), { resourceTemplates: [] });
 
-    workspaces = [record('old-a', first.url, { agentCwd: '/local/old-a' })];
+    workspaces = [record('old-a', first.url)];
     const route = await client.callTool({ name: 'list_remote_workspaces', arguments: {} });
     const routeValue = JSON.parse((route.content as any[])[0].text).workspaces[0];
     const workspaceId = routeValue.workspaceId as string;
@@ -535,7 +520,7 @@ test('fixed HTTP router follows a reconnected mount without changing the Agent U
       'REMOTE_WORKSPACE_NOT_FOUND'
     );
 
-    workspaces = [record('new-a', second.url, { agentCwd: '/local/new-a' })];
+    workspaces = [record('new-a', second.url)];
     const rebound = await client.callTool({ name: 'list_remote_workspaces', arguments: {} });
     const reboundId = JSON.parse((rebound.content as any[])[0].text).workspaces[0].workspaceId;
     const reconnected = await client.callTool({
@@ -559,10 +544,10 @@ test('workspace listing exposes the focused and unfocused SAFS windows', async (
     await backend.start();
     workspaces = [
       record('focused', backend.url, {
-        host: 'host-a', workspaceRoot: '/srv/a', agentCwd: '/placeholder/a', focused: true
+        host: 'host-a', workspaceRoot: '/srv/a', focused: true
       }),
       record('other', backend.url, {
-        host: 'host-b', workspaceRoot: '/srv/b', agentCwd: '/placeholder/b', focused: false
+        host: 'host-b', workspaceRoot: '/srv/b', focused: false
       })
     ];
     await router.start();
@@ -592,12 +577,10 @@ test('workspace selection accepts workspaceId and preserves existing routes', as
     await Promise.all([first.start(), second.start()]);
     workspaces = [
       record('focused', first.url, {
-        mountName: 'A', host: 'host-a', workspaceRoot: '/srv/a', focused: false,
-        agentCwd: '/local/agent-cwd/a'
+        mountName: 'A', host: 'host-a', workspaceRoot: '/srv/a', focused: false
       }),
       record('other', second.url, {
-        mountName: 'B', host: 'host-b', workspaceRoot: '/srv/b', focused: false,
-        agentCwd: '/local/agent-cwd/b'
+        mountName: 'B', host: 'host-b', workspaceRoot: '/srv/b', focused: false
       })
     ];
     await router.start();
