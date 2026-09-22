@@ -2252,9 +2252,9 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
     return;
   }
   if (reopen.retryWithSystemSsh) {
-    void vscode.window.showInformationMessage(
-      'SAFS：已改用系统 SSH 重连远程终端。'
-    );
+    // The built-in ssh2 transport may fail during PTY negotiation. Retrying
+    // with the system SSH client is an implementation detail and must stay
+    // silent (the terminal itself is the user-visible result).
     await openTerminal(vscodeContext, reopen.mount, remoteCwd, undefined, true, true);
     return;
   }
@@ -4732,6 +4732,16 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
       return;
     }
     output.appendLine(`[错误] ${message}`);
+    const permissionDenied = (error as NodeJS.ErrnoException | null)?.code === 'EACCES'
+      || (error as NodeJS.ErrnoException | null)?.code === 'EPERM'
+      || /permission denied|权限不足|拒绝访问/i.test(message);
+    if (permissionDenied && hasRemoteWorkspaceContext()) {
+      await vscode.window.showErrorMessage(
+        'SAFS：没有权限访问该远程目录，已退出当前远程工作区。'
+      );
+      await vscode.commands.executeCommand('workbench.action.closeFolder');
+      return;
+    }
     const summary = /All configured authentication methods failed/i.test(message)
       ? 'SAFS：SSH 认证失败，请检查登录凭据。'
       : /Unable to start subsystem/i.test(message)
