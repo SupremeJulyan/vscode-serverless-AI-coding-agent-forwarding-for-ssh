@@ -43,6 +43,7 @@ import {
   writeLastRemoteDirectory
 } from './agent-cwd';
 import { connectSftp } from './sftp/client';
+import { connectSystemScp } from './sftp/system-session';
 import { SftpSession } from './sftp/session';
 import { writeStreamToFile } from './stream-file';
 import { downloadRemoteDirectoryTree } from './remote-download';
@@ -4865,16 +4866,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   pool = new SftpConnectionPool(
     async (hostName, signal) => {
       const host = await resolvedHost(context, hostName);
-      const session = await connectSftp(
-        host,
-        platformAdapter.kind === 'wsl',
-        signal,
-        settings().get<string>('sshClientIdent', defaultSshClientIdent),
-        hostVerifierFor(host, (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`)),
-        (reason) => bridgeOutput?.appendLine(
-          `[SFTP] ${host.name} SFTP 子系统不可用，回退到 SCP/exec：${reason}`
-        )
-      );
+      let session: SftpSession;
+      try {
+        session = await connectSftp(
+          host,
+          platformAdapter.kind === 'wsl',
+          signal,
+          settings().get<string>('sshClientIdent', defaultSshClientIdent),
+          hostVerifierFor(host, (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`)),
+          (reason) => bridgeOutput?.appendLine(
+            `[SFTP] ${host.name} SFTP 子系统不可用，回退到 SCP/exec：${reason}`
+          )
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/authentication methods failed|permission denied|host key/i.test(message)) throw error;
+        const hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
+          'hostKeyChangedAction', 'prompt'
+        );
+        if (hostKeyPolicy === 'prompt') {
+          const verification = await verifySystemSshHostKey(
+            hostKeyPolicy, host, platformAdapter.kind,
+            (entry) => bridgeOutput?.appendLine(`[主机密钥] ${entry}`),
+            undefined, undefined, { WSL_VPN_SSH_CONFIG: configPath() }
+          );
+          if (!verification.ok) throw new Error(verification.reason);
+        }
+        await warmSshCliCapabilities();
+        bridgeOutput?.appendLine(
+          `[SFTP] ${host.name} ssh2 连接失败，静默回退系统 SSH/SCP：${message}`
+        );
+        session = await connectSystemScp(host, platformAdapter, {
+          reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
+          bridgeConfigPath: configPath(),
+          hostKeyPolicy,
+          ...(hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
+        }, signal);
+      }
       agentTrace('SFTP', `${host.name} 传输通道：${session.transport}`);
       return session;
     },
