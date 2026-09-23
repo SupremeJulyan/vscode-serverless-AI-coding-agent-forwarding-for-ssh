@@ -3646,7 +3646,10 @@ async function normalizeHierarchicalConfigNames(
     host.name = nextName;
   }
   if (renamed.size === 0) {
-    if (suppliedConfig) await saveConfig(configPath(), config);
+    // Parsing legacy configs derives mounts and their stable workspace IDs.
+    // Persist them even when no host name needed renaming, otherwise the new
+    // view would keep regenerating IDs without ever recording them.
+    await saveConfig(configPath(), config);
     lastReadConfig = config;
     return;
   }
