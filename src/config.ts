@@ -1,7 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createHash } from 'node:crypto';
 
 export interface HostConfig {
   name: string;
@@ -17,7 +16,6 @@ export interface MountConfig {
   name: string;
   host: string;
   remote_path: string;
-  workspace_id?: string;
   remote_terminal?: 'open';
 }
 
@@ -33,21 +31,8 @@ export function deriveMounts(hosts: HostConfig[]): MountConfig[] {
     name: host.name,
     host: host.name,
     remote_path: '.',
-    remote_terminal: 'open' as const,
-    workspace_id: workspaceIdForMount(host, '.')
+    remote_terminal: 'open' as const
   }));
-}
-
-export function workspaceIdForMount(host: HostConfig, remotePath: string): string {
-  return createHash('sha256')
-    .update(JSON.stringify({ ip: host.ip, user: host.user, port: host.port ?? 22 }))
-    .update('\0').update(remotePath).digest('hex').slice(0, 32);
-}
-
-function legacyWorkspaceIdForMount(name: string): string {
-  // The old placeholder key was mountName + remoteRoot. Keeping the legacy
-  // name as the first-generation ID preserves both root and legacy mappings.
-  return name;
 }
 
 export function removeMountConfig(config: BridgeConfig, mountName: string): MountConfig {
@@ -152,9 +137,6 @@ export function parseConfig(value: unknown): BridgeConfig {
           name: requireString(mount.name, `mounts[${index}].name`),
           host: requireString(mount.host, `mounts[${index}].host`),
           remote_path: requireString(mount.remote_path, `mounts[${index}].remote_path`),
-          workspace_id: typeof mount.workspace_id === 'string' && mount.workspace_id.length > 0
-            ? mount.workspace_id
-            : legacyWorkspaceIdForMount(requireString(mount.name, `mounts[${index}].name`)),
           remote_terminal: 'open'
         } as MountConfig;
       })

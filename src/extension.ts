@@ -638,7 +638,8 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   if (stat.type !== 'directory') throw new Error(`远程路径不是目录：${defaultRemotePath}`);
   const remoteRoot = '/';
   const placeholder = await ensureAgentCwdPlaceholder(
-    remoteRoot, vscodeContext.globalStorageUri.fsPath, mount.name, mount.workspace_id
+    remoteRoot, vscodeContext.globalStorageUri.fsPath, mount.name,
+    resolved.hostConfig.ip, resolved.hostConfig.user
   );
   await removeLegacyCliInstructions(placeholder.localPath);
   const workspaceRoot = vscode.Uri.file(placeholder.localPath).path;
@@ -647,7 +648,8 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
     : await session.realpath(mount.remote_path).catch(() => undefined);
   const legacyPlaceholder = legacyRoot && legacyRoot !== remoteRoot
     ? await ensureAgentCwdPlaceholder(
-      legacyRoot, vscodeContext.globalStorageUri.fsPath, mount.name, mount.workspace_id
+      legacyRoot, vscodeContext.globalStorageUri.fsPath, mount.name,
+      resolved.hostConfig.ip, resolved.hostConfig.user
     )
     : undefined;
   const folder: RemoteFolder = {

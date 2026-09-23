@@ -18,6 +18,20 @@ export function safeAgentCwdName(mountName: string): string {
     : shortened;
 }
 
+function ipPathSegment(ip: string): string {
+  const ipv4 = ip.split('.');
+  if (ipv4.length === 4 && ipv4.every((part) => /^(?:0|[1-9]\d{0,2})$/.test(part)
+    && Number(part) <= 255)) {
+    return ipv4.map((part) => Number(part).toString(16).padStart(2, '0')).join('');
+  }
+  return Buffer.from(ip, 'utf8').toString('hex');
+}
+
+function remotePathSegments(remoteRoot: string): string[] {
+  const segments = path.posix.normalize(remoteRoot).split('/').filter(Boolean);
+  return segments.length > 0 ? segments.map(safeAgentCwdName) : ['root'];
+}
+
 async function exists(value: string): Promise<boolean> {
   try {
     await lstat(value);
@@ -34,16 +48,17 @@ async function exists(value: string): Promise<boolean> {
  * no directory or symlink is created at the remote machine's absolute path.
  */
 export async function ensureAgentCwdPlaceholder(
-  remoteRoot: string, storageRoot: string, mountName = '', workspaceId = mountName
+  remoteRoot: string, storageRoot: string, mountName = '', hostIp?: string, user?: string
 ): Promise<AgentCwdPlaceholder> {
   if (!path.posix.isAbsolute(remoteRoot)) {
     throw new Error(`Agent cwd requires an absolute remote path: ${remoteRoot}`);
   }
-  const key = createHash('sha256')
-    .update(workspaceId).update('\0').update(path.posix.normalize(remoteRoot))
-    .digest('hex').slice(0, 16);
-  const parent = path.join(storageRoot, 'agent-cwd', key);
-  const localPath = path.join(parent, safeAgentCwdName(mountName));
+  const localPath = hostIp && user !== undefined
+    ? path.join(storageRoot, 'agent-cwd', ipPathSegment(hostIp),
+      safeAgentCwdName(user), ...remotePathSegments(remoteRoot))
+    : path.join(storageRoot, 'agent-cwd', createHash('sha256')
+      .update(mountName).update('\0').update(path.posix.normalize(remoteRoot))
+      .digest('hex').slice(0, 16), safeAgentCwdName(mountName));
   const created = !await exists(localPath);
   await mkdir(localPath, { recursive: true });
   return { localPath, created };

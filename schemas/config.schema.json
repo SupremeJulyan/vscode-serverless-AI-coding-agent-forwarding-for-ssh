@@ -63,7 +63,6 @@
         "name": { "type": "string", "minLength": 1, "description": "远程目录的显示名称。" },
         "host": { "type": "string", "minLength": 1, "description": "对应 hosts 中的 name。" },
         "remote_path": { "type": "string", "minLength": 1, "default": ".", "description": "SFTP 远程目录；`.` 表示 SSH 登录目录。" },
-        "workspace_id": { "type": "string", "minLength": 1, "description": "稳定的本地 Agent 工作区标识；修改显示名称不会改变会话目录。" },
         "local_path": {
           "type": "string",
           "deprecated": true,

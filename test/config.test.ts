@@ -36,7 +36,6 @@ test('saves a configuration that can be loaded as JSON', async () => {
   assert.equal(reloaded.mounts[0].name, 'project');
   assert.equal(reloaded.mounts[0].host, 'dev');
   assert.equal(reloaded.mounts[0].remote_path, '/srv/project');
-  assert.equal(reloaded.mounts[0].workspace_id, 'project');
 });
 
 test('ignores legacy local mount paths when parsing SFTP folders', () => {
@@ -55,7 +54,6 @@ test('ignores legacy local mount paths when parsing SFTP folders', () => {
   assert.equal(config.mounts[0].host, 'dev');
   assert.equal(config.mounts[0].remote_path, '.');
   assert.equal(config.mounts[0].remote_terminal, 'open');
-  assert.equal(config.mounts[0].workspace_id, 'project');
 });
 
 test('removes a mount and its host only when no other mount uses that host', () => {
