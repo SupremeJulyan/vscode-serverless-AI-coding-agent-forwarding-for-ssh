@@ -1733,6 +1733,28 @@ function hasRemoteWorkspaceContext(): boolean {
   });
 }
 
+function isRemoteDirectoryUnavailable(error: unknown): boolean {
+  const value = error as NodeJS.ErrnoException | undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return value?.code === 'EACCES' || value?.code === 'EPERM'
+    || /permission denied|access denied|no such file|not a directory|远程目录.*(?:不存在|无权限|不是目录)/i
+      .test(message);
+}
+
+async function ensureRemoteTerminalDirectory(
+  folder: RemoteFolder, remoteCwd: string
+): Promise<void> {
+  const session = await pool.get(folder.hostName);
+  const resolved = await session.realpath(remoteCwd);
+  if (!isRemotePathInsideRoot(folder.remoteRoot, resolved)) {
+    throw new Error(`远程终端目录超出挂载范围：${resolved}`);
+  }
+  const stat = await session.stat(resolved);
+  if (stat.type !== 'directory') {
+    throw new Error(`远程终端路径不是目录：${resolved}`);
+  }
+}
+
 function activeAgentCommandTerminal(): vscode.Terminal | undefined {
   const terminal = agentCommandTerminal;
   return !hasRemoteWorkspaceContext() && terminal && agentCommandTerminalCwd
@@ -2360,6 +2382,20 @@ async function openTerminal(
     remoteCwd = fileDirectory;
     // openTerminal 已直接把终端放到文件目录，重开归位无需再补检。
     restoredFileSyncPending.delete(mount.name);
+  }
+  try {
+    await ensureRemoteTerminalDirectory(folder, remoteCwd);
+  } catch (error) {
+    if (hasRemoteWorkspaceContext() && isRemoteDirectoryUnavailable(error)) {
+      const detail = error instanceof Error ? error.message : String(error);
+      bridgeOutput?.appendLine(`[终端] 远程目录不可用，退出工作区：${detail}`);
+      void vscode.window.showErrorMessage(
+        'SAFS：当前远程目录不可访问，已退出远程工作区。'
+      );
+      await vscode.commands.executeCommand('workbench.action.closeFolder');
+      return undefined;
+    }
+    throw error;
   }
   const remoteRelative = remoteCwd ? path.posix.relative(remoteRoot, remoteCwd) : '';
   const terminalName = remoteRelative
