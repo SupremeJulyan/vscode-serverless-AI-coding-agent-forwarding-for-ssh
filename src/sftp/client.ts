@@ -49,6 +49,12 @@ function abortError(): Error {
 /** 流式写单个数据块的超时：远端停止确认（网关/抖动）时避免无限挂起。 */
 const sftpWriteChunkTimeoutMs = 60_000;
 
+// ssh2's SFTP ReadStream keeps one READ request in flight. A 64 KiB
+// high-water mark therefore caps throughput at roughly 64 KiB / RTT. Keep a
+// bounded, larger read window so high-latency links can fill the pipe without
+// allowing unbounded read-ahead.
+const sftpReadHighWaterMark = 1024 * 1024;
+
 /** SSH 认证成功后的 SFTP 通道打开超时。ssh2 的 readyTimeout 只覆盖握手；
  * 某些网关会静默丢弃 subsystem 请求，不设此超时会让连接进度永久等待。 */
 const sftpOpenTimeoutMs = 15_000;
@@ -188,13 +194,10 @@ export class Ssh2SftpSession implements SftpSession {
         reject(abortError());
         return;
       }
-      // Keep the SSH2 SFTP read-ahead bounded.  The ssh2 default is currently
-      // 64 KiB, but passing it explicitly is important: some downstream
-      // versions derive the read size from the stream's initial water mark and
-      // can otherwise queue a large number of outstanding READ packets while
-      // the local file is being flushed.
+      // Keep the SSH2 SFTP read-ahead bounded, but large enough to avoid
+      // making throughput proportional to a 64 KiB packet divided by RTT.
       const stream = this.sftp.createReadStream(remotePath, {
-        highWaterMark: 64 * 1024
+        highWaterMark: sftpReadHighWaterMark
       });
       const aborted = () => {
         stream.destroy();
