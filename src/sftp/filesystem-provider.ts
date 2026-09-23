@@ -19,17 +19,31 @@ export interface RemoteFolder {
   workspaceRoot: string;
 }
 
+function isWorkspaceNamespacePath(root: string, candidate: string): boolean {
+  const normalizedRoot = path.posix.normalize(root.replaceAll('\\', '/'));
+  const normalizedCandidate = path.posix.normalize(candidate.replaceAll('\\', '/'));
+  const isAbsolute = (value: string): boolean =>
+    value.startsWith('/') || /^[A-Za-z]:\//.test(value);
+  if (!isAbsolute(normalizedRoot) || !isAbsolute(normalizedCandidate)) return false;
+  const relative = path.posix.relative(normalizedRoot, normalizedCandidate);
+  return relative === '' || (!relative.startsWith('../') && relative !== '..');
+}
+
 export function isWorkspaceUriPath(folder: RemoteFolder, uriPath: string): boolean {
-  return isRemotePathInsideRoot(folder.workspaceRoot, uriPath)
-    || Boolean(folder.legacyMapping && isRemotePathInsideRoot(folder.legacyMapping.workspaceRoot, uriPath));
+  return isWorkspaceNamespacePath(folder.workspaceRoot, uriPath)
+    || Boolean(folder.legacyMapping && isWorkspaceNamespacePath(
+      folder.legacyMapping.workspaceRoot, uriPath
+    ));
 }
 
 export function remotePathForUri(folder: RemoteFolder, uriPath: string): string {
-  if (folder.legacyMapping && isRemotePathInsideRoot(folder.legacyMapping.workspaceRoot, uriPath)) {
+  if (folder.legacyMapping && isWorkspaceNamespacePath(
+    folder.legacyMapping.workspaceRoot, uriPath
+  )) {
     return path.posix.join(folder.legacyMapping.remoteRoot,
       path.posix.relative(folder.legacyMapping.workspaceRoot, uriPath));
   }
-  if (isRemotePathInsideRoot(folder.workspaceRoot, uriPath)) {
+  if (isWorkspaceNamespacePath(folder.workspaceRoot, uriPath)) {
     return path.posix.join(
       folder.remoteRoot, path.posix.relative(folder.workspaceRoot, uriPath)
     );

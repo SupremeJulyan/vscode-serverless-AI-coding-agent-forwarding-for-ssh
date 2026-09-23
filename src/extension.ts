@@ -112,7 +112,6 @@ const masterPasswordSecret = 'safs.masterPassword';
 const agentMcpTokenSecret = platformStateKey('agentMcpToken');
 const aiForwardMountsKey = platformStateKey('aiForwardMounts');
 const directoryHistoryKey = platformStateKey('directoryHistory');
-const remoteFolderViewModeKey = platformStateKey('remoteFolderViewMode');
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
 const proxyEnvironmentCheckKey = platformStateKey('proxyEnvironmentCheckV1');
@@ -3692,32 +3691,20 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
   private viewMode: RemoteFolderViewMode;
 
   constructor(private readonly context: vscode.ExtensionContext) {
-    this.viewMode = context.globalState.get<RemoteFolderViewMode>(
-      remoteFolderViewModeKey, 'legacy'
-    );
+    // The hierarchical view is the canonical view. Normalize legacy host
+    // names on startup so restored configurations are immediately represented
+    // by the new host/account tree.
+    this.viewMode = 'hierarchical';
     void this.updateViewContext();
-    if (this.viewMode === 'hierarchical') {
-      void normalizeHierarchicalConfigNames(this.context)
-        .then(() => this.refresh())
-        .catch((error) => {
-          bridgeOutput?.warn(`[配置] 启动时同步主机别名失败：${String(error)}`);
-        });
-    }
+    void normalizeHierarchicalConfigNames(this.context)
+      .then(() => this.refresh())
+      .catch((error) => {
+        bridgeOutput?.warn(`[配置] 启动时同步主机别名失败：${String(error)}`);
+      });
   }
 
   refresh(): void {
     this.emitter.fire();
-  }
-
-  async toggleView(): Promise<void> {
-    const nextMode = this.viewMode === 'legacy' ? 'hierarchical' : 'legacy';
-    if (nextMode === 'hierarchical') {
-      await normalizeHierarchicalConfigNames(this.context);
-    }
-    this.viewMode = nextMode;
-    await this.context.globalState.update(remoteFolderViewModeKey, this.viewMode);
-    await this.updateViewContext();
-    this.refresh();
   }
 
   private async updateViewContext(): Promise<void> {
@@ -5123,7 +5110,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await renameHostGroup(group as HostGroupItem);
     tree.refresh();
   });
-  command('toggleView', () => tree.toggleView());
   command('copyStreamableHttpUrl', async () => {
     const agentName = await askAgentName('SAFS：复制 Streamable HTTP URL');
     if (!agentName) return;

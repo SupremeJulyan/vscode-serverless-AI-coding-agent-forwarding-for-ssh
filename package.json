@@ -51,7 +51,6 @@
     "onCommand:safs.addSshConfig",
     "onCommand:safs.addHostCredentials",
     "onCommand:safs.renameHost",
-    "onCommand:safs.toggleView",
     "onCommand:safs.copyStreamableHttpUrl",
     "onCommand:safs.installCli",
     "onCommand:safs.installAgentForwarding",
@@ -110,10 +109,6 @@
         "command": "safs.renameHost",
         "title": "重命名",
         "icon": "$(edit)"
-      },
-      {
-        "command": "safs.toggleView",
-        "title": "切换视图"
       },
       {
         "command": "safs.copyStreamableHttpUrl",
@@ -301,16 +296,6 @@
           "command": "safs.status",
           "when": "view == safs.mounts",
           "group": "safs@2"
-        },
-        {
-          "command": "safs.toggleView",
-          "when": "view == safs.mounts && !safs.hierarchicalView",
-          "group": "safs@3"
-        },
-        {
-          "command": "safs.toggleView",
-          "when": "view == safs.mounts && safs.hierarchicalView",
-          "group": "safs@3"
         }
       ],
       "view/item/context": [

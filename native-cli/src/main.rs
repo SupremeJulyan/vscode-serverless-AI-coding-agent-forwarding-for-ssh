@@ -294,8 +294,14 @@ fn install_skill(base: &Path, target: SkillTarget, global: bool) -> Result<PathB
             directory.display()
         )
     })?;
-    fs::write(directory.join("SKILL.md"), SAFS_SKILL)
-        .and_then(|_| fs::write(references.join("commands.md"), SAFS_COMMAND_REFERENCE))
+    // Keep generated skills byte-stable across host platforms. The bundled
+    // source may be checked out with CRLF on Windows, but Markdown consumers
+    // and tests expect the portable LF form.
+    fs::write(directory.join("SKILL.md"), SAFS_SKILL.replace("\r\n", "\n"))
+        .and_then(|_| fs::write(
+            references.join("commands.md"),
+            SAFS_COMMAND_REFERENCE.replace("\r\n", "\n")
+        ))
         .map_err(|error| format!("Cannot write SAFS skill: {error}"))?;
     Ok(directory)
 }
