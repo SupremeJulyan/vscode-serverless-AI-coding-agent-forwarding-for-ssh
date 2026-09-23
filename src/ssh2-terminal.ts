@@ -237,6 +237,8 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   private readonly stderrDecoder = new StringDecoder('utf8');
   /** 保留有限的 shell stderr，供退出时区分目录权限错误与网络断线。 */
   private shellStderr = '';
+  /** PTY 模式下 stderr 可能合并进 stdout，保留输出尾部用于错误分类。 */
+  private shellOutputTail = '';
   private readonly integrationSessionId = randomBytes(12).toString('hex');
   /** 待 shell 通道就绪后补发的输入（live-sync 的 cd 可能早于连接完成）。 */
   private pendingInput = '';
@@ -347,8 +349,9 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
           this.shellStderr = `${this.shellStderr}${stderr}`.slice(-8192);
           this.writeEmitter.fire(stderr);
         }
-        if (typeof code === 'number' && code !== 0 && this.shellStderr.trim()) {
-          this.onFailed?.(new Error(this.shellStderr.trim()));
+        if (typeof code === 'number' && code !== 0) {
+          const detail = `${this.shellStderr}\n${this.shellOutputTail}`.trim();
+          if (detail) this.onFailed?.(new Error(detail));
         }
         this.finish(typeof code === 'number' ? code : undefined);
       });
@@ -369,6 +372,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
 
   private handleOutput(data: string): void {
     if (!data) return;
+    this.shellOutputTail = `${this.shellOutputTail}${data}`.slice(-8192);
     const forwarded = this.forwardedCommand;
     this.captureForwardedCommandOutput(data);
     const visible = forwarded ? forwarded.capture.visibleOutput(data) : data;
