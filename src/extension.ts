@@ -3859,11 +3859,11 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     }
     if (element && 'type' in element && element.type === 'user') {
       const history = await getDirectoryHistory(this.context);
-      const entries = history[element.hostName] ?? [];
-      return entries.map((path) => ({
-        type: 'history' as const,
-        mountName: element.hostName,
-        path
+      const mounts = lastReadConfig?.mounts.filter((mount) => mount.host === element.hostName)
+        ?? (await readConfig()).mounts.filter((mount) => mount.host === element.hostName);
+      if (mounts.length > 0) return mounts;
+      return (history[element.hostName] ?? []).map((path) => ({
+        type: 'history' as const, mountName: element.hostName, path
       }));
     }
     if (element && 'type' in element && element.type === 'hostGroup') {
@@ -3906,10 +3906,12 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     if ('type' in element && element.type === 'history') {
       if (!lastReadConfig) return undefined;
       if (this.viewMode === 'hierarchical') {
+        const mount = lastReadConfig.mounts.find((candidate) => candidate.name === element.mountName);
+        if (mount) {
+          return mount;
+        }
         const host = lastReadConfig.hosts.find((candidate) => candidate.name === element.mountName);
-        return host
-          ? { type: 'user', hostName: host.name, user: host.user }
-          : undefined;
+        return host ? { type: 'user', hostName: host.name, user: host.user } : undefined;
       }
       const mount = lastReadConfig.mounts.find((m) => m.name === element.mountName);
       return mount ?? undefined;
