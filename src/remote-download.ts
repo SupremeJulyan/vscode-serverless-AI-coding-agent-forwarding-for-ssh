@@ -38,7 +38,11 @@ export async function downloadRemoteDirectoryTree(options: {
     ? Math.max(1, Math.floor(options.concurrency))
     : 1;
   const controller = new AbortController();
-  const externalAbort = () => controller.abort();
+  let externallyAborted = options.signal?.aborted === true;
+  const externalAbort = () => {
+    externallyAborted = true;
+    controller.abort();
+  };
   if (options.signal?.aborted) controller.abort();
   else options.signal?.addEventListener('abort', externalAbort, { once: true });
 
@@ -73,7 +77,7 @@ export async function downloadRemoteDirectoryTree(options: {
   const waitForCapacity = async (): Promise<void> => {
     if (active.size >= concurrency) await Promise.race(active);
     if (firstError !== undefined) throw firstError;
-    if (controller.signal.aborted) throw new Error('目录下载已取消');
+    if (externallyAborted || controller.signal.aborted) throw new Error('目录下载已取消');
   };
   const scheduleFile = async (remoteFile: string, relative: string): Promise<void> => {
     await waitForCapacity();

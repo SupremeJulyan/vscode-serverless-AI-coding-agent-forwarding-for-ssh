@@ -34,13 +34,13 @@ async function exists(value: string): Promise<boolean> {
  * no directory or symlink is created at the remote machine's absolute path.
  */
 export async function ensureAgentCwdPlaceholder(
-  remoteRoot: string, storageRoot: string, mountName = ''
+  remoteRoot: string, storageRoot: string, mountName = '', workspaceId = mountName
 ): Promise<AgentCwdPlaceholder> {
   if (!path.posix.isAbsolute(remoteRoot)) {
     throw new Error(`Agent cwd requires an absolute remote path: ${remoteRoot}`);
   }
   const key = createHash('sha256')
-    .update(mountName).update('\0').update(path.posix.normalize(remoteRoot))
+    .update(workspaceId).update('\0').update(path.posix.normalize(remoteRoot))
     .digest('hex').slice(0, 16);
   const parent = path.join(storageRoot, 'agent-cwd', key);
   const localPath = path.join(parent, safeAgentCwdName(mountName));

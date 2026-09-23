@@ -30,13 +30,13 @@ test('saves a configuration that can be loaded as JSON', async () => {
 
   await saveConfig(configPath, config);
   const saved = JSON.parse(await readFile(configPath, 'utf8'));
-  assert.deepEqual(saved, { encrypt_passwords: true, hosts: config.hosts });
-  assert.equal(saved.mounts, undefined);
+  assert.deepEqual(saved, { encrypt_passwords: true, hosts: config.hosts, mounts: config.mounts });
   const reloaded = parseConfig(saved);
   assert.equal(reloaded.mounts.length, 1);
-  assert.equal(reloaded.mounts[0].name, 'dev');
+  assert.equal(reloaded.mounts[0].name, 'project');
   assert.equal(reloaded.mounts[0].host, 'dev');
-  assert.equal(reloaded.mounts[0].remote_path, '.');
+  assert.equal(reloaded.mounts[0].remote_path, '/srv/project');
+  assert.equal(reloaded.mounts[0].workspace_id, 'project');
 });
 
 test('ignores legacy local mount paths when parsing SFTP folders', () => {
@@ -51,12 +51,11 @@ test('ignores legacy local mount paths when parsing SFTP folders', () => {
     }]
   });
 
-  assert.deepEqual(config.mounts[0], {
-    name: 'project',
-    host: 'dev',
-    remote_path: '.',
-    remote_terminal: 'open'
-  });
+  assert.equal(config.mounts[0].name, 'project');
+  assert.equal(config.mounts[0].host, 'dev');
+  assert.equal(config.mounts[0].remote_path, '.');
+  assert.equal(config.mounts[0].remote_terminal, 'open');
+  assert.equal(config.mounts[0].workspace_id, 'project');
 });
 
 test('removes a mount and its host only when no other mount uses that host', () => {
