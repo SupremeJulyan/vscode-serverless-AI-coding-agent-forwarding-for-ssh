@@ -2386,14 +2386,12 @@ async function openTerminal(
   try {
     await ensureRemoteTerminalDirectory(folder, remoteCwd);
   } catch (error) {
-    if (hasRemoteWorkspaceContext() && isRemoteDirectoryUnavailable(error)) {
+    // A terminal cwd may come from history or a terminal-only request and is
+    // intentionally independent from the workspace URI/mount path. Report a
+    // bad terminal cwd without closing an otherwise valid remote workspace.
+    if (isRemoteDirectoryUnavailable(error)) {
       const detail = error instanceof Error ? error.message : String(error);
-      bridgeOutput?.appendLine(`[终端] 远程目录不可用，退出工作区：${detail}`);
-      void vscode.window.showErrorMessage(
-        'SAFS：当前远程目录不可访问，已退出远程工作区。'
-      );
-      await vscode.commands.executeCommand('workbench.action.closeFolder');
-      return undefined;
+      bridgeOutput?.appendLine(`[终端] 历史/请求 cwd 不可用：${detail}`);
     }
     throw error;
   }
