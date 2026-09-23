@@ -2247,8 +2247,9 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
   if (isRemoteDirectoryPermissionDenied(
     `${reopen.connectionError ?? ''}\n${diagnosticText}`
   )) {
-    void vscode.window.showErrorMessage(
-      'SAFS：没有权限访问当前远程目录，已退出远程工作区。'
+    await vscode.window.showErrorMessage(
+      'SAFS：没有权限访问当前远程目录，确认后将退出远程工作区。',
+      { modal: true }
     );
     if (hasRemoteWorkspaceContext()) {
       await vscode.commands.executeCommand('workbench.action.closeFolder');
@@ -4791,7 +4792,8 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
       || /permission denied|权限不足|拒绝访问/i.test(message);
     if (permissionDenied && hasRemoteWorkspaceContext()) {
       await vscode.window.showErrorMessage(
-        'SAFS：没有权限访问该远程目录，已退出当前远程工作区。'
+        'SAFS：没有权限访问该远程目录，确认后将退出当前远程工作区。',
+        { modal: true }
       );
       await vscode.commands.executeCommand('workbench.action.closeFolder');
       return;
