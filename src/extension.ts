@@ -3824,7 +3824,7 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
   }
 
   private getUserTreeItem(item: UserItem): vscode.TreeItem {
-  const treeItem = new vscode.TreeItem(item.user || '未配置账号');
+    const treeItem = new vscode.TreeItem(item.user || '未配置账号');
     const connectionState = pool.state(item.hostName);
     const connected = registry.get(item.hostName) !== undefined
       && connectionState === 'connected';
@@ -3845,14 +3845,7 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
         aiForwarded ? 'aiEnabled' : 'aiDisabled'
       ].join('.')
       : 'safs.user.missingCredentials';
-  treeItem.iconPath = new vscode.ThemeIcon('account');
-  if (item.user.trim()) {
-    treeItem.command = {
-      command: 'safs.openUserItem',
-      title: '打开远程目录',
-      arguments: [item]
-    };
-  }
+    treeItem.iconPath = new vscode.ThemeIcon('account');
     treeItem.tooltip = item.user
       ? `SSH 账号：${item.user}\n配置：${item.hostName}`
       : '尚未配置 SSH 账号；请点击主机旁的 +。';
@@ -3866,6 +3859,9 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     }
     if (element && 'type' in element && element.type === 'user') {
       const history = await getDirectoryHistory(this.context);
+      const mounts = lastReadConfig?.mounts.filter((mount) => mount.host === element.hostName)
+        ?? (await readConfig()).mounts.filter((mount) => mount.host === element.hostName);
+      if (mounts.length > 0) return mounts;
       return (history[element.hostName] ?? []).map((path) => ({
         type: 'history' as const, mountName: element.hostName, path
       }));
@@ -3910,6 +3906,10 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     if ('type' in element && element.type === 'history') {
       if (!lastReadConfig) return undefined;
       if (this.viewMode === 'hierarchical') {
+        const mount = lastReadConfig.mounts.find((candidate) => candidate.name === element.mountName);
+        if (mount) {
+          return mount;
+        }
         const host = lastReadConfig.hosts.find((candidate) => candidate.name === element.mountName);
         return host ? { type: 'user', hostName: host.name, user: host.user } : undefined;
       }
@@ -5063,14 +5063,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await openDirectoryItem(mountForTreeElement(
       mount as MountConfig | HostConfig | HostGroupItem | UserItem
     ));
-    tree.refresh();
-  });
-  command('openUserItem', async (item) => {
-    const user = item as UserItem;
-    const config = await readConfig();
-    const mount = config.mounts.find((candidate) => candidate.host === user.hostName);
-    if (!mount) throw new Error(`账号没有配置远程目录：${user.hostName}`);
-    await openDirectoryItem(mount);
     tree.refresh();
   });
   command('switchRemoteDirectory', switchRemoteDirectory);
