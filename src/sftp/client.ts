@@ -420,12 +420,17 @@ async function acquireWslVpnRelay(host: HostConfig): Promise<RelayLease> {
 const sftpUnusablePattern =
   /Unable to start subsystem|packet length|wrong packet|bad packet|exchange encryption keys|Expected VERSION packet|Unknown packet type|Malformed VERSION/i;
 
-/** Handshake-stage errors worth retrying with a fresh connection. */
-const retryableHandshakePattern =
-  /packet length|wrong packet|bad packet|exchange encryption keys/i;
+/** Transient ssh2 connection/handshake errors worth retrying with a fresh
+ * client. Authentication and host-key failures deliberately do not match. */
+const retryableConnectionPattern =
+  /packet length|wrong packet|bad packet|exchange encryption keys|connection lost before handshake|timed out while waiting for handshake|ready.?timeout|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENETUNREACH|EHOSTUNREACH)\b|socket hang up|connection (?:reset|closed|terminated)(?: by remote| remotely)?|connection unexpectedly closed|broken pipe|kex_exchange_identification.*closed|no route to host|network is unreachable/i;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function isRetryableSsh2ConnectionError(error: unknown): boolean {
+  return retryableConnectionPattern.test(errorMessage(error));
 }
 
 export async function connectSftp(
@@ -466,16 +471,16 @@ export async function connectSftp(
   if (host.private_key_path) {
     config.privateKey = await readFile(expandHome(host.private_key_path));
   }
-  // Some NSG/gateways intermittently inject garbage during the SSH handshake
-  // ("Packet length … exceeds max length"). Retry with fresh connections a
-  // few times before giving up; the VPN relay stays up across attempts.
+  // Gateways and load balancers can intermittently drop the first SSH
+  // handshake (especially after an idle period). Retry transient failures with
+  // a fresh ssh2 Client; keep authentication and host-key failures visible.
   let attempt = 0;
   while (true) {
     try {
       return await attemptConnect(host, config, releaseRelay, signal, onSftpFallback);
     } catch (error) {
       if (signal?.aborted) throw error;
-      if (!retryableHandshakePattern.test(errorMessage(error)) || attempt >= 2) {
+      if (!isRetryableSsh2ConnectionError(error) || attempt >= 2) {
         await releaseRelay();
         throw error;
       }
@@ -515,9 +520,13 @@ function attemptConnect(
     const abort = () => finishError(abortError());
     const ready = () => {
       sftpOpenTimer = setTimeout(() => {
-        finishError(new Error(
-          `SSH 已认证，但服务器未响应 SFTP 子系统请求（${sftpOpenTimeoutMs}ms 超时）`
-        ));
+        if (settled) return;
+        settled = true;
+        fallbackResolved = true;
+        cleanup();
+        const reason = `SSH 已认证，但服务器未响应 SFTP 子系统请求（${sftpOpenTimeoutMs}ms 超时）`;
+        onSftpFallback?.(reason);
+        resolve(new ScpSession(host.name, client, releaseRelay));
       }, sftpOpenTimeoutMs);
       sftpOpenTimer.unref?.();
       client.sftp((error, sftp) => {
