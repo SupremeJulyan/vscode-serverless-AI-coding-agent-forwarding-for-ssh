@@ -188,7 +188,14 @@ export class Ssh2SftpSession implements SftpSession {
         reject(abortError());
         return;
       }
-      const stream = this.sftp.createReadStream(remotePath);
+      // Keep the SSH2 SFTP read-ahead bounded.  The ssh2 default is currently
+      // 64 KiB, but passing it explicitly is important: some downstream
+      // versions derive the read size from the stream's initial water mark and
+      // can otherwise queue a large number of outstanding READ packets while
+      // the local file is being flushed.
+      const stream = this.sftp.createReadStream(remotePath, {
+        highWaterMark: 64 * 1024
+      });
       const aborted = () => {
         stream.destroy();
         reject(abortError());

@@ -1,6 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import * as path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 export interface StreamPipeOptions {
   /** 每约 1MB 汇报一次增量字节（用于进度条）。 */
@@ -59,14 +60,20 @@ export async function pipeStreams(
       aborted();
       return;
     }
-    source.pipe(target);
-    target.once('finish', () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if (received > lastReport) options.onDelta?.(received - lastReport);
-      resolve();
-    });
+    // pipeline() is deliberately used instead of manually wiring `pipe` and
+    // `finish`: it applies backpressure across both streams and tears down
+    // the producer immediately if the destination fails. This matters for
+    // multi-gigabyte SFTP transfers, where an unbounded read-ahead otherwise
+    // grows the extension host until it hits the memory limit.
+    void pipeline(source as NodeJS.ReadableStream, target as NodeJS.WritableStream)
+      .then(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (received > lastReport) options.onDelta?.(received - lastReport);
+        resolve();
+      })
+      .catch((error: unknown) => fail(error instanceof Error ? error : new Error(String(error))));
   });
 }
 
