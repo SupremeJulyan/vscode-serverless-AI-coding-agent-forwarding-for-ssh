@@ -480,12 +480,15 @@ export async function connectSftp(
       return await attemptConnect(host, config, releaseRelay, signal, onSftpFallback);
     } catch (error) {
       if (signal?.aborted) throw error;
-      if (!isRetryableSsh2ConnectionError(error) || attempt >= 2) {
+      // Gateways that reset the first connection often need a short window to
+      // release the failed backend. Three immediate retries are frequently
+      // all served by that same unhealthy slot, so use a bounded backoff.
+      if (!isRetryableSsh2ConnectionError(error) || attempt >= 4) {
         await releaseRelay();
         throw error;
       }
       attempt++;
-      await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
     }
   }
 }
