@@ -235,6 +235,8 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   private readonly cwdTracker = new RemoteCwdOscTracker();
   private readonly outputDecoder = new StringDecoder('utf8');
   private readonly stderrDecoder = new StringDecoder('utf8');
+  /** 保留有限的 shell stderr，供退出时区分目录权限错误与网络断线。 */
+  private shellStderr = '';
   private readonly integrationSessionId = randomBytes(12).toString('hex');
   /** 待 shell 通道就绪后补发的输入（live-sync 的 cd 可能早于连接完成）。 */
   private pendingInput = '';
@@ -325,6 +327,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
       stream.stderr.on('data', (chunk: Buffer) => {
         const data = this.stderrDecoder.write(chunk);
         if (data) {
+          this.shellStderr = `${this.shellStderr}${data}`.slice(-8192);
           const forwarded = this.forwardedCommand;
           this.captureForwardedCommandOutput(data);
           const visible = forwarded ? forwarded.capture.visibleOutput(data) : data;
@@ -340,7 +343,13 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
         if (typeof code === 'number') this.exitStatusReceived = true;
         this.handleOutput(this.outputDecoder.end());
         const stderr = this.stderrDecoder.end();
-        if (stderr) this.writeEmitter.fire(stderr);
+        if (stderr) {
+          this.shellStderr = `${this.shellStderr}${stderr}`.slice(-8192);
+          this.writeEmitter.fire(stderr);
+        }
+        if (typeof code === 'number' && code !== 0 && this.shellStderr.trim()) {
+          this.onFailed?.(new Error(this.shellStderr.trim()));
+        }
         this.finish(typeof code === 'number' ? code : undefined);
       });
       // 补发连接建立期间排队（live-sync）的输入，避免 cd 被丢弃。
