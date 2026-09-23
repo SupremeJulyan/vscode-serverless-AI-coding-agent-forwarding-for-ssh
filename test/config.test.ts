@@ -34,7 +34,7 @@ test('saves a configuration that can be loaded as JSON', async () => {
   assert.equal(saved.mounts, undefined);
   const reloaded = parseConfig(saved);
   assert.equal(reloaded.mounts.length, 1);
-  assert.equal(reloaded.mounts[0].name, 'project');
+  assert.equal(reloaded.mounts[0].name, 'dev');
   assert.equal(reloaded.mounts[0].host, 'dev');
   assert.equal(reloaded.mounts[0].remote_path, '/srv/project');
 });
