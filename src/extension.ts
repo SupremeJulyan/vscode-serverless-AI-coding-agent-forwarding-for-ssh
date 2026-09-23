@@ -906,7 +906,14 @@ async function selectRemoteDirectory(
     mount = await selectMount(mountPlaceHolder);
   }
   if (!mount) return undefined;
-  const folder = await ensureFolder(mount);
+  const folder = await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: 'SAFS：正在打开远程目录',
+    cancellable: false
+  }, async (progress) => {
+    progress.report({ message: '正在连接并验证远程目录…' });
+    return ensureFolder(mount!);
+  });
   const session = await pool.get(folder.hostName);
   const currentPath = location?.mountName === mount.name
     ? location.remotePath
