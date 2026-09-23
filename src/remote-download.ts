@@ -100,7 +100,9 @@ export async function downloadRemoteDirectoryTree(options: {
     active.add(task);
   };
   const walk = async (remoteDirectory: string, relativeDirectory: string): Promise<void> => {
-    if (controller.signal.aborted) throw new Error('目录下载已取消');
+    if (externallyAborted || options.signal?.aborted || controller.signal.aborted) {
+      throw new Error('目录下载已取消');
+    }
     await mkdir(await localTarget(relativeDirectory), { recursive: true });
     const entries = await options.session.readDirectory(remoteDirectory, controller.signal);
     entries.sort((a, b) => a.name.localeCompare(b.name));
