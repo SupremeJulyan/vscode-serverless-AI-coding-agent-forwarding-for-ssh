@@ -6,10 +6,16 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import {
-  cleanTerminalDiagnostic, decodeTerminalDiagnostic, isTransientTerminalConnectionFailure,
+  cleanTerminalDiagnostic, decodeTerminalDiagnostic, isRemoteDirectoryPermissionDenied,
+  isTransientTerminalConnectionFailure,
   nextAutoReconnectAttempt, shouldRecoverTerminalExit, terminalDiagnosticPlan,
   terminalReconnectDelayMs
 } from '../src/terminal-diagnostics';
+
+test('classifies remote directory permission failures as non-retryable', () => {
+  assert.equal(isRemoteDirectoryPermissionDenied("cd: /home/share/chenle: Permission denied"), true);
+  assert.equal(isRemoteDirectoryPermissionDenied('Connection reset by peer'), false);
+});
 
 const plan = {
   command: 'ssh', args: ['-p', '22', 'alice@dev'], env: { KEEP: 'yes' }

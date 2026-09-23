@@ -89,7 +89,8 @@ import {
   TerminalCommandOutputCapture, terminalForwardingCommand
 } from './terminal-command-forwarding';
 import {
-  cleanTerminalDiagnostic, decodeTerminalDiagnostic, isTransientTerminalConnectionFailure,
+  cleanTerminalDiagnostic, decodeTerminalDiagnostic, isRemoteDirectoryPermissionDenied,
+  isTransientTerminalConnectionFailure,
   nextAutoReconnectAttempt, shouldRecoverTerminalExit, terminalDiagnosticPlan,
   terminalReconnectDelayMs
 } from './terminal-diagnostics';
@@ -2221,6 +2222,17 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
   if (!reopen) return;
   const diagnosticText = await logManagedTerminalExit(terminal, reopen);
   const status = terminal.exitStatus;
+  if (isRemoteDirectoryPermissionDenied(
+    `${reopen.connectionError ?? ''}\n${diagnosticText}`
+  )) {
+    void vscode.window.showErrorMessage(
+      'SAFS：没有权限访问当前远程目录，已退出远程工作区。'
+    );
+    if (hasRemoteWorkspaceContext()) {
+      await vscode.commands.executeCommand('workbench.action.closeFolder');
+    }
+    return;
+  }
   // 仅当远端连接被异常中断/崩溃时才处理（重连或提示）：
   // - 本地手动在 VS Code 关闭终端（reason=User/Shutdown）不触发；
   // - 启用自动重连后，所有 Process 结束都会恢复；部分 HPC 网关会把空闲超时报告为

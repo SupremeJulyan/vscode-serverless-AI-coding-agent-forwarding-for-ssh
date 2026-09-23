@@ -19,6 +19,12 @@ export function isTransientTerminalConnectionFailure(value: string): boolean {
   return sshConnectionDropPatterns.some((pattern) => pattern.test(value));
 }
 
+/** Remote cwd/login permission failures are deterministic and must not retry. */
+export function isRemoteDirectoryPermissionDenied(value: string): boolean {
+  return /(?:permission denied|access denied|could not chdir|can't cd|cannot cd|拒绝访问|权限不足)/i
+    .test(value);
+}
+
 export function shouldRecoverTerminalExit(input: {
   processExit: boolean;
   exitCode: number | undefined;
