@@ -199,7 +199,7 @@ export async function saveConfig(configPath: string, config: BridgeConfig): Prom
     `.config-${process.pid}-${Date.now()}.json`
   );
   try {
-    const saved = config;
+    const { mounts: _omitted, ...saved } = config;
     await fs.writeFile(temporaryPath, `${JSON.stringify(saved, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     await fs.rename(temporaryPath, resolvedPath);
   } finally {

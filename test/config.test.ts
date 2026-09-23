@@ -30,7 +30,8 @@ test('saves a configuration that can be loaded as JSON', async () => {
 
   await saveConfig(configPath, config);
   const saved = JSON.parse(await readFile(configPath, 'utf8'));
-  assert.deepEqual(saved, { encrypt_passwords: true, hosts: config.hosts, mounts: config.mounts });
+  assert.deepEqual(saved, { encrypt_passwords: true, hosts: config.hosts });
+  assert.equal(saved.mounts, undefined);
   const reloaded = parseConfig(saved);
   assert.equal(reloaded.mounts.length, 1);
   assert.equal(reloaded.mounts[0].name, 'project');
