@@ -269,12 +269,6 @@ export class AgentHttpRouter {
             : { allowedTool: 'run_remote_command' }
         );
       }
-      if (publicInput.remoteCwd !== undefined) {
-        return this.toolError(
-          'TERMINAL_CWD_FIXED',
-          'The working directory is fixed to the selected terminal directory; omit --cwd.'
-        );
-      }
       args = { command: publicInput.command, mountName: workspace.mountName };
     }
     const effectiveAgentName = source === 'cli'

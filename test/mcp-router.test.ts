@@ -141,12 +141,6 @@ test('a terminal workspace permits only commands without changing other workspac
       truncated: false,
       source: 'mcp'
     });
-    const cachedCommandAlias = await client.callTool({
-      name: 'run_remote_command',
-      arguments: { workspaceId: mcpBindingId, command: 'whoami', remoteCwd: '/ignored' }
-    });
-    assert.equal(JSON.parse((cachedCommandAlias.content as any[])[0].text).code, 'TERMINAL_CWD_FIXED');
-
     const cliUrl = new URL(router.url);
     cliUrl.pathname = '/cli';
     const invokeCli = async (name: string, args: Record<string, unknown>) => {
@@ -176,12 +170,6 @@ test('a terminal workspace permits only commands without changing other workspac
     assert.equal(deniedBatch.ok, false);
     assert.equal(deniedBatch.result.code, 'TERMINAL_COMMAND_ONLY');
     assert.match(deniedBatch.result.message, /only available CLI command: safs exec/);
-
-    const wrongCwd = await invokeCli('run_remote_command', {
-      workspaceId, command: 'pwd', remoteCwd: '/tmp'
-    });
-    assert.equal(wrongCwd.ok, false);
-    assert.equal(wrongCwd.result.code, 'TERMINAL_CWD_FIXED');
 
     const cliExecuted = await invokeCli('run_remote_command', {
       workspaceId, command: 'pwd'

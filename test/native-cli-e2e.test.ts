@@ -260,23 +260,17 @@ test('native CLI lists and executes through the existing SAFS router', async () 
     assert.ok(activity.filter((event) => event.phase === 'start').every(
       (event) => event.agentName === 'URL Agent' && event.source === 'cli'
     ));
-    const explicitStart = activity.length;
-    const namedRead = await executeCaptured({ command: executable, args: [
+    const removedAgentOption = await executeCaptured({ command: executable, args: [
       '--config', config, 'read', 'named.txt', '--workspace', workspaceId,
       '--agent', 'Explicit Agent'
     ] });
-    assert.equal(namedRead.exitCode, 0, namedRead.stderr);
-    const namedBatch = await executeCaptured({ command: executable, args: [
-      '--config', config, 'batch', '--workspace', workspaceId, '--agent', 'Explicit Agent',
-      '--input', JSON.stringify({ operations: [
-        { command: 'read', arguments: { path: 'a.txt' } },
-        { command: 'list', arguments: { path: 'src' } }
-      ] })
+    assert.equal(removedAgentOption.exitCode, 1);
+    assert.match(removedAgentOption.stderr, /Invalid option for read: --agent/);
+    const removedCwdOption = await executeCaptured({ command: executable, args: [
+      '--config', config, 'exec', 'pwd', '--workspace', workspaceId, '--cwd', 'subdirectory'
     ] });
-    assert.equal(namedBatch.exitCode, 0, namedBatch.stderr);
-    const namedEvents = activity.slice(explicitStart).filter((event) => event.phase === 'start');
-    assert.equal(namedEvents.length, 3);
-    assert.ok(namedEvents.every((event) => event.agentName === 'Explicit Agent' && event.source === 'cli'));
+    assert.equal(removedCwdOption.exitCode, 1);
+    assert.match(removedCwdOption.stderr, /Invalid option for exec: --cwd/);
   } finally {
     await router.stop();
     await backend.stop();

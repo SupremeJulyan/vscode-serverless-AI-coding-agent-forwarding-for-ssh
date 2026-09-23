@@ -273,11 +273,11 @@ function toolDefinitions(
       description: profile === 'terminal'
         ? 'Runs one command in the visible SAFS terminal selected from Agent Activity. The working directory is the terminal directory published as workspaceRoot and cannot be overridden. The command inherits the terminal\'s current user privileges and exported environment. Returns workspaceRoot, exitCode, stdout, stderr, and truncated. A nonzero exitCode means the command failed.'
         : routed
-          ? 'Runs a task command such as a build or test on the bound SSH host. The default working directory is workspaceRoot; relative remoteCwd starts there and every remoteCwd must remain inside it. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.'
-          : 'Runs a task command such as a build or test on the selected SSH host. The default working directory is workspaceRoot; relative remoteCwd starts there and every remoteCwd must remain inside it. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.',
+          ? 'Runs a task command such as a build or test on the bound SSH host in workspaceRoot. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.'
+          : 'Runs a task command such as a build or test on the selected SSH host in workspaceRoot. Common outside-workspace shell write targets are rejected, but this is not a general-purpose filesystem sandbox: use structured tools for every file operation. Returns remoteCwd, exitCode, stdout/stderr preview, and truncation/continuation metadata when needed. A nonzero exitCode means the command failed even when the MCP call itself succeeded.',
       inputSchema: profile === 'terminal'
         ? { command: z.string().min(1) }
-        : { ...workspaceSelector, command: z.string().min(1), remoteCwd: z.string().optional() },
+        : { ...workspaceSelector, command: z.string().min(1) },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
     }
   ];

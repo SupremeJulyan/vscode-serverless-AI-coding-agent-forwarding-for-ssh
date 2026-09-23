@@ -2,7 +2,7 @@
 
 Use a `workspaceId` returned by `safs workspaces` as `ID` below.
 
-Pass `--agent "YOUR AGENT NAME"` on remote commands to label activity, for example `safs read README.md --workspace ID --agent Codex`. For `batch`, this name applies to operations without their own `agentName`. If omitted, the router uses the Agent name in the connection URL when present.
+The router identifies the Agent from the connection URL when available.
 
 ## Workspace
 
@@ -48,7 +48,7 @@ Pass large, multiline, or sensitive JSON through `--input -` on stdin so it is n
 
 ```bash
 safs exec "npm test" --workspace ID
-safs exec "git status --short" --workspace ID --cwd subdirectory
+safs exec "git status --short" --workspace ID
 safs batch --workspace ID --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
 ```
 

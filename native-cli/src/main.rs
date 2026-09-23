@@ -27,7 +27,6 @@ Examples:
 
 Common path/query/command values accept concise positional arguments. The
 existing named options remain available for scripts. Run `safs COMMAND --help`.
-Remote commands accept --agent NAME to identify activity (including batch operations).
 Global options: --compact, --verbose, --config FILE
 Version: safs --version
 "#;
@@ -126,9 +125,9 @@ Example: --input '{"remotePath":"file","localPath":"/absolute/local/target"}'
 "#,
         ),
         "exec" => Some(
-            r#"Usage: safs exec REMOTE_COMMAND --workspace ID [--cwd REMOTE_CWD]
-       safs exec --workspace ID [--cwd REMOTE_CWD] -- 'REMOTE_COMMAND'
-       safs exec --workspace ID [--cwd REMOTE_CWD] --command 'REMOTE_COMMAND'
+            r#"Usage: safs exec REMOTE_COMMAND --workspace ID
+       safs exec --workspace ID -- 'REMOTE_COMMAND'
+       safs exec --workspace ID --command 'REMOTE_COMMAND'
 The complete remote command must be passed as one shell argument.
 "#,
         ),
@@ -377,7 +376,7 @@ fn parse_request(
         "chmod" => &["workspace", "path", "mode"],
         "upload" | "download" | "move" | "read-many" | "batch" => &["workspace"],
         "output" => &["workspace", "id", "stream", "offset", "length"],
-        "exec" => &["workspace", "cwd", "command"],
+        "exec" => &["workspace", "command"],
         _ => return Err("Unknown command; use --help".into()),
     };
     let mut remote_command = None;
@@ -400,12 +399,11 @@ fn parse_request(
             return Err(format!("{flag} requires a value"));
         }
         let key = &flag[2..];
-        if key != "agent" && !allowed.contains(&key) {
+        if !allowed.contains(&key) {
             return Err(format!("Invalid option for {verb}: {flag}"));
         }
         let value = args.remove(0);
         let json_key = match key {
-            "agent" => "agentName",
             "start-line" => "startLine",
             "line-count" => "lineCount",
             _ => key,
@@ -538,9 +536,6 @@ fn parse_request(
                 if arguments.contains_key("workspaceId") || arguments.contains_key("mountName") {
                     return Err("Batch arguments must not override workspaceId or mountName".into());
                 }
-                if let Some(agent) = values.get("agentName") {
-                    arguments.entry("agentName").or_insert_with(|| agent.clone());
-                }
                 arguments.insert("workspaceId".into(), workspace.clone());
                 normalized.push(json!({ "name": name, "arguments": arguments }));
             }
@@ -590,9 +585,6 @@ fn parse_request(
                                 .ok_or("Remote command is required. Retry with `safs exec --workspace ID -- 'COMMAND'` or `--command 'COMMAND'`")?,
                         ),
                     );
-                    if let Some(cwd) = values.remove("cwd") {
-                        values.insert("remoteCwd".into(), cwd);
-                    }
                     "run_remote_command"
                 }
                 _ => unreachable!(),
