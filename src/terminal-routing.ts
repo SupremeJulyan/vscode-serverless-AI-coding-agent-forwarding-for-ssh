@@ -7,10 +7,12 @@ import { isTransientTerminalConnectionFailure } from './terminal-diagnostics';
 // the session can be used. Both can be served by the system ssh fallback;
 // authentication failures intentionally do not match these patterns.
 const ssh2FallbackChannelPattern = /pseudo-terminal|open shell|start subsystem|channel open/i;
+const ssh2FallbackConnectionPattern = /handshake|ready.?timeout|connection (?:closed|terminated|reset|refused)|socket hang up|channel open failure|unable to connect|network is unreachable|no route to host|timed out/i;
 
 export function shouldFallbackToSystemSsh(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return ssh2FallbackChannelPattern.test(message)
+    || ssh2FallbackConnectionPattern.test(message)
     || isTransientTerminalConnectionFailure(message);
 }
 
