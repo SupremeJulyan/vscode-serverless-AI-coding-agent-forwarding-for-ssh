@@ -14,15 +14,17 @@ function encodeMountAuthority(mountName: string): string {
   // lowercase authority so VS Code shows the config name directly in the
   // status-bar/remote indicator; fall back to lowercase hexadecimal for
   // anything else so the identifier survives that normalization.
-  if (/^[a-z0-9][a-z0-9._-]*$/.test(mountName)) return mountName;
+  // Parentheses are RFC 3986 sub-delims and survive the WHATWG parser used by
+  // parseRemoteUri, so generated names such as `10.68.0.1(zhuyuan)` stay readable.
+  if (/^[a-z0-9][a-z0-9._()-]*$/.test(mountName)) return mountName;
   // Legacy hierarchical names were generated as "host@user". Keep their
   // authority readable and ASCII-only in VS Code's remote indicator, including
   // Unicode host aliases; the original name is carried in the URI query so
   // parsing remains lossless.
-  if (/^[\p{L}\p{N}][\p{L}\p{N}._@-]*$/u.test(mountName)
+  if (/^[\p{L}\p{N}][\p{L}\p{N}._@()-]*$/u.test(mountName)
       && !/[A-Z]/.test(mountName)) {
     return [...mountName].map((character) => {
-      if (/^[a-z0-9._-]$/.test(character)) return character;
+      if (/^[a-z0-9._()-]$/.test(character)) return character;
       if (character === '@') return '_';
       return `_u${character.codePointAt(0)!.toString(16)}`;
     }).join('');

@@ -15,6 +15,23 @@ test('round-trips remote folder names and unusual POSIX paths', () => {
   assert.equal(uri.includes('#'), false);
 });
 
+test('keeps generated IP(account) config names readable in the authority', () => {
+  const uri = remoteUri('10.68.0.1(zhuyuan)', '/home/zhuyuan');
+  assert.equal(uri, 'safs://10.68.0.1(zhuyuan)/home/zhuyuan');
+  assert.deepEqual(parseRemoteUri(uri), {
+    mountName: '10.68.0.1(zhuyuan)',
+    remotePath: '/home/zhuyuan'
+  });
+  // 重名时追加的 `#` 不是安全字符：仍退回十六进制 authority，解析无损。
+  const duplicate = remoteUri('10.68.0.1(zhuyuan)#2', '/home');
+  assert.match(duplicate, /^safs:\/\/m-[0-9a-f]+\//);
+  assert.equal(parseRemoteUri(duplicate).mountName, '10.68.0.1(zhuyuan)#2');
+  // 非 ASCII 账号逐字符转义，括号保持可读，原名走 query。
+  const unicodeUser = remoteUri('10.68.0.1(朱远)', '/home');
+  assert.match(unicodeUser, /^safs:\/\/10\.68\.0\.1\(_u6731_u8fdc\)\//);
+  assert.equal(parseRemoteUri(unicodeUser).mountName, '10.68.0.1(朱远)');
+});
+
 test('uses the config name as the authority when it is URI-safe', () => {
   const uri = remoteUri('gkn', '/home/alice');
   assert.equal(uri, 'safs://gkn/home/alice');

@@ -41,10 +41,27 @@ export function isNetworkFailure(error: unknown): boolean {
   return networkFailurePatterns.some((pattern) => pattern.test(message));
 }
 
-export function passwordValueOffset(content: string, hostName: string): number | undefined {
+/** 匹配配置原文中的 `"name": "<hostName>"` 字段（按 JSON 转义后的名字精确匹配）。 */
+function nameFieldMatch(content: string, hostName: string): RegExpExecArray | null {
   const escapedName = JSON.stringify(hostName);
-  const namePattern = new RegExp(`"name"\\s*:\\s*${escapedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
-  const nameMatch = namePattern.exec(content);
+  const namePattern = new RegExp(
+    `"name"\\s*:\\s*${escapedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`
+  );
+  return namePattern.exec(content);
+}
+
+/**
+ * 配置文件原文中某个条目 `"name"` 字段的偏移，用于「打开配置」定位到对应行。
+ *
+ * 主机名（账号）与挂载名一致，且保存配置时会省略 `mounts`（挂载由 hosts 推导），
+ * 所以一次全文匹配即可命中唯一的那条记录。
+ */
+export function configEntryOffset(content: string, hostName: string): number | undefined {
+  return nameFieldMatch(content, hostName)?.index;
+}
+
+export function passwordValueOffset(content: string, hostName: string): number | undefined {
+  const nameMatch = nameFieldMatch(content, hostName);
   if (!nameMatch) return undefined;
   const remainder = content.slice(nameMatch.index + nameMatch[0].length);
   const passwordMatch = /"password"\s*:\s*"/.exec(remainder);

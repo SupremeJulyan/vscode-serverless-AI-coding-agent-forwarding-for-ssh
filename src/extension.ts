@@ -30,7 +30,7 @@ import {
   closeSsh2ExecSessions, executeSsh2Command, type Ssh2CommandResult, Ssh2Terminal
 } from './ssh2-terminal';
 import {
-  passwordValueOffset
+  configEntryOffset, passwordValueOffset
 } from './authentication';
 import { AgentMcpServer, AgentToolError } from './agent-mcp';
 import { AgentHttpRouter, agentTaggedMcpUrl } from './agent-http-router';
@@ -168,6 +168,8 @@ let agentCommandTerminalCwd: string | undefined;
 let agentCommandTerminalRefresh: Promise<void> = Promise.resolve();
 const busyAgentCommandTerminals = new WeakSet<vscode.Terminal>();
 let refreshTree: () => void = () => undefined;
+/** SAFS 视图实例：标题栏命令要读当前选中项（打开配置定位用）。 */
+let mountsTreeView: vscode.TreeView<TreeElement> | undefined;
 const openingTerminalIds = new Set<string>();
 let lastReadConfig: BridgeConfig | undefined;
 const managedRemoteTerminals = new Map<vscode.Terminal, {
@@ -2825,12 +2827,36 @@ async function disconnect(requested?: MountConfig): Promise<void> {
 
 // ---- Open Config ----
 
-async function openConfig(hostName?: string): Promise<void> {
+/**
+ * 「打开配置」要定位的位置：条目本身（主机/挂载共用一个名字），或账号密码字段
+ * （密码错误提示里点"打开配置"时直接落到那一行）。
+ */
+type ConfigFocus = { kind: 'entry' | 'password'; name: string };
+
+/** 树节点 → 配置定位目标：主机分组取首个账号，历史条目按它所属的主机/挂载。 */
+function configFocusForElement(element: TreeElement | undefined): ConfigFocus | undefined {
+  if (!element) return undefined;
+  if ('type' in element) {
+    if (element.type === 'hostGroup') {
+      const host = element.hosts[0];
+      return host ? { kind: 'entry', name: host.name } : undefined;
+    }
+    if (element.type === 'user') return { kind: 'entry', name: element.hostName };
+    return { kind: 'entry', name: element.mountName };
+  }
+  return { kind: 'entry', name: (element as MountConfig).name };
+}
+
+/** 打开 `~/.safs/config.json`，并按 focus 把光标定位到对应行。 */
+async function openConfig(focus?: ConfigFocus): Promise<void> {
   const resolvedPath = await ensureConfigFile(configPath());
   const document = await vscode.workspace.openTextDocument(vscode.Uri.file(resolvedPath));
   const editor = await vscode.window.showTextDocument(document);
-  if (!hostName) return;
-  const offset = passwordValueOffset(document.getText(), hostName);
+  if (!focus) return;
+  const content = document.getText();
+  const offset = focus.kind === 'password'
+    ? passwordValueOffset(content, focus.name)
+    : configEntryOffset(content, focus.name);
   if (offset === undefined) return;
   const position = document.positionAt(offset);
   editor.selection = new vscode.Selection(position, position);
@@ -3018,7 +3044,9 @@ async function addHostCredentials(
     throw new Error(`IP 为 ${requestedGroup?.ip ?? requestedHost?.ip} 的 SSH 主机不存在`);
   }
   const hostDisplayName = hierarchicalHostName(host, config.host_aliases);
-  const title = `配置主机：${host.name}`;
+  const title = hostDisplayName === host.name || host.name === host.ip
+    ? `配置主机：${host.name}`
+    : `配置主机：${host.name}（${hostDisplayName}）`;
   const user = await input({
     title,
     prompt: '账号',
@@ -3042,7 +3070,9 @@ async function addHostCredentials(
   );
   if (requestedGroup && matchingUserIndex >= 0) index = matchingUserIndex;
   const targetHost = index >= 0 ? config.hosts[index] : host;
-  const generatedName = `${normalizedUser}_${hostDisplayName}`;
+  // 配置名直接用 `IP(账号)`：主机节点（IP/别名）与账号节点合起来就是这个
+  // 名字，和界面、config.json 一一对应。
+  const generatedName = `${host.ip}(${normalizedUser})`;
   const nameConflict = config.hosts.findIndex((candidate, candidateIndex) =>
     candidate.name === generatedName && candidateIndex !== index
   );
@@ -3081,8 +3111,8 @@ async function addHostCredentials(
   }
   config.mounts = deriveMounts(config.hosts);
   await saveConfig(configPath(), config);
-  bridgeOutput?.info(`[配置] 已保存主机登录配置 ${host.name}（账号 ${updated.user}）`);
-  void vscode.window.showInformationMessage(`SAFS：主机"${host.name}"的登录配置已保存。`);
+  bridgeOutput?.info(`[配置] 已保存主机登录配置 ${updated.name}（账号 ${updated.user}）`);
+  void vscode.window.showInformationMessage(`SAFS：主机"${updated.name}"的登录配置已保存。`);
 }
 
 function requireConfiguredHostLogin(host: HostConfig): void {
@@ -3772,8 +3802,8 @@ function hierarchicalHostName(
   host: HostConfig, aliases?: Record<string, string>
 ): string {
   const alias = aliases?.[host.ip];
-  // Non-ASCII aliases remain user-facing labels, but config names and URI
-  // authorities fall back to the IP for reliable cross-platform handling.
+  // Aliases are display labels only: configuration names are generated as
+  // `IP(account)`, and URI authorities carry that name.
   return alias && !/[^\x00-\x7f]/.test(alias) ? alias : host.ip;
 }
 
@@ -3924,7 +3954,6 @@ async function normalizeHierarchicalConfigNames(
     await ensureConfigFile(configPath());
     return loadConfig(configPath());
   })();
-  const aliases = config.host_aliases ?? {};
   const renamed = new Map<string, string>();
   const usedNames = new Set<string>();
 
@@ -3933,8 +3962,9 @@ async function normalizeHierarchicalConfigNames(
       usedNames.add(host.name);
       continue;
     }
-    const hostName = hierarchicalHostName(host, aliases);
-    const baseName = `${host.user}_${hostName}`;
+    // 配置名直接用 `IP(账号)`：界面上的主机节点（IP/别名）与账号节点合起来就是
+    // 这个名字，在 config.json 里按 IP 也一眼能对上。别名只作为主机节点的显示标签。
+    const baseName = `${host.ip}(${host.user})`;
     let nextName = baseName;
     let suffix = 2;
     while (usedNames.has(nextName) && nextName !== host.name) {
@@ -4346,6 +4376,48 @@ async function deleteConfig(mount: MountConfig): Promise<void> {
   if (enabled.delete(mount.name)) {
     await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
   }
+}
+
+/** 删除整个主机分组：同一 IP 下的所有账号（各带自己的挂载配置）一起删掉。 */
+async function deleteHostGroup(group: HostGroupItem): Promise<void> {
+  const hostNames = group.hosts.map((host) => host.name);
+  const accounts = group.hosts.map((host) => host.user || '未配置账号').join('、');
+  const connected = hostNames.filter((name) => registry.get(name) !== undefined);
+  const confirmMessage = connected.length > 0
+    ? `主机"${group.displayName}"的 ${hostNames.length} 个账号（${accounts}）仍在使用中，`
+      + '删除配置需先断开连接。是否断开并删除？'
+    : `确定删除主机"${group.displayName}"的 ${hostNames.length} 个账号配置吗？（${accounts}）`;
+  const confirmButton = connected.length > 0 ? '断开并删除' : '删除';
+  if (await vscode.window.showWarningMessage(
+    confirmMessage, { modal: true }, confirmButton
+  ) !== confirmButton) return;
+  for (const name of connected) {
+    await disconnect({ name, host: name, remote_path: '.', remote_terminal: 'open' });
+  }
+  const config = await readConfig();
+  for (const name of hostNames) {
+    // 有挂载配置时先删挂载（没有其他挂载引用该主机时会连带删掉主机记录）；
+    // 只有主机记录（挂载由 hosts 推导）时直接删主机本身。
+    if (config.mounts.some((mount) => mount.name === name)) removeMountConfig(config, name);
+    else config.hosts = config.hosts.filter((host) => host.name !== name);
+  }
+  await saveConfig(configPath(), config);
+  const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
+  const cleared = hostNames.filter((name) => enabled.delete(name));
+  if (cleared.length > 0) {
+    await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
+  }
+}
+
+/** 「删除配置」入口：主机分组删整组，其余（账号/挂载）删自己那条配置。 */
+async function deleteConfigItem(
+  element: MountConfig | HostConfig | HostGroupItem | UserItem
+): Promise<void> {
+  if ('type' in element && element.type === 'hostGroup') {
+    await deleteHostGroup(element);
+    return;
+  }
+  await deleteConfig(mountForTreeElement(element));
 }
 
 // ---- AI Agent Forwarding (aligned with main) ----
@@ -5072,7 +5144,11 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
         ...error.actions
       );
       if (selected === openConfigAction) {
-        await vscode.commands.executeCommand(`${commandPrefix}.openConfig`, error.hostName);
+        // 有主机名时直接落到该账号的密码行；没有就让「打开配置」按当前选中项定位。
+        await vscode.commands.executeCommand(
+          `${commandPrefix}.openConfig`,
+          error.hostName ? { kind: 'password', name: error.hostName } satisfies ConfigFocus : undefined
+        );
       } else if (selected === addSshConfigAction) {
         await vscode.commands.executeCommand(`${commandPrefix}.addSshConfig`);
       }
@@ -5337,7 +5413,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const tree = new RemoteFoldersProvider(context);
   refreshTree = () => tree.refresh();
+  // 用 createTreeView 而不是 registerTreeDataProvider：视图标题栏的「打开配置」
+  // 需要读当前选中项，才能定位到 config.json 里对应的那一行。
+  mountsTreeView = vscode.window.createTreeView(`${commandPrefix}.mounts`, {
+    treeDataProvider: tree
+  });
   context.subscriptions.push(
+    mountsTreeView,
     provider,
     vscode.workspace.registerFileSystemProvider(remoteFileSystemScheme, provider, {
       isCaseSensitive: true,
@@ -5349,7 +5431,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         () => handleSafsTerminalLink(link as SafsTerminalLink)
       )
     }),
-    vscode.window.registerTreeDataProvider(`${commandPrefix}.mounts`, tree),
     vscode.window.registerWebviewViewProvider(agentActivityViewId, agentActivityView, {
       webviewOptions: { retainContextWhenHidden: true }
     }),
@@ -5408,7 +5489,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
     });
   });
-  command('openConfig', () => openConfig());
+  command('openConfig', (focus) => openConfig(
+    (focus as ConfigFocus | undefined) ?? configFocusForElement(mountsTreeView?.selection[0])
+  ));
   command('addRemoteDirectory', async () => {
     await addRemoteDirectoryConfig();
     tree.refresh();
@@ -5473,9 +5556,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('refreshExplorer', async () => tree.refresh());
   command('deleteConfigItem', async (mount) => {
-    await deleteConfig(mountForTreeElement(
+    await deleteConfigItem(
       mount as MountConfig | HostConfig | HostGroupItem | UserItem
-    ));
+    );
     tree.refresh();
   });
   command('openHistoryItem', async (item: HistoryItem) => {

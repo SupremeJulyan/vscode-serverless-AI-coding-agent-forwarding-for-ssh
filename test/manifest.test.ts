@@ -9,7 +9,7 @@ interface ExtensionManifest {
   extensionKind?: string[];
   contributes?: {
     commands?: Array<{ command: string; title: string }>;
-    menus?: Record<string, Array<{ command: string; when?: string }>>;
+    menus?: Record<string, Array<{ command: string; when?: string; group?: string }>>;
     configuration?: {
       properties?: Record<string, {
         default?: unknown; enum?: unknown[]; description?: string; markdownDescription?: string;
@@ -511,4 +511,64 @@ test('history sync buttons read 启动同步 when the directory is not syncing',
   const disable = commands.find((item) => item.command === 'safs.disableHistorySync');
   assert.equal(enable?.title, '启动同步');
   assert.equal(disable?.title, '关闭本地同步');
+});
+
+test('host items carry a delete button and every item can open the config', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  const itemMenu = manifest.contributes?.menus?.['view/item/context'] ?? [];
+  const hostCondition = 'view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/';
+  const hostDelete = itemMenu.find(
+    (item) => item.command === 'safs.deleteConfigItem' && item.when === hostCondition
+  );
+  assert.equal(hostDelete?.group, 'inline@6');
+  // 账号/挂载项原本就命中 safs.connection，主机项靠上面新增的一条补齐。
+  assert.equal(
+    itemMenu.some(
+      (item) => item.command === 'safs.deleteConfigItem'
+        && item.when?.includes('viewItem =~ /safs\\.connection/')
+    ),
+    true
+  );
+  const openConfig = itemMenu.find((item) => item.command === 'safs.openConfig');
+  assert.equal(openConfig?.when, 'view == safs.mounts && viewItem =~ /safs\\./');
+});
+
+test('generates config names as IP(account) and migrates the old ones', async () => {
+  const extensionSource = await readFile(
+    new URL('../src/extension.ts', import.meta.url), 'utf8'
+  );
+  // 两条命名路径：保存账号时立即生成，启动/配置变更时归一化旧名字。
+  assert.ok(extensionSource.includes('const generatedName = `${host.ip}(${normalizedUser})`;'));
+  assert.ok(extensionSource.includes('const baseName = `${host.ip}(${host.user})`;'));
+  // 改名后要跟着迁移的持久状态。
+  const start = extensionSource.indexOf('async function normalizeHierarchicalConfigNames(');
+  assert.notEqual(start, -1);
+  const body = extensionSource.slice(
+    start, extensionSource.indexOf('\nclass RemoteFoldersProvider', start)
+  );
+  for (const store of [
+    'directoryHistoryKey', 'aiForwardMountsKey', 'syncTasksKey', 'syncedDirectoriesKey'
+  ]) {
+    assert.ok(body.includes(store), `rename migration should cover ${store}`);
+  }
+});
+
+test('打开配置 locates the selected tree item, and deleting a host removes all its accounts', async () => {
+  const extensionSource = await readFile(
+    new URL('../src/extension.ts', import.meta.url), 'utf8'
+  );
+  // 标题栏命令没有参数时按 SAFS 视图当前选中项定位。
+  assert.ok(extensionSource.includes('configFocusForElement(mountsTreeView?.selection[0])'));
+  assert.ok(extensionSource.includes('openConfig(focus'));
+  assert.ok(extensionSource.includes('configEntryOffset(content, focus.name)'));
+  assert.ok(extensionSource.includes('vscode.window.createTreeView(`${commandPrefix}.mounts`'));
+  // 主机分组删除：整组账号 + 各自的挂载配置。
+  const start = extensionSource.indexOf('async function deleteHostGroup(');
+  assert.notEqual(start, -1);
+  const body = extensionSource.slice(start, extensionSource.indexOf('\nasync function ', start + 10));
+  assert.ok(body.includes('for (const name of hostNames)'));
+  assert.ok(body.includes('removeMountConfig(config, name)'));
+  assert.ok(body.includes('hostNames.filter((name) => enabled.delete(name))'));
 });

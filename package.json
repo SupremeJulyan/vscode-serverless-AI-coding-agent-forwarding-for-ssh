@@ -317,6 +317,16 @@
           "group": "inline@5"
         },
         {
+          "command": "safs.deleteConfigItem",
+          "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
+          "group": "inline@6"
+        },
+        {
+          "command": "safs.openConfig",
+          "when": "view == safs.mounts && viewItem =~ /safs\\./",
+          "group": "safs@1"
+        },
+        {
           "command": "safs.enableAiForwardItem",
           "when": "view == safs.mounts && viewItem =~ /safs\\.connection.*aiDisabled/",
           "group": "inline@1"
