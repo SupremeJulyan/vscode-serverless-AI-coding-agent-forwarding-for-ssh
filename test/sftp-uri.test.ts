@@ -18,10 +18,10 @@ test('round-trips remote folder names and unusual POSIX paths', () => {
 
 test('keeps generated host(account) config names readable in the authority', () => {
   const uri = remoteUri('192.0.2.10(alice)', '/home/alice');
-  // 括号必须转义：VS Code 会把 authority 里的括号存成 %28/%29，直接写括号会让
-  // 远程指示器和已保存的窗口状态里出现 `192.0.2.10%28alice%29`。
-  assert.equal(uri, 'safs://192.0.2.10_alice/home/alice?mount=192.0.2.10(alice)');  // 名字里没有下划线，转义结果不变
-  assert.equal(uri.includes('%28'), false);
+  // 括号原样保留：远程指示器里显示的就是配置名本身（VS Code 只在存储时编码成 %28，
+  // 解析侧 decodeAuthority 会还原）。
+  assert.equal(uri, 'safs://192.0.2.10(alice)/home/alice');
+  assert.equal(uri.includes('?mount='), false);
   assert.deepEqual(parseRemoteUri(uri), {
     mountName: '192.0.2.10(alice)',
     remotePath: '/home/alice'
@@ -61,8 +61,10 @@ test('recovers the mount name when VS Code escapes the ?mount query', () => {
   // `?mount=host@user` 就变成了 `?mount%3Dhost@user`），此时必须靠 authority 还原。
   const mangled = 'safs://192.0.2.10_alice/home/x?mount%3D192.0.2.10(alice)';
   assert.equal(new URL(mangled).searchParams.get('mount'), null);
-  assert.equal(mountAuthorityAlias('192.0.2.10(alice)'), '192.0.2.10_alice');
-  assert.equal(mountAuthorityAlias('gateway'), undefined);
+  // 明文括号不再需要转义，但**上一版的转义形式**（`_` 当括号、下划线原样）还在窗口
+  // 状态里，必须靠别名表还原，所以 mountAliasCandidates 要收录它。
+  assert.equal(mountAuthorityAlias('192.0.2.10(alice)'), undefined);
+  assert.equal(legacyMountAuthorityAlias('192.0.2.10(alice)'), '192.0.2.10_alice');
   setMountAliasResolver((name) =>
     (name === '192.0.2.10_alice' ? '192.0.2.10(alice)' : name));
   try {
@@ -152,13 +154,14 @@ test('ignores cache metadata appended by VS Code media previews', () => {
 test('authority escaping is injective, so two names never share one authority', () => {
   const left = remoteUri('devbox(alice_k)', '/home');
   const right = remoteUri('devbox_alice(k)', '/home');
-  assert.equal(left.includes('safs://devbox_alice__k/'), true);
-  assert.equal(right.includes('safs://devbox__alice_k/'), true);
+  assert.equal(left, 'safs://devbox(alice_k)/home');
+  assert.equal(right, 'safs://devbox_alice(k)/home');
   // 只看 authority（?mount= 会被 VS Code 转义掉）也不会串台。
   assert.notEqual(left.split('?')[0], right.split('?')[0]);
   assert.equal(parseRemoteUri(left).mountName, 'devbox(alice_k)');
   assert.equal(parseRemoteUri(right).mountName, 'devbox_alice(k)');
-  // 上一版的非单射转义形式仍能还原（已存进窗口状态的 URI 就是它）。
+  // 上一版的非单射转义形式仍能还原（已存进窗口状态的 URI 就是它），
+  // 并且只在"当前没有同名配置"时才登记，不会遮蔽真实名字。
   assert.equal(legacyMountAuthorityAlias('devbox(alice_k)'), 'devbox_alice_k');
   assert.equal(mountAliasCandidates(
     { name: 'devbox(alice_k)', ip: '192.0.2.1', user: 'alice_k' },

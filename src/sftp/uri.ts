@@ -19,14 +19,14 @@ function encodeMountAuthority(mountName: string): string {
   const looksLikeLegacyHex = /^m-[0-9a-f]+$/.test(mountName) && mountName.length % 2 === 0;
   // 长得像旧十六进制形式的名字只能走十六进制兜底，否则解析时会被解成别的名字。
   if (looksLikeLegacyHex) return `m-${Buffer.from(mountName, 'utf8').toString('hex')}`;
-  if (/^[a-z0-9][a-z0-9._-]*$/.test(mountName)) return mountName;
+  // `主机名(账号)` 的括号**原样保留**：VS Code 在 authority 里遇到它们只会做百分号编码
+  // （存进窗口状态时是 `%28`），解析侧 decodeAuthority 会还原，所以远程指示器里显示的
+  // 就是配置名本身（`ls(test_app)`），而不是转义后的 `ls_test__app`。
+  if (/^[a-z0-9][a-z0-9._()-]*$/.test(mountName)) return mountName;
   // Legacy hierarchical names were generated as "host@user"; configuration names
   // are "host(account)" (alias or IP + account). Keep the authority readable and ASCII-only in
   // VS Code's remote indicator, including Unicode host aliases; the original
   // name is carried in the URI query so parsing remains lossless.
-  // Parentheses must be escaped here: VS Code percent-encodes them inside an
-  // authority (`%28`), which would then leak into the remote indicator and the
-  // stored window state instead of showing the configuration name.
   if (/^[\p{L}\p{N}][\p{L}\p{N}._@()-]*$/u.test(mountName)
       && !/[A-Z]/.test(mountName)) {
     return escapeMountAuthority(mountName);
