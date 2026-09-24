@@ -4023,15 +4023,13 @@ async function rememberMountRenames(renamed: Map<string, string>): Promise<void>
   );
 }
 
-/** 已提示过"用新名字重开窗口"的 authority，避免同一会话反复弹。 */
-const reopenPromptedAuthorities = new Set<string>();
-
 /**
  * 把已打开的 `safs://` 工作区文件夹换成当前配置名。
  *
  * 左下角的远程指示器显示的就是工作区 URI 的 authority：配置改名后旧窗口仍然存着
  * 旧名字，所以这里主动替换。多根工作区可以直接换文件夹；单文件夹窗口 VS Code 不
- * 允许改文件夹列表，只能问一句是否用新名字重新打开（会重新加载窗口）。
+ * 允许改文件夹列表，只写日志、不做任何弹窗——旧 authority 仍由别名解析到当前配置，
+ * 功能不受影响，指示器等用户自己重开窗口时更新。
  */
 async function refreshRemoteWorkspaceNames(): Promise<void> {
   const folders = [...(vscode.workspace.workspaceFolders ?? [])];
@@ -4059,15 +4057,12 @@ async function refreshRemoteWorkspaceNames(): Promise<void> {
     } catch (error) {
       logAsyncFailure('更新远程工作区名称失败', error);
     }
-    if (replaced || reopenPromptedAuthorities.has(folder.uri.authority)) continue;
-    reopenPromptedAuthorities.add(folder.uri.authority);
-    const choice = await vscode.window.showInformationMessage(
-      `SAFS：远程配置名已更新为 ${location.mountName}，左下角仍显示旧名字。`
-      + '用新名字重新打开这个窗口吗？（会重新加载窗口）',
-      '重新打开'
-    );
-    if (choice === '重新打开') {
-      await vscode.commands.executeCommand('vscode.openFolder', desired, false);
+    // 单文件夹窗口换不了文件夹列表：不弹窗询问是否重开（会打断当前会话），
+    // 旧 authority 靠上面的别名照常解析，只是左下角指示器要等用户自己重开才更新。
+    if (!replaced) {
+      bridgeOutput?.info(
+        `[工作区] 左下角仍显示旧名字 ${folder.uri.authority}：重开这个窗口后变为 ${desired.authority}`
+      );
     }
   }
 }
@@ -4080,8 +4075,11 @@ async function refreshRemoteWorkspaceNames(): Promise<void> {
 async function applyMountRenames(renamed: Map<string, string>): Promise<void> {
   if (renamed.size === 0) return;
   for (const [from, to] of renamed) {
-    registry.rename(from, to);
-    pool.rename(from, to);
+    // 激活早期（装载配置时归一化旧名字）registry / pool 还没创建，而且都是空的：没有旧键
+    // 需要重挂，跳过即可。这里不能用非空调用——`undefined.rename` 会被守卫捕成「命令失败」
+    // 弹窗，并中断后面的改名落盘与历史/转发/同步状态迁移，于是每次激活都重复报一次。
+    registry?.rename(from, to);
+    pool?.rename(from, to);
     const tasks = (syncManager?.list() ?? []).filter((task) => task.mountName === from);
     syncManager?.renameMount(from, to);
     for (const task of tasks) {

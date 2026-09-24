@@ -32,7 +32,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.9.4');
+  assert.equal(manifest.version, '1.9.5');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -575,6 +575,29 @@ test('generates config names as host(account) and migrates the old ones', async 
   assert.ok(extensionSource.includes('addAlias(mountAuthorityAlias(host.name), host.name);'));
   assert.ok(extensionSource.includes('mountAliasCandidates(host, config.host_aliases)'));
   assert.ok(extensionSource.includes('mountAliasCandidates(host, config.host_aliases)'));
+});
+
+test('renames survive activation running before the registry and pool exist', async () => {
+  const extensionSource = await readFile(
+    new URL('../src/extension.ts', import.meta.url), 'utf8'
+  );
+  // activate 在创建 registry / pool 之前就归一化旧配置名（历史命名迁移），所以这一步
+  // 必须容忍两者尚未初始化：否则 `undefined.rename` 会被守卫捕成弹窗，并中断整段迁移。
+  const start = extensionSource.indexOf('async function applyMountRenames(');
+  assert.notEqual(start, -1);
+  const body = extensionSource.slice(start, extensionSource.indexOf('\n}', start));
+  assert.ok(body.includes('registry?.rename(from, to);'));
+  assert.ok(body.includes('pool?.rename(from, to);'));
+  // 迁移确实早于 registry / pool 的创建，这就是上面必须容错的原因。
+  const activateStart = extensionSource.indexOf('export async function activate(');
+  assert.notEqual(activateStart, -1);
+  const normalizeAt = extensionSource.indexOf(
+    'await guard(() => normalizeHierarchicalConfigNames(context));', activateStart
+  );
+  const registryAt = extensionSource.indexOf('registry = new RemoteFolderRegistry();', activateStart);
+  assert.notEqual(normalizeAt, -1);
+  assert.notEqual(registryAt, -1);
+  assert.ok(normalizeAt < registryAt, 'rename migration still runs before the registry exists');
 });
 
 test('every delete button confirms first', async () => {
