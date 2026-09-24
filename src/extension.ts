@@ -18,6 +18,9 @@ import {
   BridgeConfig, deriveMounts, ensureConfigFile, expandHome, HostConfig, loadConfig, MountConfig,
   parseSshLogin, removeMountConfig, resolveMount, saveConfig
 } from './config';
+import { hierarchicalHostName, legacyMountNames, mountNameFor } from './mount-aliases';
+import { ConfigFocus, isConfigFocus } from './config-focus';
+import { accountTargetIndex } from './host-accounts';
 import { decryptPassword, encryptPassword, isEncryptedPassword } from './password';
 import {
   AskpassCredentials, createAskpassCredentials, platformUsesAskpass
@@ -58,7 +61,8 @@ import {
   workspacePathForRemote, isWorkspaceUriPath
 } from './sftp/filesystem-provider';
 import {
-  isRemotePathInsideRoot, parseRemoteUri, remoteFileSystemScheme, remoteUri
+  isRemotePathInsideRoot, mountAuthorityAlias, parseRemoteUri, remoteFileSystemScheme, remoteUri,
+  RemoteUriLocation, setMountAliasResolver
 } from './sftp/uri';
 import { ensureWslBridgeExecutable, setWslBundlePath } from './wsl-bridge';
 import { setRemoteShellIntegrationBundlePath } from './remote-shell-integration';
@@ -113,6 +117,9 @@ const masterPasswordSecret = 'safs.masterPassword';
 const agentMcpTokenSecret = platformStateKey('agentMcpToken');
 const aiForwardMountsKey = platformStateKey('aiForwardMounts');
 const directoryHistoryKey = platformStateKey('directoryHistory');
+/** 旧配置名 → 当前配置名：配置改名后已保存的窗口/标签页 URI 仍然能打开。 */
+const mountRenamesKey = platformStateKey('mountRenames');
+const mountRenames = new Map<string, string>();
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
 const proxyEnvironmentCheckKey = platformStateKey('proxyEnvironmentCheckV1');
@@ -2827,24 +2834,35 @@ async function disconnect(requested?: MountConfig): Promise<void> {
 
 // ---- Open Config ----
 
-/**
- * 「打开配置」要定位的位置：条目本身（主机/挂载共用一个名字），或账号密码字段
- * （密码错误提示里点"打开配置"时直接落到那一行）。
- */
-type ConfigFocus = { kind: 'entry' | 'password'; name: string };
-
 /** 树节点 → 配置定位目标：主机分组取首个账号，历史条目按它所属的主机/挂载。 */
 function configFocusForElement(element: TreeElement | undefined): ConfigFocus | undefined {
-  if (!element) return undefined;
+  if (!element || typeof element !== 'object') return undefined;
   if ('type' in element) {
     if (element.type === 'hostGroup') {
-      const host = element.hosts[0];
+      const host = element.hosts?.[0];
       return host ? { kind: 'entry', name: host.name } : undefined;
     }
     if (element.type === 'user') return { kind: 'entry', name: element.hostName };
     return { kind: 'entry', name: element.mountName };
   }
   return { kind: 'entry', name: (element as MountConfig).name };
+}
+
+/**
+ * 命令实参 → 配置定位目标。
+ *
+ * 各入口传进来的东西不一样：视图条目右键与标题栏聚焦项是树元素（多选时是数组），
+ * 错误提示给的是显式定位目标，命令面板可能什么都不给——所以这里必须逐个判形，
+ * 不能直接当成 ConfigFocus 用（否则 `focus.name` 会是 undefined）。
+ */
+function configFocusForArgument(argument: unknown): ConfigFocus | undefined {
+  const value = Array.isArray(argument) ? argument[0] : argument;
+  if (isConfigFocus(value)) return value;
+  if (value && typeof value === 'object') {
+    return configFocusForElement(value as TreeElement);
+  }
+  // 没有参数时按 SAFS 视图当前选中项定位。
+  return configFocusForElement(mountsTreeView?.selection[0]);
 }
 
 /** 打开 `~/.safs/config.json`，并按 focus 把光标定位到对应行。 */
@@ -3031,13 +3049,11 @@ async function addHostCredentials(
   const groupHosts = requestedGroup
     ? config.hosts.filter((host) => host.ip === requestedGroup.ip)
     : [];
-  let index = requestedGroup
-    ? groupHosts.findIndex((host) => !host.user.trim()) >= 0
-      ? config.hosts.findIndex((host) => host.ip === requestedGroup.ip && !host.user.trim())
-      : groupHosts.length === 1
-        ? config.hosts.findIndex((host) => host.name === groupHosts[0].name)
-        : -1
-    : config.hosts.findIndex((host) => host.name === requestedHost?.name);
+  // 主机节点的 ＋ 只追加账号：只有"还没填账号"的那条会被复用，其余一律新增，
+  // 不再出现"单账号主机被下一个账号覆盖"的情况。指定主机名时按名字定位。
+  let index = accountTargetIndex(config, requestedGroup
+    ? { ip: requestedGroup.ip }
+    : { name: requestedHost?.name });
   if (index < 0 && requestedHost) throw new Error(`SSH 主机不存在：${requestedHost.name}`);
   const host = index >= 0 ? config.hosts[index] : groupHosts[0];
   if (!host) {
@@ -3050,9 +3066,8 @@ async function addHostCredentials(
   const user = await input({
     title,
     prompt: '账号',
-    value: requestedGroup && groupHosts.length > 1
-      ? os.userInfo().username
-      : host.user || os.userInfo().username,
+    // 追加新账号时默认用本机账号名，改已有那条时才预填它的账号。
+    value: (index >= 0 ? host.user : '') || os.userInfo().username,
     validateInput: required('账号')
   });
   if (user === undefined) return;
@@ -3065,14 +3080,23 @@ async function addHostCredentials(
   if (password === undefined) return;
 
   const normalizedUser = user.trim();
+  // 同 IP 同账号：明确问一句再更新，避免"添加账号"变成静默覆盖别人的密码/私钥。
   const matchingUserIndex = config.hosts.findIndex((candidate) =>
     candidate.ip === host.ip && candidate.user === normalizedUser
   );
-  if (requestedGroup && matchingUserIndex >= 0) index = matchingUserIndex;
+  if (matchingUserIndex >= 0 && matchingUserIndex !== index) {
+    const confirmed = await vscode.window.showWarningMessage(
+      `账号"${normalizedUser}"已存在于 ${host.ip}。要更新这条配置（覆盖密码/私钥）吗？`
+      + '要新增账号请换一个账号名。',
+      { modal: true },
+      '更新已有账号'
+    );
+    if (confirmed !== '更新已有账号') return;
+    index = matchingUserIndex;
+  }
   const targetHost = index >= 0 ? config.hosts[index] : host;
-  // 配置名直接用 `IP(账号)`：主机节点（IP/别名）与账号节点合起来就是这个
-  // 名字，和界面、config.json 一一对应。
-  const generatedName = `${host.ip}(${normalizedUser})`;
+  // 配置名是 `主机名(账号)`：主机名取 ASCII 别名，别名是中文或没配时退回 IP。
+  const generatedName = mountNameFor({ ...host, user: normalizedUser }, config.host_aliases);
   const nameConflict = config.hosts.findIndex((candidate, candidateIndex) =>
     candidate.name === generatedName && candidateIndex !== index
   );
@@ -3798,15 +3822,6 @@ function groupHostsByIp(
   return [...groups.values()];
 }
 
-function hierarchicalHostName(
-  host: HostConfig, aliases?: Record<string, string>
-): string {
-  const alias = aliases?.[host.ip];
-  // Aliases are display labels only: configuration names are generated as
-  // `IP(account)`, and URI authorities carry that name.
-  return alias && !/[^\x00-\x7f]/.test(alias) ? alias : host.ip;
-}
-
 async function renameHostGroup(group: HostGroupItem): Promise<void> {
   const config = await loadConfig(configPath());
   const name = await input({
@@ -3946,6 +3961,118 @@ async function removeSyncedDirectory(
   }
 }
 
+/**
+ * 记录旧名 → 当前名并持久化：旧名字的 `safs://` URI（已保存的窗口、标签页、最近
+ * 打开）仍然解析到当前配置，改名后不需要重新打开远程窗口。
+ */
+async function rememberMountAliases(aliases: Map<string, string>): Promise<void> {
+  if (aliases.size === 0) return;
+  for (const [from, to] of aliases) {
+    mountRenames.set(from, to);
+    // 链式改名（x → old、old → new）时把旧键一起指到最新名字。
+    for (const [key, value] of mountRenames) {
+      if (value === from && key !== from) mountRenames.set(key, to);
+    }
+  }
+  await vscodeContext.globalState.update(mountRenamesKey, Object.fromEntries(mountRenames));
+}
+
+async function rememberMountRenames(renamed: Map<string, string>): Promise<void> {
+  if (renamed.size === 0) return;
+  await rememberMountAliases(renamed);
+  bridgeOutput?.info(
+    `[配置] 主机改名：${[...renamed].map(([from, to]) => `${from} → ${to}`).join('；')}`
+  );
+}
+
+/** 已提示过"用新名字重开窗口"的 authority，避免同一会话反复弹。 */
+const reopenPromptedAuthorities = new Set<string>();
+
+/**
+ * 把已打开的 `safs://` 工作区文件夹换成当前配置名。
+ *
+ * 左下角的远程指示器显示的就是工作区 URI 的 authority：配置改名后旧窗口仍然存着
+ * 旧名字，所以这里主动替换。多根工作区可以直接换文件夹；单文件夹窗口 VS Code 不
+ * 允许改文件夹列表，只能问一句是否用新名字重新打开（会重新加载窗口）。
+ */
+async function refreshRemoteWorkspaceNames(): Promise<void> {
+  const folders = [...(vscode.workspace.workspaceFolders ?? [])];
+  for (let index = 0; index < folders.length; index += 1) {
+    const folder = folders[index];
+    if (folder.uri.scheme !== remoteFileSystemScheme) continue;
+    let location: RemoteUriLocation;
+    try {
+      location = parseRemoteUri(folder.uri.toString());
+    } catch {
+      continue;
+    }
+    const desired = vscode.Uri.parse(remoteUri(location.mountName, folder.uri.path));
+    if (desired.toString() === folder.uri.toString()) continue;
+    bridgeOutput?.info(
+      `[工作区] 远程配置名已更新：${folder.uri.authority} → ${desired.authority}`
+    );
+    let replaced = false;
+    try {
+      replaced = vscode.workspace.updateWorkspaceFolders(index, 1, {
+        uri: desired, name: folder.name
+      });
+    } catch (error) {
+      logAsyncFailure('更新远程工作区名称失败', error);
+    }
+    if (replaced || reopenPromptedAuthorities.has(folder.uri.authority)) continue;
+    reopenPromptedAuthorities.add(folder.uri.authority);
+    const choice = await vscode.window.showInformationMessage(
+      `SAFS：远程配置名已更新为 ${location.mountName}，左下角仍显示旧名字。`
+      + '用新名字重新打开这个窗口吗？（会重新加载窗口）',
+      '重新打开'
+    );
+    if (choice === '重新打开') {
+      await vscode.commands.executeCommand('vscode.openFolder', desired, false);
+    }
+  }
+}
+
+/**
+ * 兼容已经保存的 `safs://` URI（窗口、标签页、最近打开），登记两类别名：
+ *
+ * - 历史命名规则下的旧配置名：`账号_别名`、`账号_IP`、`别名@账号`、`IP@账号`；
+ * - 名字对应的 authority 转义形式（`10.68.0.1(zhuyuan)` → `10.68.0.1_zhuyuan`），
+ *   因为 VS Code 会把 URI query 里的 `=` 转义掉，`?mount=` 不保证取得到。
+ *
+ * 只登记当前不存在的名字，不会遮蔽任何现有配置。
+ */
+async function registerMountAliases(): Promise<void> {
+  let config: BridgeConfig;
+  try {
+    config = await readConfig();
+  } catch {
+    // 配置缺失或损坏由原有流程提示，这里静默跳过。
+    return;
+  }
+  const currentNames = new Set(config.hosts.map((host) => host.name));
+  const aliases = new Map<string, string>();
+  const addAlias = (candidate: string | undefined, mountName: string) => {
+    if (candidate && candidate !== mountName && !currentNames.has(candidate)) {
+      aliases.set(candidate, mountName);
+    }
+  };
+  // 每个候选旧名都要登记两种形态：明文，以及 VS Code 存进窗口状态里的转义形式
+  // （`10.44.9.4(zhuyuan)` 与 `10.44.9.4_zhuyuan`）。
+  const register = (candidate: string | undefined, mountName: string) => {
+    addAlias(candidate, mountName);
+    addAlias(candidate === undefined ? undefined : mountAuthorityAlias(candidate), mountName);
+  };
+  for (const host of config.hosts) {
+    for (const candidate of legacyMountNames(host, config.host_aliases)) {
+      register(candidate, host.name);
+    }
+    // 上一版命名 `IP(账号)`，以及当前名字的转义形式。
+    register(`${host.ip}(${host.user})`, host.name);
+    addAlias(mountAuthorityAlias(host.name), host.name);
+  }
+  await rememberMountAliases(aliases);
+}
+
 /** Generate the configuration identifier used by the hierarchical view. */
 async function normalizeHierarchicalConfigNames(
   context: vscode.ExtensionContext, suppliedConfig?: BridgeConfig
@@ -3962,9 +4089,9 @@ async function normalizeHierarchicalConfigNames(
       usedNames.add(host.name);
       continue;
     }
-    // 配置名直接用 `IP(账号)`：界面上的主机节点（IP/别名）与账号节点合起来就是
-    // 这个名字，在 config.json 里按 IP 也一眼能对上。别名只作为主机节点的显示标签。
-    const baseName = `${host.ip}(${host.user})`;
+    // 配置名是 `主机名(账号)`：主机名取 ASCII 别名（如 `ls`），别名是中文或没配时
+    // 退回 IP；和界面上的主机节点 + 账号节点一一对应。
+    const baseName = mountNameFor(host, config.host_aliases);
     let nextName = baseName;
     let suffix = 2;
     while (usedNames.has(nextName) && nextName !== host.name) {
@@ -3975,6 +4102,7 @@ async function normalizeHierarchicalConfigNames(
     if (host.name !== nextName) renamed.set(host.name, nextName);
     host.name = nextName;
   }
+  await rememberMountRenames(renamed);
   if (renamed.size === 0) {
     // Parsing legacy configs derives mounts and their stable workspace IDs.
     // Persist them even when no host name needed renaming, otherwise the new
@@ -4409,14 +4537,15 @@ async function deleteHostGroup(group: HostGroupItem): Promise<void> {
   }
 }
 
-/** 「删除配置」入口：主机分组删整组，其余（账号/挂载）删自己那条配置。 */
+/**
+ * 「删除配置」入口：账号/挂载各删自己那条配置。
+ *
+ * 主机节点的整组删除是单独的命令（`safs.deleteHostGroup`，只在右键菜单里），
+ * 行内不放 🗑——它和 ＋ 挨着，点错就会删掉整个 IP 下的所有账号。
+ */
 async function deleteConfigItem(
-  element: MountConfig | HostConfig | HostGroupItem | UserItem
+  element: MountConfig | HostConfig | UserItem
 ): Promise<void> {
-  if ('type' in element && element.type === 'hostGroup') {
-    await deleteHostGroup(element);
-    return;
-  }
   await deleteConfig(mountForTreeElement(element));
 }
 
@@ -5232,6 +5361,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   vscodeContext = context;
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
+  // 旧配置名 → 当前配置名：改名后已保存的 safs:// 窗口/标签页仍然能打开。
+  for (const [from, to] of Object.entries(
+    context.globalState.get<Record<string, string>>(mountRenamesKey, {})
+  )) {
+    mountRenames.set(from, to);
+  }
+  setMountAliasResolver((mountName) => {
+    // 当前配置里的名字优先：别名只用来兜旧名字/转义 authority，绝不遮蔽真实挂载。
+    if (lastReadConfig?.mounts.some((mount) => mount.name === mountName)) return mountName;
+    return mountRenames.get(mountName) ?? mountName;
+  });
+  await guard(registerMountAliases);
+  // 先把配置名归一化（含历史命名迁移），再登记一次别名，最后把已打开窗口的
+  // safs:// 工作区 URI 换成当前名字——左下角远程指示器显示的就是这个 authority。
+  await guard(() => normalizeHierarchicalConfigNames(context));
+  await guard(registerMountAliases);
+  await guard(refreshRemoteWorkspaceNames);
   scheduleFirstProxyEnvironmentCheck(context);
   agentActivityStore = new AgentActivityStore(
     context.workspaceState, platformStateKey('agentActivity')
@@ -5489,9 +5635,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
     });
   });
-  command('openConfig', (focus) => openConfig(
-    (focus as ConfigFocus | undefined) ?? configFocusForElement(mountsTreeView?.selection[0])
-  ));
+  command('openConfig', (argument) => openConfig(configFocusForArgument(argument)));
   command('addRemoteDirectory', async () => {
     await addRemoteDirectoryConfig();
     tree.refresh();
@@ -5556,9 +5700,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('refreshExplorer', async () => tree.refresh());
   command('deleteConfigItem', async (mount) => {
-    await deleteConfigItem(
-      mount as MountConfig | HostConfig | HostGroupItem | UserItem
-    );
+    await deleteConfigItem(mount as MountConfig | HostConfig | UserItem);
+    tree.refresh();
+  });
+  command('deleteHostGroup', async (group) => {
+    await deleteHostGroup(group as HostGroupItem);
     tree.refresh();
   });
   command('openHistoryItem', async (item: HistoryItem) => {
@@ -5624,6 +5770,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await openTerminal(vscodeContext, mount, item.path, undefined, true);
   });
   command('deleteHistoryItem', async (item: HistoryItem) => {
+    // 删除同样要确认：同步中的条目删掉后就没法从视图里停了，所以顺手停掉。
+    const syncing = historySyncTask(item) !== undefined;
+    const confirmed = await vscode.window.showWarningMessage(
+      `确定删除历史记录"${item.path}"吗？`
+      + (syncing
+        ? '该目录正在同步，删除后会一并停止同步（本地/远程文件都不会删）。'
+        : '删除后会一并忘掉这组「本地 ↔ 远程」配对，下次同步按全新一次处理。'),
+      { modal: true },
+      '删除'
+    );
+    if (confirmed !== '删除') return;
+    if (syncing) await stopSync(item.mountName, item.path);
     await removeHistoryEntry(vscodeContext, item.mountName, item.path);
     // 条目没了就忘掉这组配对：之后是全新的一次同步。
     await removeSyncedDirectory(vscodeContext, item.mountName, item.path);

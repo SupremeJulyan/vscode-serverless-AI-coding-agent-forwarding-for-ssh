@@ -43,6 +43,9 @@ export function isNetworkFailure(error: unknown): boolean {
 
 /** 匹配配置原文中的 `"name": "<hostName>"` 字段（按 JSON 转义后的名字精确匹配）。 */
 function nameFieldMatch(content: string, hostName: string): RegExpExecArray | null {
+  // 名字来自命令参数/树节点，扩展边界上可能是任意值：不是非空字符串就当作没命中，
+  // 不要让 JSON.stringify(undefined) 的返回值再往下走。
+  if (typeof hostName !== 'string' || hostName === '') return null;
   const escapedName = JSON.stringify(hostName);
   const namePattern = new RegExp(
     `"name"\\s*:\\s*${escapedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`

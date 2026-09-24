@@ -61,7 +61,8 @@
     "onCommand:safs.openTerminalFromHistory",
     "onCommand:safs.deleteHistoryItem",
     "onCommand:safs.syncToLocal",
-    "onCommand:safs.syncToRemote"
+    "onCommand:safs.syncToRemote",
+    "onCommand:safs.deleteHostGroup"
   ],
   "contributes": {
     "commands": [
@@ -161,6 +162,11 @@
         "command": "safs.disableAiForwardItem",
         "title": "关闭 Agent 转发",
         "icon": "$(circle-slash)"
+      },
+      {
+        "command": "safs.deleteHostGroup",
+        "title": "删除主机的全部账号",
+        "icon": "$(trash)"
       },
       {
         "command": "safs.deleteConfigItem",
@@ -317,7 +323,7 @@
           "group": "inline@5"
         },
         {
-          "command": "safs.deleteConfigItem",
+          "command": "safs.deleteHostGroup",
           "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
           "group": "inline@6"
         },
@@ -494,7 +500,12 @@
             },
             "mode": {
               "type": "string",
-              "enum": ["content", "files", "count", "names"]
+              "enum": [
+                "content",
+                "files",
+                "count",
+                "names"
+              ]
             },
             "fixedStrings": {
               "type": "boolean"
@@ -509,12 +520,16 @@
             },
             "include": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "maxItems": 20
             },
             "excludeDirs": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "maxItems": 40
             }
           },
@@ -596,7 +611,10 @@
         },
         "safs.agentInterface": {
           "type": "string",
-          "enum": ["mcp", "cli"],
+          "enum": [
+            "mcp",
+            "cli"
+          ],
           "enumDescriptions": [
             "MCP (default): exposes the selected MCP tool profile and removes the mutually exclusive global CLI and SAFS Agent Skills.",
             "CLI only: installs the global SAFS CLI and Agent Skill, then copies a prompt for unregistering the mutually exclusive MCP entry."
@@ -607,7 +625,10 @@
         },
         "safs.agentMcpToolProfile": {
           "type": "string",
-          "enum": ["full", "core"],
+          "enum": [
+            "full",
+            "core"
+          ],
           "default": "full",
           "scope": "machine",
           "description": "Tool profile used only in mcp mode. core exposes workspace selection, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. Use the same setting in all windows and restart the Agent after changing it."

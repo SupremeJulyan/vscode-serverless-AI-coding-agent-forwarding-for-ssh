@@ -518,11 +518,17 @@ test('host items carry a delete button and every item can open the config', asyn
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
   const itemMenu = manifest.contributes?.menus?.['view/item/context'] ?? [];
+  const commands = manifest.contributes?.commands ?? [];
   const hostCondition = 'view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/';
+  // 主机节点的删除按钮就在行内（挨着 ＋ / 重命名），靠确认弹窗兜底。
   const hostDelete = itemMenu.find(
-    (item) => item.command === 'safs.deleteConfigItem' && item.when === hostCondition
+    (item) => item.command === 'safs.deleteHostGroup' && item.when === hostCondition
   );
   assert.equal(hostDelete?.group, 'inline@6');
+  assert.equal(
+    commands.find((item) => item.command === 'safs.deleteHostGroup')?.title,
+    '删除主机的全部账号'
+  );
   // 账号/挂载项原本就命中 safs.connection，主机项靠上面新增的一条补齐。
   assert.equal(
     itemMenu.some(
@@ -540,8 +546,13 @@ test('generates config names as IP(account) and migrates the old ones', async ()
     new URL('../src/extension.ts', import.meta.url), 'utf8'
   );
   // 两条命名路径：保存账号时立即生成，启动/配置变更时归一化旧名字。
-  assert.ok(extensionSource.includes('const generatedName = `${host.ip}(${normalizedUser})`;'));
-  assert.ok(extensionSource.includes('const baseName = `${host.ip}(${host.user})`;'));
+  assert.ok(extensionSource.includes(
+    'const generatedName = mountNameFor({ ...host, user: normalizedUser }, config.host_aliases);'
+  ));
+  assert.ok(extensionSource.includes('const baseName = mountNameFor(host, config.host_aliases);'));
+  // 改名后把已打开窗口的工作区 URI（左下角指示器）也换成新名字。
+  assert.ok(extensionSource.includes('await guard(refreshRemoteWorkspaceNames)'));
+  assert.ok(extensionSource.includes('vscode.workspace.updateWorkspaceFolders(index, 1, {'));
   // 改名后要跟着迁移的持久状态。
   const start = extensionSource.indexOf('async function normalizeHierarchicalConfigNames(');
   assert.notEqual(start, -1);
@@ -553,22 +564,57 @@ test('generates config names as IP(account) and migrates the old ones', async ()
   ]) {
     assert.ok(body.includes(store), `rename migration should cover ${store}`);
   }
+  // 改名后已保存的 safs:// URI 仍能打开：启动时装载映射并注入解析器。
+  assert.ok(extensionSource.includes('async function rememberMountAliases('));
+  assert.ok(extensionSource.includes('setMountAliasResolver((mountName) => {'));
+  assert.ok(extensionSource.includes('return mountRenames.get(mountName) ?? mountName;'));
+  assert.ok(body.includes('rememberMountRenames(renamed)'));
+  // 改名之前保存的 URI：按历史命名回推候选旧名。
+  assert.ok(extensionSource.includes('await guard(registerMountAliases)'));
+  assert.ok(extensionSource.includes('addAlias(mountAuthorityAlias(host.name), host.name);'));
+  assert.ok(extensionSource.includes('register(`${host.ip}(${host.user})`, host.name);'));
+  assert.ok(extensionSource.includes('mountAuthorityAlias(candidate)'));
+  assert.ok(extensionSource.includes('legacyMountNames(host, config.host_aliases)'));
+});
+
+test('every delete button confirms first', async () => {
+  const extensionSource = await readFile(
+    new URL('../src/extension.ts', import.meta.url), 'utf8'
+  );
+  // 主机分组删除 / 账号挂载删除 / 历史记录删除，都要先弹确认框。
+  assert.ok(extensionSource.includes('确定删除主机"${group.displayName}"的'));
+  assert.ok(extensionSource.includes('确定删除"${mount.name}"配置吗？'));
+  assert.ok(extensionSource.includes('确定删除历史记录"${item.path}"吗？'));
+  // 同步中的历史条目删掉后没法再停，所以一并停同步。
+  assert.ok(extensionSource.includes('if (syncing) await stopSync(item.mountName, item.path);'));
+  assert.equal(
+    extensionSource.includes("command('deleteHistoryItem', async (item: HistoryItem) => {\n    await removeHistoryEntry"),
+    false
+  );
 });
 
 test('打开配置 locates the selected tree item, and deleting a host removes all its accounts', async () => {
   const extensionSource = await readFile(
     new URL('../src/extension.ts', import.meta.url), 'utf8'
   );
-  // 标题栏命令没有参数时按 SAFS 视图当前选中项定位。
+  // 命令实参形状不一（树元素/元素数组/显式目标/无参），必须先判形再定位。
+  assert.ok(extensionSource.includes('configFocusForArgument(argument)'));
+  assert.ok(extensionSource.includes('Array.isArray(argument) ? argument[0] : argument'));
   assert.ok(extensionSource.includes('configFocusForElement(mountsTreeView?.selection[0])'));
-  assert.ok(extensionSource.includes('openConfig(focus'));
   assert.ok(extensionSource.includes('configEntryOffset(content, focus.name)'));
   assert.ok(extensionSource.includes('vscode.window.createTreeView(`${commandPrefix}.mounts`'));
+  // 主机节点的 ＋ 只追加账号，不再覆盖单账号主机。
+  assert.ok(extensionSource.includes('accountTargetIndex(config, requestedGroup'));
+  assert.equal(extensionSource.includes('groupHosts.length === 1'), false);
+  assert.ok(extensionSource.includes('更新已有账号'));
   // 主机分组删除：整组账号 + 各自的挂载配置。
   const start = extensionSource.indexOf('async function deleteHostGroup(');
   assert.notEqual(start, -1);
   const body = extensionSource.slice(start, extensionSource.indexOf('\nasync function ', start + 10));
   assert.ok(body.includes('for (const name of hostNames)'));
+  // 账号/挂载的删除只删自己那条，不再有"主机分组删整组"的分支。
+  assert.equal(extensionSource.includes("element.type === 'hostGroup') {\n    await deleteHostGroup"), false);
+  assert.ok(extensionSource.includes("command('deleteHostGroup', async (group) => {"));
   assert.ok(body.includes('removeMountConfig(config, name)'));
   assert.ok(body.includes('hostNames.filter((name) => enabled.delete(name))'));
 });

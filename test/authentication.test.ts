@@ -54,3 +54,11 @@ test('matches host names literally and still finds legacy mounts-only entries', 
   const mountsOnly = JSON.stringify({ mounts: [{ name: 'legacy', host: 'legacy' }] }, null, 2);
   assert.notEqual(configEntryOffset(mountsOnly, 'legacy'), undefined);
 });
+
+test('ignores a missing name instead of throwing on JSON.stringify(undefined)', () => {
+  const content = JSON.stringify({ hosts: [{ name: 'gkn' }] }, null, 2);
+  for (const name of [undefined, null, '', 42, {}]) {
+    assert.equal(configEntryOffset(content, name as unknown as string), undefined);
+    assert.equal(passwordValueOffset(content, name as unknown as string), undefined);
+  }
+});
