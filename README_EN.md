@@ -195,7 +195,10 @@ Right-click a file or directory in the Explorer:
 
 - **SAFS: Visual Download** downloads a remote file or directory locally, with recursive transfer, progress, and cancellation.
 - **SAFS: Visual Upload** uploads a local file or directory to a selected connection without requiring an open remote workspace.
-- **SAFS: Visual Sync** creates a local mirror of a remote directory and continuously performs incremental two-way local ↔ remote synchronization.
+- **SAFS: Sync to Local** (on a remote directory) is "visual download, then two-way sync": pick the local parent folder, download the whole tree into `<chosen folder>/<remote directory name>` as the initial baseline, and keep syncing incrementally in both directions. The synced directory is recorded in the SAFS view's history list, where the inline button starts the sync when idle and stops it while syncing.
+- **SAFS: Sync to Remote** (on a local folder) is "visual upload, then two-way sync": pick the remote mount and directory, upload the whole local folder into `<chosen directory>/<local directory name>`, and start two-way sync from the freshly uploaded remote state (nothing is downloaded back a second time, but remote-only content is still pulled down). The remote directory is recorded in the history list too.
+
+**One sync per directory is enough**: the history entry remembers where the local copy lives, and clicking it opens that copy. Syncing the same directory again prompts instead of transferring again — open the local copy, re-sync, or stop the running sync. Deleting the history entry forgets the pair, so the next sync starts from scratch.
 
 If a command-line tool or VS Code extension does not support `safs://`, use two-way sync. The synced workspace is a real local `file://` directory, so Git, language servers, build tools, and debuggers work normally. Local saves are uploaded automatically, and remote changes are pulled down.
 

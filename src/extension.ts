@@ -51,6 +51,7 @@ import { uploadRemoteTree } from './remote-upload';
 import { defaultSshClientIdent, ensureSshCapabilities } from './ssh-algorithms';
 import { SftpConnectionPool } from './sftp/connection-pool';
 import { RemoteSyncManager, RemoteSyncTask } from './remote-sync';
+import { scanRemote } from './sync-diff';
 import { SyncCoordinator } from './sync-coordination';
 import {
   remotePathForUri, RemoteFolder, RemoteFolderRegistry, SftpFileSystemProvider,
@@ -981,10 +982,11 @@ async function promptRemoteDirectory(
   session: import('./sftp/session').SftpSession,
   remoteRoot: string,
   currentPath: string,
-  mountName: string
+  mountName: string,
+  title = `打开远程目录：${mountName}`
 ): Promise<string | undefined> {
   const picker = vscode.window.createQuickPick<vscode.QuickPickItem>();
-  picker.title = `打开远程目录：${mountName}`;
+  picker.title = title;
   picker.placeholder = `输入路径，Tab 补全，回车进入`;
   picker.value = currentPath.endsWith('/') ? currentPath : `${currentPath}/`;
   // No items => no dropdown; completion is driven by the Tab keybinding.
@@ -1222,14 +1224,21 @@ function deferRestoreFollow(mountName: string): void {
   }, 1500);
 }
 
-// ---- 远程同步到本地 ----
+// ---- 可视化同步：远程 ↔ 本地镜像 ----
 
+/**
+ * 「SAFS：同步到本地」：远程目录/文件 → 本地镜像。
+ *
+ * 首次等价于"可视化下载 + 建立持续双向同步"：选本地父目录，镜像到
+ * `<所选目录>/<远程名>`，首次基线把远程整棵拉下来，之后持续双向增量同步。
+ * 同步过的目录（历史列表里的条目）再次执行时弹窗提示，可打开本地副本或重新同步。
+ */
 async function syncToLocal(uri?: vscode.Uri): Promise<void> {
   const resolvedUri = uri && uri.scheme === remoteFileSystemScheme
     ? uri
     : vscode.window.activeTextEditor?.document.uri;
   if (!resolvedUri || resolvedUri.scheme !== remoteFileSystemScheme) {
-    throw new Error('请先在远程文件/目录上右键使用“同步到本地”');
+    throw new Error('请先在远程文件/目录上右键使用“SAFS：同步到本地”');
   }
   const location = parseRemoteUri(resolvedUri.toString());
   const folder = registry.get(location.mountName);
@@ -1237,22 +1246,30 @@ async function syncToLocal(uri?: vscode.Uri): Promise<void> {
   const remotePath = remotePathForUri(folder, location.remotePath);
   const manager = syncManager;
   if (!manager) throw new Error('远程同步尚未就绪');
-  if (manager.has(location.mountName, remotePath)) {
-    const existingTask = manager.list().find(
-      (task) => task.mountName === location.mountName && task.remotePath === remotePath
+  const known = await knownSyncForRemote(location.mountName, remotePath);
+  if (known) {
+    bridgeOutput?.info(
+      `[同步] 该目录同步过或正在同步；mount=${location.mountName}；path=${remotePath}`
     );
-    bridgeOutput?.info(`[同步] 已在运行；mount=${location.mountName}；path=${remotePath}`);
-    const choice = await vscode.window.showInformationMessage('SAFS：该目录已在同步中。', '停止同步');
-    if (choice === '停止同步') {
-      await syncCoordinator?.requestStop(location.mountName, remotePath);
-      if (existingTask) {
-        await syncCoordinator?.clearReady(
-          location.mountName, remotePath, existingTask.localDir
-        );
+    const action = await promptRepeatSync(known.localDir, known.running);
+    if (action === 'open') {
+      if (!await openLocalMirror(known.localDir)) {
+        void vscode.window.showWarningMessage(`SAFS：本地副本已不存在：${known.localDir}`);
       }
-      manager.remove(location.mountName, remotePath);
-      saveSyncTasks();
+      return;
     }
+    if (action === 'stop') {
+      await stopSync(location.mountName, remotePath);
+      return;
+    }
+    if (action === 'cancel') return;
+    // 重新同步：停掉旧任务，沿用记住的本地副本重新走一遍下载与同步。
+    await stopSync(location.mountName, remotePath);
+    const resetLocalOnFirstSync = await confirmInitialSyncTarget(known.localDir);
+    if (resetLocalOnFirstSync === undefined) return;
+    await startSyncMirror(manager, {
+      mountName: location.mountName, remotePath, localDir: known.localDir, resetLocalOnFirstSync
+    });
     return;
   }
   const picked = await vscode.window.showOpenDialog({
@@ -1269,15 +1286,220 @@ async function syncToLocal(uri?: vscode.Uri): Promise<void> {
   const localTarget = path.join(picked[0].fsPath, baseName);
   const resetLocalOnFirstSync = await confirmInitialSyncTarget(localTarget);
   if (resetLocalOnFirstSync === undefined) return;
-  const task: RemoteSyncTask = {
-    mountName: location.mountName,
-    remotePath,
-    localDir: localTarget,
-    resetLocalOnFirstSync
+  await startSyncMirror(manager, {
+    mountName: location.mountName, remotePath, localDir: localTarget, resetLocalOnFirstSync
+  });
+}
+
+/**
+ * 「SAFS：同步到远程」：本地目录 → 远程镜像。
+ *
+ * 首次等价于"可视化上传 + 建立持续双向同步"：选远程目录，本地目录整棵上传到
+ * `<所选目录>/<本地目录名>`，再以刚上传的远程状态作为基线开启双向同步
+ * （不会把刚上传的内容重复下载回来，远程独有的内容仍会补齐到本地）。
+ */
+async function syncToRemote(uri?: vscode.Uri): Promise<void> {
+  const localFolder = await resolveLocalSyncFolder(uri);
+  if (!localFolder) throw new Error('请先在本地文件夹上右键使用“SAFS：同步到远程”');
+  const manager = syncManager;
+  if (!manager) throw new Error('远程同步尚未就绪');
+  const synced = await knownSyncForLocal(localFolder);
+  if (synced) {
+    bridgeOutput?.info(
+      `[同步] 本地目录同步过或正在同步；local=${localFolder}；`
+      + `remote=${synced.entry.mountName}:${synced.entry.remotePath}`
+    );
+    if (synced.covering) {
+      // 命中的是父目录的镜像：已经被同步覆盖，不重复建立嵌套任务。
+      const choice = await vscode.window.showInformationMessage(
+        `SAFS：该目录已包含在同步镜像 ${synced.entry.localDir} 中`
+        + `（↔ ${synced.entry.mountName}:${synced.entry.remotePath}）。`,
+        '打开副本'
+      );
+      if (choice === '打开副本') await openLocalMirror(localFolder);
+      return;
+    }
+    const action = await promptRepeatSync(synced.entry.localDir, synced.running);
+    if (action === 'open') {
+      await openLocalMirror(synced.entry.localDir);
+      return;
+    }
+    if (action === 'stop') {
+      await stopSync(synced.entry.mountName, synced.entry.remotePath);
+      return;
+    }
+    if (action === 'cancel') return;
+    await stopSync(synced.entry.mountName, synced.entry.remotePath);
+    await syncLocalTreeToRemote(
+      manager, localFolder, synced.entry.mountName,
+      path.posix.dirname(synced.entry.remotePath)
+    );
+    return;
+  }
+  const config = await readConfig();
+  const mount = await selectMount('选择要同步到的远程挂载');
+  if (!mount) return;
+  const resolved = resolveMount(config, mount);
+  requireConfiguredHostLogin(resolved.hostConfig);
+  const session = await pool.get(resolved.hostConfig.name);
+  const defaultDirectory = await session.realpath('.');
+  const picked = await promptRemoteDirectory(
+    session, '/', defaultDirectory, mount.name,
+    `同步到远程：选择 "${path.basename(localFolder)}" 上传到的远程目录`
+  );
+  if (!picked) return;
+  const parentDir = path.posix.normalize(
+    picked.startsWith('/') ? picked : path.posix.join(defaultDirectory, picked)
+  );
+  await syncLocalTreeToRemote(manager, localFolder, mount.name, parentDir);
+}
+
+/**
+ * 本地侧首次同步：整棵上传（= 可视化上传），再以刚上传的远程状态为基线开启
+ * 双向同步。与"可视化上传"一致，本地目录整棵落在所选远程目录下（两侧同名）。
+ */
+async function syncLocalTreeToRemote(
+  manager: RemoteSyncManager, localDir: string, mountName: string, parentDir: string
+): Promise<boolean> {
+  const config = await readConfig();
+  const mount = config.mounts.find((candidate) => candidate.name === mountName);
+  if (!mount) throw new Error(`远程目录配置不存在：${mountName}`);
+  const resolved = resolveMount(config, mount);
+  requireConfiguredHostLogin(resolved.hostConfig);
+  const remotePath = path.posix.join(parentDir, path.basename(localDir));
+  // 同一个远程目录只能配一个本地副本：已经配给别的本地目录时不直接接管，
+  // 否则会把在跑的同步任务悄悄换成本地目录。
+  const paired = await knownSyncForRemote(mountName, remotePath);
+  if (paired && path.resolve(paired.localDir) !== path.resolve(localDir)) {
+    bridgeOutput?.info(
+      `[同步] 远程目录已配对；mount=${mountName}；remote=${remotePath}；paired=${paired.localDir}`
+    );
+    const buttons = paired.running ? ['打开副本', '停止同步', '取消'] : ['打开副本', '取消'];
+    const choice = await vscode.window.showWarningMessage(
+      `SAFS：远程目录 ${remotePath} 已与本地目录 ${paired.localDir} 同步。`
+      + '同一个远程目录只能配一个本地副本；要改配对请先删除对应的历史条目。',
+      { modal: true },
+      ...buttons
+    );
+    if (choice === '打开副本') {
+      if (!await openLocalMirror(paired.localDir)) {
+        void vscode.window.showWarningMessage(`SAFS：本地副本已不存在：${paired.localDir}`);
+      }
+    } else if (choice === '停止同步') {
+      await stopSync(mountName, remotePath);
+    }
+    return false;
+  }
+  bridgeOutput?.info(
+    `[同步] 本地侧发起；mount=${mountName}；remote=${remotePath}；local=${localDir}`
+  );
+  const uploaded = await visualUpload([vscode.Uri.file(localDir)], mountName, parentDir);
+  if (!uploaded) return false;
+  const session = await pool.get(resolved.hostConfig.name);
+  // 上传后的远程状态即基线：基线扫描不会再下载一遍刚上传的内容，但会补下
+  // 远程独有的文件，之后照常双向增量同步。
+  const fingerprintLines = await scanRemote(session, remotePath);
+  return startSyncMirror(manager, { mountName, remotePath, localDir, fingerprintLines });
+}
+
+/** 建立/恢复同步任务；只有真正同步完成才写入历史列表与配对表。 */
+async function startSyncMirror(
+  manager: RemoteSyncManager, task: RemoteSyncTask
+): Promise<boolean> {
+  await syncCoordinator?.clearReady(task.mountName, task.remotePath, task.localDir);
+  await syncCoordinator?.clearStop(task.mountName, task.remotePath);
+  if (!await startRemoteSyncWithProgress(manager, task)) return false;
+  // 同步完成的目录进入历史列表：SAFS 视图里立刻出现该节点与同步按钮，
+  // 不依赖这个远程目录此前是否被打开过；配对表记住本地副本供"打开副本"使用。
+  await recordDirectoryHistory(vscodeContext, task.mountName, task.remotePath);
+  await recordSyncedDirectory(vscodeContext, {
+    mountName: task.mountName, remotePath: task.remotePath, localDir: task.localDir
+  });
+  refreshTree();
+  return true;
+}
+
+/** 该远程目录是否同步过/正在同步：配对表为准，重载恢复的旧任务兜底。 */
+async function knownSyncForRemote(
+  mountName: string, remotePath: string
+): Promise<{ localDir: string; running: boolean } | undefined> {
+  const running = syncManager?.list().find(
+    (task) => task.mountName === mountName && task.remotePath === remotePath
+  );
+  const synced = await findSyncedDirectory(vscodeContext, mountName, remotePath);
+  const localDir = synced?.localDir ?? running?.localDir;
+  return localDir ? { localDir, running: running !== undefined } : undefined;
+}
+
+/** 该本地目录是否同步过/正在同步：配对表为准，重载恢复的旧任务兜底。 */
+async function knownSyncForLocal(
+  localDir: string
+): Promise<{ entry: SyncedDirectory; running: boolean; covering: boolean } | undefined> {
+  const synced = await findSyncedDirectoryByLocal(vscodeContext, localDir);
+  const task = syncTaskForLocalPath(localDir);
+  if (!synced && !task) return undefined;
+  if (synced) {
+    return { ...synced, running: syncManager?.has(synced.entry.mountName, synced.entry.remotePath) ?? false };
+  }
+  return {
+    entry: { mountName: task!.mountName, remotePath: task!.remotePath, localDir: task!.localDir },
+    running: true,
+    covering: path.resolve(task!.localDir) !== path.resolve(localDir)
   };
-  await syncCoordinator?.clearReady(location.mountName, remotePath, localTarget);
-  await syncCoordinator?.clearStop(location.mountName, remotePath);
-  if (!await startRemoteSyncWithProgress(manager, task)) return;
+}
+
+/**
+ * 重复同步提示：同一个目录"执行一次就行"。本地副本还在时提供打开副本；
+ * 同步仍在进行时提供停止同步（模态弹窗按 ESC 即取消）。
+ */
+async function promptRepeatSync(
+  localDir: string, running: boolean
+): Promise<'open' | 'resync' | 'stop' | 'cancel'> {
+  const exists = (await stat(localDir).catch(() => undefined)) !== undefined;
+  const buttons = running
+    ? ['打开副本', '重新同步', '停止同步']
+    : exists ? ['打开副本', '重新同步', '取消'] : ['重新同步', '取消'];
+  const choice = await vscode.window.showInformationMessage(
+    running
+      ? `SAFS：该目录正在同步中（本地副本：${localDir}）。`
+      : `SAFS：该目录已在历史列表中，同步过一次了（本地副本：${localDir}）。`,
+    { modal: true },
+    ...buttons
+  );
+  if (choice === '打开副本') return 'open';
+  if (choice === '重新同步') return 'resync';
+  return choice === '停止同步' ? 'stop' : 'cancel';
+}
+
+/** 打开同步目录的本地副本；目录已不存在时返回 false，由调用方回退到远程。 */
+async function openLocalMirror(localDir: string): Promise<boolean> {
+  if (!await stat(localDir).catch(() => undefined)) return false;
+  await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(localDir), true);
+  return true;
+}
+
+/** 停止并清理一个同步任务（远程侧与本地侧入口共用）。 */
+async function stopSync(mountName: string, remotePath: string): Promise<void> {
+  const existingTask = syncManager?.list().find(
+    (task) => task.mountName === mountName && task.remotePath === remotePath
+  );
+  await syncCoordinator?.requestStop(mountName, remotePath);
+  if (existingTask) {
+    await syncCoordinator?.clearReady(mountName, remotePath, existingTask.localDir);
+  }
+  syncManager?.remove(mountName, remotePath);
+  saveSyncTasks();
+}
+
+/** 解析本地同步目标：右键目录取自身，右键文件取所在目录。 */
+async function resolveLocalSyncFolder(uri?: vscode.Uri): Promise<string | undefined> {
+  const active = uri ? undefined : vscode.window.activeTextEditor?.document.uri;
+  const candidate = uri?.scheme === 'file' ? uri.fsPath
+    : active?.scheme === 'file' ? active.fsPath : undefined;
+  if (!candidate) return undefined;
+  const candidateStat = await stat(candidate).catch(() => undefined);
+  if (candidateStat?.isDirectory()) return candidate;
+  return candidateStat?.isFile() ? path.dirname(candidate) : undefined;
 }
 
 async function confirmInitialSyncTarget(localDir: string): Promise<boolean | undefined> {
@@ -1301,24 +1523,27 @@ async function enableHistorySync(item: HistoryItem): Promise<void> {
     '开启同步'
   );
   if (confirmed !== '开启同步') return;
-  const picked = await vscode.window.showOpenDialog({
-    title: '选择同步目标目录',
-    canSelectFolders: true,
-    canSelectMany: false,
-    openLabel: '选择目录',
-    defaultUri: vscode.Uri.file(os.homedir())
-  });
-  if (!picked?.length) return;
   const manager = syncManager;
   if (!manager) throw new Error('远程同步尚未就绪');
-  const localDir = path.join(picked[0].fsPath, path.posix.basename(item.path));
+  // 同步过的目录已经记住本地副本，不再让用户重复挑一遍目录。
+  const synced = await findSyncedDirectory(vscodeContext, item.mountName, item.path);
+  let localDir = synced?.localDir;
+  if (!localDir) {
+    const picked = await vscode.window.showOpenDialog({
+      title: '选择同步目标目录',
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: '选择目录',
+      defaultUri: vscode.Uri.file(os.homedir())
+    });
+    if (!picked?.length) return;
+    localDir = path.join(picked[0].fsPath, path.posix.basename(item.path));
+  }
   const resetLocalOnFirstSync = await confirmInitialSyncTarget(localDir);
   if (resetLocalOnFirstSync === undefined) return;
-  await syncCoordinator?.clearReady(item.mountName, item.path, localDir);
-  await syncCoordinator?.clearStop(item.mountName, item.path);
-  if (!await startRemoteSyncWithProgress(manager, {
+  await startSyncMirror(manager, {
     mountName: item.mountName, remotePath: item.path, localDir, resetLocalOnFirstSync
-  })) return;
+  });
 }
 
 async function disableHistorySync(item: HistoryItem): Promise<void> {
@@ -3618,6 +3843,79 @@ async function removeHistoryEntry(
   }
 }
 
+const syncedDirectoriesKey = platformStateKey('syncedDirectories');
+
+/**
+ * 同步过的目录配对：历史条目据此记住本地副本在哪，也据此识别"重复同步"。
+ * 停止同步（关闭本地同步）不清除配对——条目仍然要能打开本地副本；
+ * 只有删除历史条目时才一起清掉。
+ */
+interface SyncedDirectory {
+  mountName: string;
+  remotePath: string;
+  /** 本地镜像目录。 */
+  localDir: string;
+}
+
+async function getSyncedDirectories(
+  context: vscode.ExtensionContext
+): Promise<SyncedDirectory[]> {
+  return context.globalState.get<SyncedDirectory[]>(syncedDirectoriesKey, []);
+}
+
+async function recordSyncedDirectory(
+  context: vscode.ExtensionContext, entry: SyncedDirectory
+): Promise<void> {
+  const entries = await getSyncedDirectories(context);
+  const next = entries.filter((candidate) =>
+    candidate.mountName !== entry.mountName || candidate.remotePath !== entry.remotePath);
+  next.unshift(entry);
+  await context.globalState.update(syncedDirectoriesKey, next);
+}
+
+async function findSyncedDirectory(
+  context: vscode.ExtensionContext, mountName: string, remotePath: string
+): Promise<SyncedDirectory | undefined> {
+  return syncedDirectoryFor(context, mountName, remotePath);
+}
+
+/** 配对表的同步读取：globalState 本身是内存态，树视图构建时可以不等 Promise。 */
+function syncedDirectoryFor(
+  context: vscode.ExtensionContext, mountName: string, remotePath: string
+): SyncedDirectory | undefined {
+  return context.globalState.get<SyncedDirectory[]>(syncedDirectoriesKey, []).find(
+    (entry) => entry.mountName === mountName && entry.remotePath === remotePath
+  );
+}
+
+/** 按本地路径找配对：精确命中优先，其次是最具体的包含它的镜像（子目录）。 */
+async function findSyncedDirectoryByLocal(
+  context: vscode.ExtensionContext, localDir: string
+): Promise<{ entry: SyncedDirectory; covering: boolean } | undefined> {
+  const resolved = path.resolve(localDir);
+  const best = (await getSyncedDirectories(context))
+    .map((entry) => ({ entry, root: path.resolve(entry.localDir) }))
+    .filter(({ root }) => {
+      const relative = path.relative(root, resolved);
+      return relative === '' || (!relative.startsWith(`..${path.sep}`)
+        && relative !== '..' && !path.isAbsolute(relative));
+    })
+    .sort((left, right) => right.root.length - left.root.length)[0];
+  return best ? { entry: best.entry, covering: best.root !== resolved } : undefined;
+}
+
+async function removeSyncedDirectory(
+  context: vscode.ExtensionContext, mountName: string, remotePath: string
+): Promise<void> {
+  const entries = await getSyncedDirectories(context);
+  const next = entries.filter(
+    (entry) => entry.mountName !== mountName || entry.remotePath !== remotePath
+  );
+  if (next.length !== entries.length) {
+    await context.globalState.update(syncedDirectoriesKey, next);
+  }
+}
+
 /** Generate the configuration identifier used by the hierarchical view. */
 async function normalizeHierarchicalConfigNames(
   context: vscode.ExtensionContext, suppliedConfig?: BridgeConfig
@@ -3689,6 +3987,15 @@ async function normalizeHierarchicalConfigNames(
   }));
   if (JSON.stringify(syncTasks) !== JSON.stringify(migratedSyncTasks)) {
     await context.globalState.update(syncTasksKey, migratedSyncTasks);
+  }
+
+  const syncedDirectories = await getSyncedDirectories(context);
+  const migratedSyncedDirectories = syncedDirectories.map((entry) => ({
+    ...entry,
+    mountName: renamed.get(entry.mountName) ?? entry.mountName
+  }));
+  if (JSON.stringify(syncedDirectories) !== JSON.stringify(migratedSyncedDirectories)) {
+    await context.globalState.update(syncedDirectoriesKey, migratedSyncedDirectories);
   }
 }
 
@@ -3813,10 +4120,15 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
 
   private getHistoryTreeItem(item: HistoryItem): vscode.TreeItem {
     const treeItem = new vscode.TreeItem(item.path);
-    const syncing = historySyncTask(item) !== undefined;
-    treeItem.contextValue = `safs.history.${syncing ? 'syncEnabled' : 'syncDisabled'}`;
-    treeItem.iconPath = new vscode.ThemeIcon('folder');
-    treeItem.tooltip = `${item.path}`;
+    const syncTask = historySyncTask(item);
+    // 同步过的条目记住本地副本：图标与提示都标出这是镜像而不是普通书签。
+    const localDir = syncTask?.localDir
+      ?? syncedDirectoryFor(this.context, item.mountName, item.path)?.localDir;
+    treeItem.contextValue = `safs.history.${syncTask ? 'syncEnabled' : 'syncDisabled'}`;
+    treeItem.iconPath = new vscode.ThemeIcon(localDir ? 'sync' : 'folder');
+    treeItem.tooltip = localDir
+      ? `${item.path}\n本地副本：${localDir}\n点击打开本地副本。`
+      : item.path;
     treeItem.command = {
       command: 'safs.openHistoryItem',
       title: '打开历史目录',
@@ -5063,6 +5375,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   command('switchRemoteDirectory', switchRemoteDirectory);
   command('completeRemoteDirectory', completeRemoteDirectory);
   command('syncToLocal', (uri) => syncToLocal(uri as vscode.Uri | undefined));
+  command('syncToRemote', (uri) => syncToRemote(uri as vscode.Uri | undefined));
   command('visualDownload', (uri) => visualDownload(uri as vscode.Uri | undefined));
   command('visualUpload', (...args) => visualUpload(args as vscode.Uri[]));
   command('openTerminal', () => openTerminal(context, undefined, undefined, undefined, true));
@@ -5182,6 +5495,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       return;
     }
+    // 同步过的目录优先打开本地副本：历史条目记住的就是本地镜像。
+    const synced = await findSyncedDirectory(vscodeContext, item.mountName, item.path);
+    if (synced && await openLocalMirror(synced.localDir)) {
+      await recordDirectoryHistory(vscodeContext, item.mountName, item.path);
+      return;
+    }
     const config = await readConfig();
     const mount = config.mounts.find((m) => m.name === item.mountName);
     if (!mount) throw new Error(`远程目录配置不存在：${item.mountName}`);
@@ -5223,6 +5542,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('deleteHistoryItem', async (item: HistoryItem) => {
     await removeHistoryEntry(vscodeContext, item.mountName, item.path);
+    // 条目没了就忘掉这组配对：之后是全新的一次同步。
+    await removeSyncedDirectory(vscodeContext, item.mountName, item.path);
     tree.refresh();
   });
   command('enableAiForwardItem', async (mount) => {

@@ -410,15 +410,17 @@ test('manifest high-risk defaults are generated from the runtime rule set', asyn
   );
 });
 
-test('declares the visual download command and the renamed sync command', async () => {
+test('declares the visual download command and the two sync directions', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
   const download = commands.find((item) => item.command === 'safs.visualDownload');
   const sync = commands.find((item) => item.command === 'safs.syncToLocal');
+  const reverse = commands.find((item) => item.command === 'safs.syncToRemote');
   assert.equal(download?.title, 'SAFS：可视化下载');
-  assert.equal(sync?.title, 'SAFS：可视化同步');
+  assert.equal(sync?.title, 'SAFS：同步到本地');
+  assert.equal(reverse?.title, 'SAFS：同步到远程');
   const explorerMenu = manifest.contributes?.menus?.['explorer/context'] ?? [];
   assert.equal(
     explorerMenu.some((item) => item.command === 'safs.visualDownload'),
@@ -436,4 +438,77 @@ test('declares the visual upload command on local file/folder context menus', as
   const explorerMenu = manifest.contributes?.menus?.['explorer/context'] ?? [];
   const entry = explorerMenu.find((item) => item.command === 'safs.visualUpload');
   assert.equal(entry?.when, 'resourceScheme == file');
+});
+
+test('declares the two sync directions on the matching context menus', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  const explorerMenu = manifest.contributes?.menus?.['explorer/context'] ?? [];
+  const remote = explorerMenu.find(
+    (item) => item.command === 'safs.syncToLocal'
+  );
+  const local = explorerMenu.find((item) => item.command === 'safs.syncToRemote');
+  assert.equal(remote?.when, 'resourceScheme == safs');
+  assert.equal(local?.when, 'resourceScheme == file && explorerResourceIsFolder');
+});
+
+test('both sync directions transfer first and register the pair afterwards', async () => {
+  const extensionSource = await readFile(
+    new URL('../src/extension.ts', import.meta.url), 'utf8'
+  );
+  const bodyOf = (name: string): string => {
+    const start = extensionSource.indexOf(`async function ${name}(`);
+    assert.notEqual(start, -1, `missing ${name}`);
+    return extensionSource.slice(start, extensionSource.indexOf('\nasync function ', start + 10));
+  };
+  // 同步到远程 = 先可视化上传（整棵上传到 <所选目录>/<本地目录名>），
+  // 再以上传后的远程状态为基线开始双向同步。
+  const toRemote = bodyOf('syncLocalTreeToRemote');
+  assert.ok(toRemote.includes('visualUpload([vscode.Uri.file(localDir)], mountName, parentDir)'));
+  assert.ok(toRemote.includes('scanRemote(session, remotePath)'));
+  assert.ok(toRemote.includes('fingerprintLines'));
+  // 同步到本地保留"先整棵下载"的首次基线（远端为准），随后建立双向同步。
+  const toLocal = bodyOf('syncToLocal');
+  assert.ok(toLocal.includes('confirmInitialSyncTarget('));
+  assert.ok(toLocal.includes('startSyncMirror(manager'));
+  // 两条路径都只有同步成功才写历史列表与配对表。
+  const mirror = bodyOf('startSyncMirror');
+  assert.ok(mirror.includes('recordDirectoryHistory(vscodeContext, task.mountName, task.remotePath)'));
+  assert.ok(mirror.includes('recordSyncedDirectory(vscodeContext'));
+  assert.ok(mirror.indexOf('if (!await startRemoteSyncWithProgress(manager, task)) return false;')
+    < mirror.indexOf('recordDirectoryHistory('));
+});
+
+test('repeating a sync for the same directory prompts instead of transferring again', async () => {
+  const extensionSource = await readFile(
+    new URL('../src/extension.ts', import.meta.url), 'utf8'
+  );
+  const start = extensionSource.indexOf('async function promptRepeatSync(');
+  assert.notEqual(start, -1);
+  const prompt = extensionSource.slice(
+    start, extensionSource.indexOf('\nasync function ', start + 10)
+  );
+  assert.ok(prompt.includes('该目录已在历史列表中，同步过一次了'));
+  assert.ok(prompt.includes("'打开副本', '重新同步'"));
+  // 两个方向都要先查配对表，命中即弹窗，不再直接搬运。
+  for (const entry of ['async function syncToLocal(', 'async function syncToRemote(']) {
+    const index = extensionSource.indexOf(entry);
+    assert.notEqual(index, -1, `missing ${entry}`);
+    const body = extensionSource.slice(index, extensionSource.indexOf('\nasync function ', index + 10));
+    assert.ok(body.includes('promptRepeatSync('), `${entry} should prompt on repeat`);
+  }
+  // 删除历史条目同时忘掉配对，之后是全新一次同步。
+  assert.ok(extensionSource.includes('removeSyncedDirectory(vscodeContext, item.mountName, item.path)'));
+});
+
+test('history sync buttons read 启动同步 when the directory is not syncing', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  const commands = manifest.contributes?.commands ?? [];
+  const enable = commands.find((item) => item.command === 'safs.enableHistorySync');
+  const disable = commands.find((item) => item.command === 'safs.disableHistorySync');
+  assert.equal(enable?.title, '启动同步');
+  assert.equal(disable?.title, '关闭本地同步');
 });

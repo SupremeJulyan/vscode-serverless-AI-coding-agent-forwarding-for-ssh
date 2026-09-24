@@ -59,7 +59,9 @@
     "onCommand:safs.enableHistorySync",
     "onCommand:safs.disableHistorySync",
     "onCommand:safs.openTerminalFromHistory",
-    "onCommand:safs.deleteHistoryItem"
+    "onCommand:safs.deleteHistoryItem",
+    "onCommand:safs.syncToLocal",
+    "onCommand:safs.syncToRemote"
   ],
   "contributes": {
     "commands": [
@@ -167,8 +169,13 @@
       },
       {
         "command": "safs.syncToLocal",
-        "title": "SAFS：可视化同步",
+        "title": "SAFS：同步到本地",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "safs.syncToRemote",
+        "title": "SAFS：同步到远程",
+        "icon": "$(cloud-upload)"
       },
       {
         "command": "safs.visualDownload",
@@ -182,7 +189,7 @@
       },
       {
         "command": "safs.enableHistorySync",
-        "title": "开启本地同步",
+        "title": "启动同步",
         "icon": "$(sync)"
       },
       {
@@ -375,6 +382,11 @@
           "command": "safs.visualUpload",
           "when": "resourceScheme == file",
           "group": "safs@1"
+        },
+        {
+          "command": "safs.syncToRemote",
+          "when": "resourceScheme == file && explorerResourceIsFolder",
+          "group": "safs@0"
         }
       ]
     },
