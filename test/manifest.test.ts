@@ -541,7 +541,7 @@ test('host items carry a delete button and every item can open the config', asyn
   assert.equal(openConfig?.when, 'view == safs.mounts && viewItem =~ /safs\\./');
 });
 
-test('generates config names as IP(account) and migrates the old ones', async () => {
+test('generates config names as host(account) and migrates the old ones', async () => {
   const extensionSource = await readFile(
     new URL('../src/extension.ts', import.meta.url), 'utf8'
   );
@@ -572,9 +572,9 @@ test('generates config names as IP(account) and migrates the old ones', async ()
   // 改名之前保存的 URI：按历史命名回推候选旧名。
   assert.ok(extensionSource.includes('await guard(registerMountAliases)'));
   assert.ok(extensionSource.includes('addAlias(mountAuthorityAlias(host.name), host.name);'));
-  assert.ok(extensionSource.includes('register(`${host.ip}(${host.user})`, host.name);'));
-  assert.ok(extensionSource.includes('mountAuthorityAlias(candidate)'));
-  assert.ok(extensionSource.includes('legacyMountNames(host, config.host_aliases)'));
+  assert.ok(extensionSource.includes('addAlias(mountAuthorityAlias(host.name), host.name);'));
+  assert.ok(extensionSource.includes('mountAliasCandidates(host, config.host_aliases)'));
+  assert.ok(extensionSource.includes('mountAliasCandidates(host, config.host_aliases)'));
 });
 
 test('every delete button confirms first', async () => {
@@ -607,6 +607,10 @@ test('打开配置 locates the selected tree item, and deleting a host removes a
   assert.ok(extensionSource.includes('accountTargetIndex(config, requestedGroup'));
   assert.equal(extensionSource.includes('groupHosts.length === 1'), false);
   assert.ok(extensionSource.includes('更新已有账号'));
+  // 删除配置后要清场：停同步任务、清历史目录与本地副本配对。
+  assert.ok(extensionSource.includes('async function forgetMountState('));
+  assert.ok(extensionSource.includes('await forgetMountState([mount.name]);'));
+  assert.ok(extensionSource.includes('await forgetMountState(hostNames);'));
   // 主机分组删除：整组账号 + 各自的挂载配置。
   const start = extensionSource.indexOf('async function deleteHostGroup(');
   assert.notEqual(start, -1);

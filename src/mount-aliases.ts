@@ -1,10 +1,11 @@
 import { HostConfig } from './config';
+import { legacyMountAuthorityAlias, mountAuthorityAlias } from './sftp/uri';
 
 /**
  * 主机节点的显示名：ASCII 别名优先，否则退回 IP。
  *
- * 别名只用于界面标签（主机节点、配置对话框标题），不参与配置命名：配置名由
- * `IP(账号)` 生成。
+ * 别名既用于界面标签（主机节点、配置对话框标题），也参与配置命名：配置名是
+ * `主机名(账号)`，主机名就是这里返回的标签（ASCII 别名，否则 IP）。
  */
 export function hierarchicalHostName(
   host: HostConfig, aliases?: Record<string, string>
@@ -16,7 +17,7 @@ export function hierarchicalHostName(
 /**
  * 配置名：`主机名(账号)`，主机名取 ASCII 别名，别名是中文（或没配）时用 IP。
  *
- * 例：别名 `ls` + 账号 `zhuyuan` → `ls(zhuyuan)`；别名「工业云」→ `10.38.36.8(yewenlong)`。
+ * 例：别名 `ws1` + 账号 `alice` → `ws1(alice)`；别名是中文（如「测试主机」）时用 IP → `192.0.2.30(carol)`。
  */
 export function mountNameFor(
   host: HostConfig, aliases?: Record<string, string>
@@ -44,4 +45,25 @@ export function legacyMountNames(
     `${hostLabel}@${host.user}`,
     `${host.ip}@${host.user}`
   ])];
+}
+
+/**
+ * 该主机在历史命名与 URI 转义下可能出现过的所有名字（不含当前名字本身）。
+ *
+ * 已保存的 `safs://` URI（窗口、标签页、最近打开）里存的就是其中之一：VS Code 会把
+ * authority 里的括号编码成 `%28`，或者直接存成我们生成的转义形式（`ws1_alice`），
+ * 所以明文和转义两种形态都要收录，解析时才能找回当前配置名。
+ */
+export function mountAliasCandidates(
+  host: HostConfig, aliases?: Record<string, string>
+): string[] {
+  const current = mountNameFor(host, aliases);
+  const plain = [...legacyMountNames(host, aliases), `${host.ip}(${host.user})`]
+    .filter((name) => name !== current);
+  const escaped = [
+    ...plain.map((name) => mountAuthorityAlias(name)),
+    // 上一版（非单射）转义形式，已经存进窗口状态的 URI 就是它。
+    ...plain.map((name) => legacyMountAuthorityAlias(name))
+  ];
+  return [...new Set([...plain, ...escaped].filter((name): name is string => Boolean(name)))];
 }

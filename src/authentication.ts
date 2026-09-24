@@ -60,14 +60,27 @@ function nameFieldMatch(content: string, hostName: string): RegExpExecArray | nu
  * 所以一次全文匹配即可命中唯一的那条记录。
  */
 export function configEntryOffset(content: string, hostName: string): number | undefined {
-  return nameFieldMatch(content, hostName)?.index;
+  const match = nameFieldMatch(content, hostName);
+  if (!match) return undefined;
+  // 手工维护的配置可能同时有 mounts 数组：优先落在 hosts 里的那条记录上。
+  const hostsStart = content.search(/"hosts"\s*:/);
+  if (hostsStart < 0 || match.index >= hostsStart) return match.index;
+  const afterHosts = new RegExp(
+    `"name"\\s*:\\s*${JSON.stringify(hostName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'
+  );
+  afterHosts.lastIndex = hostsStart;
+  const preferred = afterHosts.exec(content);
+  return preferred ? preferred.index : match.index;
 }
 
 export function passwordValueOffset(content: string, hostName: string): number | undefined {
   const nameMatch = nameFieldMatch(content, hostName);
   if (!nameMatch) return undefined;
   const remainder = content.slice(nameMatch.index + nameMatch[0].length);
-  const passwordMatch = /"password"\s*:\s*"/.exec(remainder);
+  // 只在同一条记录里找：下一条记录的 "name" 就是边界，否则会跳到别人的密码行上。
+  const nextEntry = /"name"\s*:/.exec(remainder);
+  const record = nextEntry ? remainder.slice(0, nextEntry.index) : remainder;
+  const passwordMatch = /"password"\s*:\s*"/.exec(record);
   if (!passwordMatch) return undefined;
   return nameMatch.index + nameMatch[0].length + passwordMatch.index + passwordMatch[0].length;
 }

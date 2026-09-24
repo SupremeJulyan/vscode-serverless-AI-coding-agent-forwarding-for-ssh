@@ -123,6 +123,14 @@ export class RemoteFolderRegistry {
     this.folders.delete(mountName);
   }
 
+  /** 配置改名：连同文件夹记录挂到新名字下（hostName 也是连接键，一起换）。 */
+  rename(oldName: string, newName: string): void {
+    const folder = this.folders.get(oldName);
+    if (!folder || oldName === newName) return;
+    this.folders.delete(oldName);
+    this.folders.set(newName, { ...folder, mountName: newName, hostName: newName });
+  }
+
   values(): RemoteFolder[] {
     return [...this.folders.values()];
   }

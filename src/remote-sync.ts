@@ -106,12 +106,15 @@ export class RemoteSyncManager {
     private readonly releaseTask: (task: RemoteSyncTask) => Promise<void> = async () => undefined,
     private readonly markTaskReady: (task: RemoteSyncTask) => Promise<void> = async () => undefined,
     private readonly isStopRequested: (task: RemoteSyncTask) => Promise<boolean> = async () => false,
-    private readonly remoteScanIntervalMs = 5_000
+    private readonly remoteScanIntervalMs = 5_000,
+    /** 配置名可能被改名：解析成当前名字，避免任务抱着旧名字存活。 */
+    private readonly resolveMountName: (mountName: string) => string = (name) => name
   ) {}
 
   list(): RemoteSyncTask[] {
     return [...this.tasks.values()];
   }
+
 
   has(mountName: string, remotePath: string): boolean {
     return this.tasks.has(taskKey(mountName, remotePath));
@@ -170,6 +173,60 @@ export class RemoteSyncManager {
     monitor.unref?.();
     this.ownershipMonitors.set(key, monitor);
     await this.runBaseline(task, 0, options);
+  }
+
+  /**
+   * 配置改名：把任务连同所有按 taskKey 索引的状态重新挂到新名字下。
+   *
+   * 本地 watcher 的闭包捕获了旧 key，必须重建，否则改名后本地改动不再上传。
+   */
+  renameMount(oldName: string, newName: string): void {
+    if (oldName === newName) return;
+    const moves: Array<[string, string]> = [];
+    for (const [key, task] of this.tasks) {
+      if (task.mountName !== oldName) continue;
+      const next = taskKey(newName, task.remotePath);
+      moves.push([key, next]);
+      task.mountName = newName;
+    }
+    if (moves.length === 0) return;
+    for (const [oldKey, newKey] of moves) {
+      const task = this.tasks.get(oldKey)!;
+      this.tasks.delete(oldKey);
+      this.tasks.set(newKey, task);
+      if (this.readyTasks.delete(oldKey)) this.readyTasks.add(newKey);
+      if (this.ownedTasks.delete(oldKey)) this.ownedTasks.add(newKey);
+      for (const map of [
+        this.watchers, this.baselineTimers, this.pendingAcquireTimers,
+        this.remoteScanTimers, this.ownershipMonitors
+      ] as Array<Map<string, unknown>>) {
+        if (map.has(oldKey)) {
+          map.set(newKey, map.get(oldKey));
+          map.delete(oldKey);
+        }
+      }
+      // 闭包里带旧 key 的 watcher 与监控定时器重建。
+      this.watchers.get(newKey)?.dispose?.();
+      this.watchers.delete(newKey);
+      if (this.readyTasks.has(newKey)) this.startLocalWatcher(task);
+      const monitor = this.ownershipMonitors.get(newKey);
+      if (monitor && typeof monitor === 'object' && 'unref' in (monitor as object)) {
+        // ownership monitor 的闭包同样捕获了旧 key，重建一个。
+        clearInterval(monitor as NodeJS.Timeout);
+        this.ownershipMonitors.delete(newKey);
+        const rebuilt = setInterval(() => {
+          void this.isStopRequested(task).then((stopped) => {
+            if (stopped && this.tasks.get(taskKey(task.mountName, task.remotePath)) === task) {
+              this.remove(task.mountName, task.remotePath);
+            }
+          });
+        }, 1_000);
+        rebuilt.unref?.();
+        this.ownershipMonitors.set(newKey, rebuilt);
+      }
+      this.log(`同步任务改名：${oldKey.split('\0')[0]} → ${newName}（${task.remotePath}）`);
+    }
+    this.onTaskChanged(true);
   }
 
   remove(mountName: string, remotePath: string): void {
@@ -334,7 +391,7 @@ export class RemoteSyncManager {
   ): Promise<boolean> {
     if (showStatus) this.status(`正在同步: ${task.remotePath} → ${task.localDir}`);
     try {
-      const session = await this.getSession(task.mountName);
+      const session = await this.getSession(this.resolveMountName(task.mountName));
       options.onProgress?.({
         phase: 'scanning', completedFiles: 0, totalFiles: 0,
         transferredBytes: 0, totalBytes: 0

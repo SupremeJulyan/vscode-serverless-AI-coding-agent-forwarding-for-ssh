@@ -18,7 +18,9 @@ import {
   BridgeConfig, deriveMounts, ensureConfigFile, expandHome, HostConfig, loadConfig, MountConfig,
   parseSshLogin, removeMountConfig, resolveMount, saveConfig
 } from './config';
-import { hierarchicalHostName, legacyMountNames, mountNameFor } from './mount-aliases';
+import {
+  hierarchicalHostName, mountAliasCandidates, mountNameFor
+} from './mount-aliases';
 import { ConfigFocus, isConfigFocus } from './config-focus';
 import { accountTargetIndex } from './host-accounts';
 import { decryptPassword, encryptPassword, isEncryptedPassword } from './password';
@@ -258,7 +260,9 @@ function updateSafsStatusBar(
 
 let syncManager: RemoteSyncManager | undefined;
 let syncCoordinator: SyncCoordinator | undefined;
-const syncTasksKey = 'safs.syncTasks';
+const syncTasksKey = platformStateKey('syncTasks');
+/** 旧版未按平台分键的同步任务键，启动时迁移一次。 */
+const legacySyncTasksKey = 'safs.syncTasks';
 
 function saveSyncTasks(persist = true): void {
   if (!syncManager) return;
@@ -268,7 +272,9 @@ function saveSyncTasks(persist = true): void {
       syncManager.list().map(({
         mountName, remotePath, localDir, isFile, fingerprintLines, resetLocalOnFirstSync
       }) => ({
-        mountName, remotePath, localDir, isFile, fingerprintLines, resetLocalOnFirstSync
+        // 配置改过名的话存当前名字，别把旧名字写回去。
+        mountName: mountRenames.get(mountName) ?? mountName,
+        remotePath, localDir, isFile, fingerprintLines, resetLocalOnFirstSync
       }))
     );
   }
@@ -277,9 +283,13 @@ function saveSyncTasks(persist = true): void {
 }
 
 function historySyncTask(item: HistoryItem): RemoteSyncTask | undefined {
-  return syncManager?.list().find(
-    (task) => task.mountName === item.mountName && task.remotePath === item.path
-  );
+  const matches = (task: RemoteSyncTask) =>
+    task.mountName === item.mountName && task.remotePath === item.path;
+  const live = syncManager?.list().find(matches);
+  if (live) return live;
+  // 其它窗口启动的同步任务本窗口的 manager 里没有：按持久化的列表兜底，
+  // 否则历史条目的按钮状态会错，删除时也不会去停真正在跑的任务。
+  return vscodeContext?.globalState.get<RemoteSyncTask[]>(syncTasksKey, []).find(matches);
 }
 
 /** 找到包含指定本地路径的最具体同步任务。 */
@@ -1293,6 +1303,19 @@ async function syncToLocal(uri?: vscode.Uri): Promise<void> {
   // 本地目标：远程目录 → 所选目录下的同名子目录；远程文件 → 同名文件。
   const baseName = path.posix.basename(remotePath);
   const localTarget = path.join(picked[0].fsPath, baseName);
+  // 同一个本地目录只能当一个远程目录的镜像（与「同步到远程」对称）。
+  const claimed = await findSyncedDirectoryByLocal(vscodeContext, localTarget);
+  if (claimed && (claimed.entry.mountName !== location.mountName
+    || claimed.entry.remotePath !== remotePath)) {
+    const choice = await vscode.window.showWarningMessage(
+      `SAFS：本地目录 ${localTarget} 已用于同步 ${claimed.entry.mountName}:${claimed.entry.remotePath}。`
+      + '请另选一个本地目录，或先删除对应的历史条目。',
+      { modal: true },
+      '打开副本'
+    );
+    if (choice === '打开副本') await openLocalMirror(claimed.entry.localDir);
+    return;
+  }
   const resetLocalOnFirstSync = await confirmInitialSyncTarget(localTarget);
   if (resetLocalOnFirstSync === undefined) return;
   await startSyncMirror(manager, {
@@ -1330,7 +1353,9 @@ async function syncToRemote(uri?: vscode.Uri): Promise<void> {
     }
     const action = await promptRepeatSync(synced.entry.localDir, synced.running);
     if (action === 'open') {
-      await openLocalMirror(synced.entry.localDir);
+      if (!await openLocalMirror(synced.entry.localDir)) {
+        void vscode.window.showWarningMessage(`SAFS：本地副本已不存在：${synced.entry.localDir}`);
+      }
       return;
     }
     if (action === 'stop') {
@@ -1408,16 +1433,17 @@ async function syncLocalTreeToRemote(
   // 上传后的远程状态即基线：基线扫描不会再下载一遍刚上传的内容，但会补下
   // 远程独有的文件，之后照常双向增量同步。
   const fingerprintLines = await scanRemote(session, remotePath);
-  return startSyncMirror(manager, { mountName, remotePath, localDir, fingerprintLines });
+  // 本地侧发起：进度标题用"同步到远程"，与先可视化上传的方向一致。
+  return startSyncMirror(manager, { mountName, remotePath, localDir, fingerprintLines }, true);
 }
 
 /** 建立/恢复同步任务；只有真正同步完成才写入历史列表与配对表。 */
 async function startSyncMirror(
-  manager: RemoteSyncManager, task: RemoteSyncTask
+  manager: RemoteSyncManager, task: RemoteSyncTask, remoteDirection = false
 ): Promise<boolean> {
   await syncCoordinator?.clearReady(task.mountName, task.remotePath, task.localDir);
   await syncCoordinator?.clearStop(task.mountName, task.remotePath);
-  if (!await startRemoteSyncWithProgress(manager, task)) return false;
+  if (!await startRemoteSyncWithProgress(manager, task, remoteDirection)) return false;
   // 同步完成的目录进入历史列表：SAFS 视图里立刻出现该节点与同步按钮，
   // 不依赖这个远程目录此前是否被打开过；配对表记住本地副本供"打开副本"使用。
   await recordDirectoryHistory(vscodeContext, task.mountName, task.remotePath);
@@ -1435,7 +1461,7 @@ async function knownSyncForRemote(
   const running = syncManager?.list().find(
     (task) => task.mountName === mountName && task.remotePath === remotePath
   );
-  const synced = await findSyncedDirectory(vscodeContext, mountName, remotePath);
+  const synced = syncedDirectoryFor(vscodeContext, mountName, remotePath);
   const localDir = synced?.localDir ?? running?.localDir;
   return localDir ? { localDir, running: running !== undefined } : undefined;
 }
@@ -1496,8 +1522,8 @@ async function stopSync(mountName: string, remotePath: string): Promise<void> {
   if (existingTask) {
     await syncCoordinator?.clearReady(mountName, remotePath, existingTask.localDir);
   }
+  // manager.remove 会通过 onTaskChanged 持久化并刷新视图，这里不用再存一次。
   syncManager?.remove(mountName, remotePath);
-  saveSyncTasks();
 }
 
 /** 解析本地同步目标：右键目录取自身，右键文件取所在目录。 */
@@ -1535,7 +1561,7 @@ async function enableHistorySync(item: HistoryItem): Promise<void> {
   const manager = syncManager;
   if (!manager) throw new Error('远程同步尚未就绪');
   // 同步过的目录已经记住本地副本，不再让用户重复挑一遍目录。
-  const synced = await findSyncedDirectory(vscodeContext, item.mountName, item.path);
+  const synced = syncedDirectoryFor(vscodeContext, item.mountName, item.path);
   let localDir = synced?.localDir;
   if (!localDir) {
     const picked = await vscode.window.showOpenDialog({
@@ -1555,11 +1581,9 @@ async function enableHistorySync(item: HistoryItem): Promise<void> {
   });
 }
 
+/** 「关闭本地同步」：停止并清理该条目的同步任务（与其它入口共用 stopSync）。 */
 async function disableHistorySync(item: HistoryItem): Promise<void> {
-  await syncCoordinator?.requestStop(item.mountName, item.path);
-  const task = historySyncTask(item);
-  syncManager?.remove(item.mountName, item.path);
-  if (task) await syncCoordinator?.clearReady(item.mountName, item.path, task.localDir);
+  await stopSync(item.mountName, item.path);
 }
 
 // ---- SAFS：可视化下载（大文件流式 + 进度 + 可取消） ----
@@ -1579,14 +1603,15 @@ function showTransferCompleted(message: string): void {
 }
 
 async function startRemoteSyncWithProgress(
-  manager: RemoteSyncManager, task: RemoteSyncTask
+  manager: RemoteSyncManager, task: RemoteSyncTask, remoteDirection = false
 ): Promise<boolean> {
   bridgeOutput?.info(
     `[同步] 开始；mount=${task.mountName}；remote=${task.remotePath}；local=${task.localDir}`
   );
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: 'SAFS：正在同步到本地',
+    // 两个方向共用这套流程，标题按方向给（保持字面量，通知标题必须是短常量）。
+    title: remoteDirection ? 'SAFS：正在同步到远程' : 'SAFS：正在同步到本地',
     cancellable: true
   }, async (progress, token) => {
     const controller = new AbortController();
@@ -2873,7 +2898,8 @@ async function openConfig(focus?: ConfigFocus): Promise<void> {
   if (!focus) return;
   const content = document.getText();
   const offset = focus.kind === 'password'
-    ? passwordValueOffset(content, focus.name)
+    // 该条目没有 password 字段（私钥/未填）时退回条目本身，别什么都不做。
+    ? passwordValueOffset(content, focus.name) ?? configEntryOffset(content, focus.name)
     : configEntryOffset(content, focus.name);
   if (offset === undefined) return;
   const position = document.positionAt(offset);
@@ -3032,6 +3058,8 @@ async function addRemoteDirectoryConfig(): Promise<void> {
   else delete config.host_aliases;
   config.mounts = deriveMounts(config.hosts);
   await saveConfig(configPath(), config);
+  // 同步内存里的当前配置：别名解析要据此让真实存在的名字优先。
+  lastReadConfig = config;
   bridgeOutput?.info(`[配置] 已保存远程目录主机 ${normalizedName}`);
   void vscode.window.showInformationMessage(
     `SAFS：已登记主机"${normalizedName}"，请在新视图中点击主机旁的 + 补充账号。`
@@ -3060,7 +3088,7 @@ async function addHostCredentials(
     throw new Error(`IP 为 ${requestedGroup?.ip ?? requestedHost?.ip} 的 SSH 主机不存在`);
   }
   const hostDisplayName = hierarchicalHostName(host, config.host_aliases);
-  const title = hostDisplayName === host.name || host.name === host.ip
+  const title = hostDisplayName === host.name || hostDisplayName === host.ip
     ? `配置主机：${host.name}`
     : `配置主机：${host.name}（${hostDisplayName}）`;
   const user = await input({
@@ -3118,7 +3146,7 @@ async function addHostCredentials(
     const privateKeyPath = await input({
       title,
       prompt: 'SSH 私钥路径',
-      value: host.private_key_path || '~/.ssh/id_ed25519',
+      value: targetHost.private_key_path || '~/.ssh/id_ed25519',
       placeHolder: '例如 ~/.ssh/id_ed25519',
       validateInput: required('私钥路径')
     });
@@ -3127,6 +3155,7 @@ async function addHostCredentials(
     updated.private_key_path = privateKeyPath.trim();
   }
 
+  const previousName = index >= 0 ? config.hosts[index]?.name : undefined;
   if (index < 0) {
     index = config.hosts.length;
     config.hosts.push(updated);
@@ -3135,13 +3164,29 @@ async function addHostCredentials(
   }
   config.mounts = deriveMounts(config.hosts);
   await saveConfig(configPath(), config);
+  // 同步内存里的当前配置：别名解析要据此让真实存在的名字优先。
+  lastReadConfig = config;
+  if (previousName && previousName !== updated.name) {
+    // 这条记录改了名（例如刚补上账号的占位主机）：旧名字的窗口/历史/同步都要跟着搬。
+    const renamed = new Map([[previousName, updated.name]]);
+    await rememberMountRenames(renamed);
+    await applyMountRenames(renamed);
+    void refreshRemoteWorkspaceNames().catch(
+      (error) => logAsyncFailure('刷新远程工作区名称失败', error)
+    );
+  }
   bridgeOutput?.info(`[配置] 已保存主机登录配置 ${updated.name}（账号 ${updated.user}）`);
   void vscode.window.showInformationMessage(`SAFS：主机"${updated.name}"的登录配置已保存。`);
 }
 
 function requireConfiguredHostLogin(host: HostConfig): void {
   if (!host.user.trim()) {
-    throw new Error(`主机"${host.name}"尚未配置账号，请在新视图中点击主机旁的 +。`);
+    // 带上主机名：错误提示里的「打开配置」会定位到这条记录（没有 password 字段时退回条目行）。
+    throw new ConfigActionRequiredError(
+      `主机"${host.name}"尚未配置账号，请在新视图中点击主机旁的 +。`,
+      [addSshConfigAction, openConfigAction],
+      host.name
+    );
   }
 }
 
@@ -3774,7 +3819,6 @@ interface HostGroupItem {
   displayName: string;
 }
 
-type RemoteFolderViewMode = 'legacy' | 'hierarchical';
 type TreeElement = MountConfig | HostGroupItem | UserItem | HistoryItem;
 
 function mountForTreeElement(
@@ -3918,12 +3962,6 @@ async function recordSyncedDirectory(
   await context.globalState.update(syncedDirectoriesKey, next);
 }
 
-async function findSyncedDirectory(
-  context: vscode.ExtensionContext, mountName: string, remotePath: string
-): Promise<SyncedDirectory | undefined> {
-  return syncedDirectoryFor(context, mountName, remotePath);
-}
-
 /** 配对表的同步读取：globalState 本身是内存态，树视图构建时可以不等 Promise。 */
 function syncedDirectoryFor(
   context: vscode.ExtensionContext, mountName: string, remotePath: string
@@ -4006,7 +4044,9 @@ async function refreshRemoteWorkspaceNames(): Promise<void> {
     } catch {
       continue;
     }
-    const desired = vscode.Uri.parse(remoteUri(location.mountName, folder.uri.path));
+    // 只换 authority，路径/query 原样保留：不依赖 vscode.Uri.path 的编码约定。
+    const authority = mountAuthorityAlias(location.mountName) ?? location.mountName;
+    const desired = folder.uri.with({ authority });
     if (desired.toString() === folder.uri.toString()) continue;
     bridgeOutput?.info(
       `[工作区] 远程配置名已更新：${folder.uri.authority} → ${desired.authority}`
@@ -4033,10 +4073,31 @@ async function refreshRemoteWorkspaceNames(): Promise<void> {
 }
 
 /**
+ * 会话中途改名的收尾：registry / pool / 同步任务都以配置名为键，只改 config.json
+ * 会让已打开的远程目录和正在跑的同步抱着旧键失效，所以这里统一重挂，并给新键补一份
+ * ready 标记（协调文件是按名字哈希的，改名后旧标记对新键无效）。
+ */
+async function applyMountRenames(renamed: Map<string, string>): Promise<void> {
+  if (renamed.size === 0) return;
+  for (const [from, to] of renamed) {
+    registry.rename(from, to);
+    pool.rename(from, to);
+    const tasks = (syncManager?.list() ?? []).filter((task) => task.mountName === from);
+    syncManager?.renameMount(from, to);
+    for (const task of tasks) {
+      if (syncManager?.isReady(to, task.remotePath)) {
+        await syncCoordinator?.markReady(to, task.remotePath, task.localDir);
+      }
+      await syncCoordinator?.release(from, task.remotePath);
+    }
+  }
+}
+
+/**
  * 兼容已经保存的 `safs://` URI（窗口、标签页、最近打开），登记两类别名：
  *
  * - 历史命名规则下的旧配置名：`账号_别名`、`账号_IP`、`别名@账号`、`IP@账号`；
- * - 名字对应的 authority 转义形式（`10.68.0.1(zhuyuan)` → `10.68.0.1_zhuyuan`），
+ * - 名字对应的 authority 转义形式（`192.0.2.10(alice)` → `192.0.2.10_alice`），
  *   因为 VS Code 会把 URI query 里的 `=` 转义掉，`?mount=` 不保证取得到。
  *
  * 只登记当前不存在的名字，不会遮蔽任何现有配置。
@@ -4056,18 +4117,12 @@ async function registerMountAliases(): Promise<void> {
       aliases.set(candidate, mountName);
     }
   };
-  // 每个候选旧名都要登记两种形态：明文，以及 VS Code 存进窗口状态里的转义形式
-  // （`10.44.9.4(zhuyuan)` 与 `10.44.9.4_zhuyuan`）。
-  const register = (candidate: string | undefined, mountName: string) => {
-    addAlias(candidate, mountName);
-    addAlias(candidate === undefined ? undefined : mountAuthorityAlias(candidate), mountName);
-  };
   for (const host of config.hosts) {
-    for (const candidate of legacyMountNames(host, config.host_aliases)) {
-      register(candidate, host.name);
+    // 历史命名与上一版 `IP(账号)` 的明文/转义形态（见 mountAliasCandidates）。
+    for (const candidate of mountAliasCandidates(host, config.host_aliases)) {
+      addAlias(candidate, host.name);
     }
-    // 上一版命名 `IP(账号)`，以及当前名字的转义形式。
-    register(`${host.ip}(${host.user})`, host.name);
+    // 当前名字的 authority 转义形式：VS Code 存进窗口状态的就是它。
     addAlias(mountAuthorityAlias(host.name), host.name);
   }
   await rememberMountAliases(aliases);
@@ -4083,26 +4138,37 @@ async function normalizeHierarchicalConfigNames(
   })();
   const renamed = new Map<string, string>();
   const usedNames = new Set<string>();
+  /** 本轮已经发出去的名字：即使与某条记录自己的旧名相同也要加后缀，否则写出重名配置。 */
+  const claimed = new Set<string>();
 
   for (const host of config.hosts) {
     if (!host.user.trim()) {
       usedNames.add(host.name);
+      claimed.add(host.name);
       continue;
     }
-    // 配置名是 `主机名(账号)`：主机名取 ASCII 别名（如 `ls`），别名是中文或没配时
+    // 配置名是 `主机名(账号)`：主机名取 ASCII 别名（如 `ws1`），别名是中文或没配时
     // 退回 IP；和界面上的主机节点 + 账号节点一一对应。
     const baseName = mountNameFor(host, config.host_aliases);
     let nextName = baseName;
     let suffix = 2;
-    while (usedNames.has(nextName) && nextName !== host.name) {
+    while ((usedNames.has(nextName) && nextName !== host.name) || claimed.has(nextName)) {
       nextName = `${baseName}#${suffix}`;
       suffix += 1;
     }
     usedNames.add(nextName);
+    claimed.add(nextName);
     if (host.name !== nextName) renamed.set(host.name, nextName);
     host.name = nextName;
   }
   await rememberMountRenames(renamed);
+  await applyMountRenames(renamed);
+  if (renamed.size > 0) {
+    // 会话中途改名（重命名主机、增删账号）时，已打开窗口的 URI 也要立刻换掉。
+    void refreshRemoteWorkspaceNames().catch(
+      (error) => logAsyncFailure('刷新远程工作区名称失败', error)
+    );
+  }
   if (renamed.size === 0) {
     // Parsing legacy configs derives mounts and their stable workspace IDs.
     // Persist them even when no host name needed renaming, otherwise the new
@@ -4160,19 +4226,16 @@ async function normalizeHierarchicalConfigNames(
 class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
-  private viewMode: RemoteFolderViewMode;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     // The hierarchical view is the canonical view. Normalize legacy host
     // names on startup so restored configurations are immediately represented
     // by the new host/account tree.
-    this.viewMode = 'hierarchical';
+    // 分层视图是唯一视图（旧的分组/平铺切换已移除），上下文键供菜单 when 使用。
     void this.updateViewContext();
-    void normalizeHierarchicalConfigNames(this.context)
-      .then(() => this.refresh())
-      .catch((error) => {
-        bridgeOutput?.warn(`[配置] 启动时同步主机别名失败：${String(error)}`);
-      });
+    // 配置名归一化已在 activate 里 await 完成（改名+迁移都要先于窗口恢复），
+    // 这里只需要把结果画出来，避免每次激活把 config.json 重写两遍。
+    this.refresh();
   }
 
   refresh(): void {
@@ -4180,9 +4243,7 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
   }
 
   private async updateViewContext(): Promise<void> {
-    await vscode.commands.executeCommand(
-      'setContext', 'safs.hierarchicalView', this.viewMode === 'hierarchical'
-    );
+    await vscode.commands.executeCommand('setContext', 'safs.hierarchicalView', true);
   }
 
   getTreeItem(element: TreeElement): vscode.TreeItem {
@@ -4357,9 +4418,7 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
       await vscode.commands.executeCommand(
         'setContext', 'safs.hasNoMounts', config.mounts.length === 0
       );
-      return this.viewMode === 'hierarchical'
-        ? groupHostsByIp(config.hosts, config.host_aliases)
-        : config.mounts;
+      return groupHostsByIp(config.hosts, config.host_aliases);
     } catch {
       return [];
     }
@@ -4374,12 +4433,8 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     }
     if ('type' in element && element.type === 'history') {
       if (!lastReadConfig) return undefined;
-      if (this.viewMode === 'hierarchical') {
-        const host = lastReadConfig.hosts.find((candidate) => candidate.name === element.mountName);
-        return host ? { type: 'user', hostName: host.name, user: host.user } : undefined;
-      }
-      const mount = lastReadConfig.mounts.find((m) => m.name === element.mountName);
-      return mount ?? undefined;
+      const host = lastReadConfig.hosts.find((candidate) => candidate.name === element.mountName);
+      return host ? { type: 'user', hostName: host.name, user: host.user } : undefined;
     }
     return undefined;
   }
@@ -4485,6 +4540,30 @@ async function showStatus(): Promise<void> {
 
 // ---- Delete Config ----
 
+/**
+ * 配置被删掉之后清场：停掉它的同步任务、去掉历史目录与本地副本配对。
+ *
+ * 否则同步任务会留在全局状态里对着不存在的挂载按退避一直重试，而树上已经没有
+ * 这个节点、用户也没法再停它。
+ */
+async function forgetMountState(mountNames: string[]): Promise<void> {
+  for (const mountName of mountNames) {
+    for (const task of [...(syncManager?.list() ?? [])]) {
+      if (task.mountName === mountName) await stopSync(mountName, task.remotePath);
+    }
+    const history = await getDirectoryHistory(vscodeContext);
+    if (history[mountName]) {
+      delete history[mountName];
+      await vscodeContext.globalState.update(directoryHistoryKey, history);
+    }
+    for (const entry of await getSyncedDirectories(vscodeContext)) {
+      if (entry.mountName === mountName) {
+        await removeSyncedDirectory(vscodeContext, mountName, entry.remotePath);
+      }
+    }
+  }
+}
+
 async function deleteConfig(mount: MountConfig): Promise<void> {
   const connected = registry.get(mount.name) !== undefined;
   const confirmMessage = connected
@@ -4504,6 +4583,7 @@ async function deleteConfig(mount: MountConfig): Promise<void> {
   if (enabled.delete(mount.name)) {
     await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
   }
+  await forgetMountState([mount.name]);
 }
 
 /** 删除整个主机分组：同一 IP 下的所有账号（各带自己的挂载配置）一起删掉。 */
@@ -4535,13 +4615,14 @@ async function deleteHostGroup(group: HostGroupItem): Promise<void> {
   if (cleared.length > 0) {
     await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
   }
+  await forgetMountState(hostNames);
 }
 
 /**
  * 「删除配置」入口：账号/挂载各删自己那条配置。
  *
- * 主机节点的整组删除是单独的命令（`safs.deleteHostGroup`，只在右键菜单里），
- * 行内不放 🗑——它和 ＋ 挨着，点错就会删掉整个 IP 下的所有账号。
+ * 主机节点的整组删除是单独的命令（`safs.deleteHostGroup`，行内 🗑 + 确认框列出
+ * 该 IP 下的所有账号），这里只负责账号/挂载那一条。
  */
 async function deleteConfigItem(
   element: MountConfig | HostConfig | UserItem
@@ -5369,12 +5450,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   setMountAliasResolver((mountName) => {
     // 当前配置里的名字优先：别名只用来兜旧名字/转义 authority，绝不遮蔽真实挂载。
-    if (lastReadConfig?.mounts.some((mount) => mount.name === mountName)) return mountName;
+    // 判重同时看 hosts 与 mounts（有的配置只写了 hosts，mounts 是派生的）。
+    const configured = lastReadConfig?.mounts.some((mount) => mount.name === mountName)
+      || lastReadConfig?.hosts.some((host) => host.name === mountName);
+    if (configured) return mountName;
     return mountRenames.get(mountName) ?? mountName;
   });
-  await guard(registerMountAliases);
-  // 先把配置名归一化（含历史命名迁移），再登记一次别名，最后把已打开窗口的
-  // safs:// 工作区 URI 换成当前名字——左下角远程指示器显示的就是这个 authority。
+  // 先归一化配置名（含历史命名迁移与别名登记），再把已打开窗口的 safs:// 工作区
+  // URI 换成当前名字——左下角远程指示器显示的就是这个 authority。
   await guard(() => normalizeHierarchicalConfigNames(context));
   await guard(registerMountAliases);
   await guard(refreshRemoteWorkspaceNames);
@@ -5539,10 +5622,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
     (task) => syncCoordinator?.isStopRequested(task.mountName, task.remotePath)
       ?? Promise.resolve(false),
-    settings().get<number>('sftp.watchInterval', 5) * 1000
+    settings().get<number>('sftp.watchInterval', 5) * 1000,
+    // 配置改名后任务可能还拿着旧名字：会话解析按当前名字走。
+    (mountName) => mountRenames.get(mountName) ?? mountName
   );
   // 恢复上次的同步任务（指纹行随任务持久化，重载后继续增量同步）。
-  for (const task of context.globalState.get<RemoteSyncTask[]>(syncTasksKey, [])) {
+  const storedSyncTasks = context.globalState.get<RemoteSyncTask[]>(syncTasksKey, []);
+  if (storedSyncTasks.length === 0) {
+    // 旧版把任务存在不带平台后缀的键上：搬过来后删掉旧键。
+    const legacySyncTasks = context.globalState.get<RemoteSyncTask[]>(legacySyncTasksKey, []);
+    if (legacySyncTasks.length > 0) {
+      storedSyncTasks.push(...legacySyncTasks);
+      await context.globalState.update(syncTasksKey, storedSyncTasks);
+    }
+    await context.globalState.update(legacySyncTasksKey, undefined);
+  }
+  for (const task of storedSyncTasks) {
     void syncManager.add(task).catch((error) =>
       logAsyncFailure(`恢复同步任务失败 ${task.mountName}:${task.remotePath}`, error)
     );
@@ -5725,7 +5820,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
     // 同步过的目录优先打开本地副本：历史条目记住的就是本地镜像。
-    const synced = await findSyncedDirectory(vscodeContext, item.mountName, item.path);
+    const synced = syncedDirectoryFor(vscodeContext, item.mountName, item.path);
     if (synced && await openLocalMirror(synced.localDir)) {
       await recordDirectoryHistory(vscodeContext, item.mountName, item.path);
       return;

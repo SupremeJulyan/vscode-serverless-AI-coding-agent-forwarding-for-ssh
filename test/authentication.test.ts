@@ -62,3 +62,17 @@ test('ignores a missing name instead of throwing on JSON.stringify(undefined)', 
     assert.equal(passwordValueOffset(content, name as unknown as string), undefined);
   }
 });
+
+test('prefers the hosts array over a legacy mounts array with the same name', () => {
+  const content = JSON.stringify({
+    mounts: [{ name: 'dup', host: 'dup', remote_path: '.' }],
+    hosts: [{ name: 'dup', ip: '10.0.0.1', user: 'a' }]
+  }, null, 2);
+  const offset = configEntryOffset(content, 'dup');
+  assert.notEqual(offset, undefined);
+  const line = content.slice(0, offset!).split('\n').length;
+  const text = content.split('\n')[line - 1];
+  assert.equal(text.includes('"ip"'), false);
+  // hosts 在第 7 行左右：命中的那条记录后面跟着 ip/user。
+  assert.equal(content.slice(offset!).includes('"ip"'), true);
+});

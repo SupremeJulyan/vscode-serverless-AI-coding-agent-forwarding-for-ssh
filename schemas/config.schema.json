@@ -18,7 +18,7 @@
         {
           "label": "添加 SSH 主机",
           "body": [{
-            "name": "${1:dev}",
+            "name": "${1:10.0.0.2(alice)}",
             "ip": "${2:10.0.0.2}",
             "user": "${3:alice}",
             "port": 22,
@@ -46,7 +46,7 @@
       "type": "object",
       "required": ["ip"],
       "properties": {
-        "name": { "type": "string", "minLength": 1, "description": "主机内部名称；旧配置可省略，默认使用 IP。" },
+        "name": { "type": "string", "minLength": 1, "description": "主机内部名称（也是挂载名与 safs:// 的 authority）；留空会用 IP。SAFS 启动时按「别名(账号)」自动生成/迁移，手填的名字会被改写。" },
         "ip": { "type": "string", "minLength": 1, "description": "服务器 IP 地址或域名。" },
         "user": { "type": "string", "description": "SSH 登录用户名；可先留空，稍后从 SAFS 分层视图补充。" },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 22, "description": "SSH 端口。" },
@@ -60,7 +60,7 @@
       "type": "object",
       "required": ["name", "host", "remote_path"],
       "properties": {
-        "name": { "type": "string", "minLength": 1, "description": "远程目录的显示名称。" },
+        "name": { "type": "string", "minLength": 1, "description": "挂载名；通常由 hosts 派生（保存时会省略 mounts 数组）。" },
         "host": { "type": "string", "minLength": 1, "description": "对应 hosts 中的 name。" },
         "remote_path": { "type": "string", "minLength": 1, "default": ".", "description": "SFTP 远程目录；`.` 表示 SSH 登录目录。" },
         "local_path": {

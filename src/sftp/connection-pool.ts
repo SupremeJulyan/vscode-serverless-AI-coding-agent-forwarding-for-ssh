@@ -158,6 +158,15 @@ export class SftpConnectionPool {
     private readonly stateChanged: (hostName: string) => void = () => undefined
   ) {}
 
+  /** 配置改名：把连接记录挂到新名字下，已建立的会话继续用。 */
+  rename(oldName: string, newName: string): void {
+    if (oldName === newName) return;
+    const entry = this.entries.get(oldName);
+    if (!entry) return;
+    this.entries.delete(oldName);
+    this.entries.set(newName, entry);
+  }
+
   state(hostName: string): SftpConnectionState {
     const entry = this.entries.get(hostName);
     if (entry?.state === 'connected' && !entry.session?.isAlive()) return 'disconnected';

@@ -141,22 +141,6 @@ export function windowsCommandInvocation(
   };
 }
 
-export async function commandSucceeds(plan: CommandPlan): Promise<boolean> {
-  try {
-    const command = await resolveExecutable(plan.command, plan.env);
-    const invocation = windowsCommandInvocation(command, plan.args);
-    await execFileAsync(invocation.command, invocation.args, {
-      cwd: plan.cwd,
-      env: { ...process.env, ...plan.env },
-      ...(invocation.windowsVerbatimArguments
-        ? { windowsVerbatimArguments: true }
-        : {})
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export interface ProcessOutputHandlers {
   stdout?: (chunk: string) => void;

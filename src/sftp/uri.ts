@@ -14,9 +14,14 @@ function encodeMountAuthority(mountName: string): string {
   // lowercase authority so VS Code shows the config name directly in the
   // status-bar/remote indicator; fall back to lowercase hexadecimal for
   // anything else so the identifier survives that normalization.
+  // `m-<hex>` 是历史遗留的十六进制形式：明文名字长得像它的话解析时会被当成旧格式解出
+  // 另一个名字（且这种 URI 不带 ?mount= 兜底），所以强制走转义/十六进制分支。
+  const looksLikeLegacyHex = /^m-[0-9a-f]+$/.test(mountName) && mountName.length % 2 === 0;
+  // 长得像旧十六进制形式的名字只能走十六进制兜底，否则解析时会被解成别的名字。
+  if (looksLikeLegacyHex) return `m-${Buffer.from(mountName, 'utf8').toString('hex')}`;
   if (/^[a-z0-9][a-z0-9._-]*$/.test(mountName)) return mountName;
-  // Legacy hierarchical names were generated as "host@user"; current config
-  // names are "IP(account)". Keep their authority readable and ASCII-only in
+  // Legacy hierarchical names were generated as "host@user"; configuration names
+  // are "host(account)" (alias or IP + account). Keep the authority readable and ASCII-only in
   // VS Code's remote indicator, including Unicode host aliases; the original
   // name is carried in the URI query so parsing remains lossless.
   // Parentheses must be escaped here: VS Code percent-encodes them inside an
@@ -24,17 +29,50 @@ function encodeMountAuthority(mountName: string): string {
   // stored window state instead of showing the configuration name.
   if (/^[\p{L}\p{N}][\p{L}\p{N}._@()-]*$/u.test(mountName)
       && !/[A-Z]/.test(mountName)) {
-    return [...mountName].map((character) => {
-      if (/^[a-z0-9._-]$/.test(character)) return character;
-      if (character === '@') return '_';
-      // `IP(account)` 的名字在 authority 里写成 `IP_account`：括号本身不能出现，
-      // 右括号直接去掉，避免出现 `_zhuyuan_` 这样的尾巴。
-      if (character === '(') return '_';
-      if (character === ')') return '';
-      return `_u${character.codePointAt(0)!.toString(16)}`;
-    }).join('');
+    return escapeMountAuthority(mountName);
   }
   return `m-${Buffer.from(mountName, 'utf8').toString('hex')}`;
+}
+
+/**
+ * 可读转义：`主机名(账号)` → `主机名_账号`。
+ *
+ * 必须是**单射**的：VS Code 会把 URI 里的 `?mount=` 的 `=` 转义成 `%3D`，存下来的
+ * URI 只剩 authority 可用，两个不同的配置名映射到同一个 authority 就会静默打开错主机
+ * （例如 `devbox(alice_k)` 与 `devbox_alice(k)` 这种只差括号/下划线位置的组合）。所以下划线自身要转义成 `__`。
+ */
+function escapeMountAuthority(mountName: string): string {
+  return [...mountName].map((character) => {
+    if (/^[a-z0-9.-]$/.test(character)) return character;
+    if (character === '_') return '__';
+    // 括号在 authority 里不能出现：左括号写成 `_`，右括号去掉（生成的名字总是成对）。
+    if (character === '(') return '_';
+    if (character === ')') return '';
+    // `@` 只是历史命名（`host@user`）里的分隔符：写成 `_` 仍然单射，因为字面下划线
+    // 已经被写成 `__`。
+    if (character === '@') return '_';
+    return `_u${character.codePointAt(0)!.toString(16)}`;
+  }).join('');
+}
+
+/**
+ * 上一版（非单射）的转义形式：`_` 原样、`@` → `_`、括号写成 `_`/``。
+ *
+ * 已经存进 VS Code 窗口状态的 URI 用的是这种形式，改名/升级后仍要能解析出来。
+ */
+export function legacyMountAuthorityAlias(mountName: string): string | undefined {
+  if (!mountName) return undefined;
+  if (!/^[\p{L}\p{N}][\p{L}\p{N}._@()-]*$/u.test(mountName) || /[A-Z]/.test(mountName)) {
+    return undefined;
+  }
+  const legacy = [...mountName].map((character) => {
+    if (/^[a-z0-9._-]$/.test(character)) return character;
+    if (character === '@') return '_';
+    if (character === '(') return '_';
+    if (character === ')') return '';
+    return `_u${character.codePointAt(0)!.toString(16)}`;
+  }).join('');
+  return legacy === mountName ? undefined : legacy;
 }
 
 /**

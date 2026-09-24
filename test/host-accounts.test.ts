@@ -8,15 +8,15 @@ const config = (hosts: Array<{ name: string; ip: string; user: string }>): Bridg
 });
 
 test('adding an account to a host group appends instead of overwriting', () => {
-  const single = config([{ name: '10.68.0.1(a)', ip: '10.68.0.1', user: 'a' }]);
+  const single = config([{ name: '192.0.2.10(a)', ip: '192.0.2.10', user: 'a' }]);
   // 单账号主机：仍然返回 -1（新增），不再复用已有账号的位置。
-  assert.equal(accountTargetIndex(single, { ip: '10.68.0.1' }), -1);
+  assert.equal(accountTargetIndex(single, { ip: '192.0.2.10' }), -1);
   const many = config([
-    { name: '10.44.9.4(a)', ip: '10.44.9.4', user: 'a' },
-    { name: '10.44.9.4(b)', ip: '10.44.9.4', user: 'b' },
-    { name: '10.68.0.1(c)', ip: '10.68.0.1', user: 'c' }
+    { name: '192.0.2.40(a)', ip: '192.0.2.40', user: 'a' },
+    { name: '192.0.2.40(b)', ip: '192.0.2.40', user: 'b' },
+    { name: '192.0.2.10(c)', ip: '192.0.2.10', user: 'c' }
   ]);
-  assert.equal(accountTargetIndex(many, { ip: '10.44.9.4' }), -1);
+  assert.equal(accountTargetIndex(many, { ip: '192.0.2.40' }), -1);
   // 追加不会影响同组已有记录。
   assert.equal(many.hosts.length, 3);
 });
