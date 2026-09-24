@@ -106,7 +106,13 @@ test('cancellation aborts active downloads and removes their partial files', asy
     session: remote.session, remoteRoot: '/root', localRoot,
     concurrency: 4, signal: controller.signal
   });
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  // 等这次读取真的开始再取消：固定 5ms 在机器忙时会晚于 50ms 的假读取，取消可能落到
+  // 传输结束之后，断言就变成"半成品还在"（全量并行跑时偶发）。轮询有上限，不会挂死。
+  const deadline = Date.now() + 5000;
+  while (!remote.events.includes('start:/root/slow')) {
+    assert.ok(Date.now() < deadline, 'download did not start reading /root/slow');
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
   controller.abort();
   await assert.rejects(downloading, /取消/);
   await assert.rejects(readFile(path.join(localRoot, 'slow')));

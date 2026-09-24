@@ -44,6 +44,23 @@ test('abort rejects and removes the partial file', async () => {
   await assert.rejects(stat(target), { code: 'ENOENT' });
 });
 
+test('aborting while the write stream is still opening leaves no zero-byte file', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'early.bin');
+  const controller = new AbortController();
+  const source = Readable.from((async function* chunks() {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    yield Buffer.alloc(1024, 1);
+  })());
+  const promise = writeStreamToFile(source, target, { signal: controller.signal });
+  // 立刻取消：此刻 createWriteStream 的异步 open 还在飞行中，如果删除不等它落盘，
+  // 文件会在删除之后才被建出来，留下一个 0 字节半成品。
+  controller.abort();
+  await assert.rejects(promise, /传输已取消/);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await assert.rejects(stat(target), { code: 'ENOENT' });
+});
+
 test('creates parent directories before writing', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
   const target = path.join(directory, 'nested', 'deep', 'file.txt');

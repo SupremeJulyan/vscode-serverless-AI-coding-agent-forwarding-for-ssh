@@ -85,6 +85,25 @@ export interface WriteStreamOptions {
 }
 
 /**
+ * 等写入流彻底关闭（fd 已释放）。
+ *
+ * destroy 之后 'close' 必然会来；超时只是兜底，避免极端情况下把整个传输挂住。
+ */
+async function streamClosed(stream: NodeJS.WritableStream & { closed?: boolean }): Promise<void> {
+  if (stream.closed === true) return;
+  await new Promise<void>((resolve) => {
+    let timer: NodeJS.Timeout | undefined;
+    const done = (): void => {
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+    timer = setTimeout(done, 2000);
+    timer.unref();
+    stream.once('close', done);
+  });
+}
+
+/**
  * 把可读流分块写入本地文件（边下边写，内存 O(chunk)，不整文件驻留内存）。
  *
  * - 失败或取消（signal.abort）时删除半成品文件并抛错，避免残留截断文件。
@@ -96,10 +115,17 @@ export async function writeStreamToFile(
   options: WriteStreamOptions = {}
 ): Promise<void> {
   await mkdir(path.dirname(target), { recursive: true });
+  const destination = createWriteStream(target, { flags: 'w' });
   try {
-    await pipeStreams(source, createWriteStream(target, { flags: 'w' }), options);
+    await pipeStreams(source, destination, options);
   } catch (error) {
-    await rm(target, { force: true });
+    // createWriteStream 的 open 是异步的：取消/失败时它可能还没落盘，此刻 rm 只会拿到
+    // ENOENT（被 force 吞掉），open 随后才把 0 字节半成品建出来，而且再也没人清它
+    // （实测取消 40 次残留 39 个）。所以先销毁并等写入流真正 close（fd 释放、文件已创建），
+    // 再删除；删除本身对 Windows 上瞬时的 EBUSY/EPERM 退避重试几次。
+    destination.destroy();
+    await streamClosed(destination);
+    await rm(target, { force: true, maxRetries: 5, retryDelay: 50 });
     throw error;
   }
 }
