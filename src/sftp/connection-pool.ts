@@ -133,8 +133,10 @@ class RetryingSftpSession implements SftpSession {
     return this.withRetry((session) => session.readFileRange(remotePath, offset, length, signal));
   }
 
-  readFileStream(remotePath: string, signal?: AbortSignal): Promise<NodeJS.ReadableStream> {
-    return this.withRetry((session) => session.readFileStream(remotePath, signal));
+  readFileStream(
+    remotePath: string, signal?: AbortSignal, start?: number
+  ): Promise<NodeJS.ReadableStream> {
+    return this.withRetry((session) => session.readFileStream(remotePath, signal, start));
   }
 
   rename(

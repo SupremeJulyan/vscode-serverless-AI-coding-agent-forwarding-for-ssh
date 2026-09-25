@@ -563,7 +563,12 @@ export class ScpSession implements SftpSession {
   }
 
   // SCP 协议无流式读取：整读后包装为可读流（仅 SFTP 子系统不可用的回退路径）。
-  async readFileStream(remotePath: string, signal?: AbortSignal): Promise<NodeJS.ReadableStream> {
+  // start 只做防御性校验：`scp -f` 不能从中间开始取，续传在这条通道上无法成立，
+  // 调用方必须先看 transport 再决定（见 resume-plan 的 canRange）。
+  async readFileStream(
+    remotePath: string, signal?: AbortSignal, start = 0
+  ): Promise<NodeJS.ReadableStream> {
+    if (start > 0) throw new Error('SCP 回退通道不支持按偏移读取，无法断点续传');
     const data = await this.readFile(remotePath, signal);
     return Readable.from([Buffer.from(data)]);
   }
@@ -648,6 +653,11 @@ export class ScpSession implements SftpSession {
     options: SftpWriteOptions,
     signal?: AbortSignal
   ): Promise<NodeJS.WritableStream> {
+    // 显式拒绝而不是静默忽略 startOffset：忽略会让「续传」变成从 0 整写，
+    // 表面成功、实际把残片覆盖掉，是最糟的失败方式。
+    if ((options.startOffset ?? 0) > 0) {
+      return Promise.reject(new Error('SCP 回退通道不支持定位写，无法断点续传'));
+    }
     const chunks: Buffer[] = [];
     return Promise.resolve(new Writable({
       write(chunk: Buffer, _encoding, callback) {

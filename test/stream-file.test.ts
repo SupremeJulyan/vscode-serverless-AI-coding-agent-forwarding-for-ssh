@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as path from 'node:path';
-import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import { PassThrough, Readable } from 'node:stream';
 import { pipeStreams, writeStreamToFile } from '../src/stream-file';
@@ -66,6 +66,40 @@ test('creates parent directories before writing', async () => {
   const target = path.join(directory, 'nested', 'deep', 'file.txt');
   await writeStreamToFile(Readable.from([Buffer.from('hello')]), target);
   assert.equal(await readFile(target, 'utf8'), 'hello');
+});
+
+test('resuming appends to the partial file instead of truncating it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'resume.bin');
+  await writeFile(target, 'head-');
+  await writeStreamToFile(Readable.from([Buffer.from('tail')]), target, {
+    resume: { offset: 5 }
+  });
+  assert.equal(await readFile(target, 'utf8'), 'head-tail');
+});
+
+test('aborting a resumed write keeps the partial file for the next attempt', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'resume-abort.bin');
+  await writeFile(target, 'kept');
+  const controller = new AbortController();
+  const source = new Readable({
+    read() {
+      this.push(Buffer.alloc(1024, 1));
+      setTimeout(() => {
+        if (this.destroyed) return;
+        this.push(Buffer.alloc(1024, 2));
+        this.push(null);
+      }, 50);
+    }
+  });
+  const promise = writeStreamToFile(source, target, {
+    signal: controller.signal, resume: { offset: 4 }
+  });
+  setTimeout(() => controller.abort(), 10);
+  await assert.rejects(promise, /传输已取消/);
+  // 与全量失败相反：续传失败必须保留残片，它就是下一次的起点。
+  assert.equal((await stat(target)).size >= 4, true);
 });
 
 test('pipeStreams moves data between streams with delta reports', async () => {

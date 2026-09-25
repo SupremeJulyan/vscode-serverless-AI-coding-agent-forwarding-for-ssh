@@ -22,6 +22,14 @@ export interface SftpWriteOptions {
   overwrite: boolean;
   /** 显式权限（八进制，如 0o644）：SCP 回退下写入时直接使用，跳过 exists/权限探测。 */
   mode?: number;
+  /**
+   * 断点续传起点（字节）：写出位置从该偏移开始，已有前缀不被截断。
+   *
+   * 只对 `writeFileStream` 有意义，且只有真 SFTP 通道支持——SFTP 的 WRITE 报文
+   * 自带 offset，`r+` 打开即可定位写。SCP 回退通道（`scp -t`）无定位能力，
+   * 调用方必须先看 `session.transport`，不要指望回退通道能省流量。
+   */
+  startOffset?: number;
 }
 
 export interface SftpSession {
@@ -48,8 +56,12 @@ export interface SftpSession {
   readFileRange(
     remotePath: string, offset: number, length: number, signal?: AbortSignal
   ): Promise<Uint8Array>;
-  /** 流式读取远程文件（分块返回），供大文件下载直接落盘，避免整文件驻留内存。 */
-  readFileStream(remotePath: string, signal?: AbortSignal): Promise<NodeJS.ReadableStream>;
+  /** 流式读取远程文件（分块返回），供大文件下载直接落盘，避免整文件驻留内存。
+   * `start` 用于断点续传：从该字节偏移开始取，只对真 SFTP 通道有效
+   * （SCP 回退无范围读能力，见 readFileRange 的说明）。 */
+  readFileStream(
+    remotePath: string, signal?: AbortSignal, start?: number
+  ): Promise<NodeJS.ReadableStream>;
   writeFile(
     remotePath: string,
     content: Uint8Array,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import { Client, SFTPWrapper } from 'ssh2';
 import { Ssh2SftpSession } from '../src/sftp/client';
 
@@ -105,4 +105,63 @@ test('writeFileStream abort destroys the stream and closes the handle', async ()
   const error = await errored;
   assert.equal((error as Error & { name?: string }).name, 'AbortError');
   assert.equal(closed, 1);
+});
+
+test('writeFileStream resumes at startOffset without truncating the part', async () => {
+  const writes: Array<{ position: number; data: string }> = [];
+  let flag: string | undefined;
+  const sftp: Partial<SFTPWrapper> = {
+    open: (_path, openFlag, callback) => { flag = openFlag; callback(undefined, Buffer.from('h')); },
+    write: (_handle, buffer, offset, length, position, callback) => {
+      writes.push({ position, data: Buffer.from(buffer.subarray(offset, offset + length)).toString() });
+      callback();
+    },
+    close: (_handle, callback) => callback()
+  };
+  const session = makeSession(sftp);
+  // 残片已有 1024 字节：从 1024 继续写，且必须用 'r+'（'w' 会截断，'a' 会让服务端
+  // 忽略 offset 永远追加，两者都会毁掉断点续传）。
+  const stream = await session.writeFileStream(
+    '/part', { create: true, overwrite: false, startOffset: 1024 }
+  );
+  await new Promise<void>((resolve, reject) => {
+    stream.once('error', reject);
+    stream.once('finish', resolve);
+    Readable.from([Buffer.from('tail')]).pipe(stream);
+  });
+  assert.equal(flag, 'r+');
+  assert.deepEqual(writes, [{ position: 1024, data: 'tail' }]);
+});
+
+test('writeFileStream rejects an impossible resume offset', async () => {
+  const session = makeSession({
+    open: () => { throw new Error('must not open with an invalid offset'); }
+  });
+  await assert.rejects(
+    session.writeFileStream('/x', { create: true, overwrite: false, startOffset: -1 }),
+    /无效的续传起始偏移/
+  );
+});
+
+test('readFileStream asks the server for the bytes after the resume offset', async () => {
+  const asked: Array<{ path: string; start?: number; highWaterMark?: number }> = [];
+  const session = makeSession({
+    createReadStream: (path, options) => {
+      asked.push({ path, start: options.start, highWaterMark: options.highWaterMark });
+      // readFileStream 等 'open' 才 resolve（真实 ssh2 打开远程文件后触发）。
+      const stream = new PassThrough();
+      setImmediate(() => stream.emit('open'));
+      return stream as never;
+    }
+  });
+  await session.readFileStream('/remote/big.bin', undefined, 2048);
+  assert.deepEqual(asked.map(({ path, start }) => ({ path, start })), [
+    { path: '/remote/big.bin', start: 2048 }
+  ]);
+  // 全量读取不带 start：让 ssh2 走默认起始位置。
+  await session.readFileStream('/remote/small.bin', undefined, 0);
+  assert.deepEqual(asked[1], {
+    path: '/remote/small.bin', start: undefined, highWaterMark: asked[0].highWaterMark
+  });
+  await assert.rejects(session.readFileStream('/remote/x', undefined, -5), /无效的读取起始偏移/);
 });

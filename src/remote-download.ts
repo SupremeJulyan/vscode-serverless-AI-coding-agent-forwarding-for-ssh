@@ -1,6 +1,9 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rename, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { validateLocalDownloadTarget } from './local-transfer-path';
+import {
+  cleanupDownloadPart, commitDownloadPart, prepareDownloadResume, type DownloadResume
+} from './resume-store';
 import { SftpSession } from './sftp/session';
 import { assertSafeRemoteEntryName } from './sftp/uri';
 import { writeStreamToFile } from './stream-file';
@@ -33,6 +36,8 @@ export async function downloadRemoteDirectoryTree(options: {
   signal?: AbortSignal;
   secureLocalRoot?: string;
   onProgress?: (progress: RemoteDirectoryDownloadProgress) => void;
+  /** 追加日志（续传起点、远端已变化等）；失败不影响传输。 */
+  log?: (message: string) => void;
 }): Promise<RemoteDirectoryDownloadResult> {
   const concurrency = Number.isFinite(options.concurrency)
     ? Math.max(1, Math.floor(options.concurrency))
@@ -86,13 +91,45 @@ export async function downloadRemoteDirectoryTree(options: {
     let task!: Promise<void>;
     task = (async () => {
       const target = await localTarget(relative);
-      const source = await options.session.readFileStream(remoteFile, controller.signal);
-      await writeStreamToFile(source, target, {
-        signal: controller.signal,
-        onDelta: (delta) => {
-          transferredBytes += delta;
-          report('downloading', relative);
-        }
+      // 续传判定：远端在这两次尝试之间被改过，残片名就对不上，自动全量重来。
+      const info = await options.session.stat(remoteFile, controller.signal);
+      const resume: DownloadResume = await prepareDownloadResume({
+        remoteName: remoteFile,
+        remote: { size: info.size, mtimeMs: info.mtime },
+        localTarget: target,
+        canRange: options.session.transport !== 'scp',
+        log: options.log
+      });
+      const source = await options.session.readFileStream(
+        remoteFile, controller.signal, resume.offset > 0 ? resume.offset : undefined
+      );
+      try {
+        await writeStreamToFile(source, resume.partPath, {
+          signal: controller.signal,
+          onDelta: (delta) => {
+            transferredBytes += delta;
+            resume.transferred = (resume.transferred ?? 0) + delta;
+            report('downloading', relative);
+          },
+          ...(resume.offset > 0 ? { resume: { offset: resume.offset } } : {})
+        });
+      } catch (error) {
+        // 失败/取消：大残片留下当续传起点，小残片删掉（避免目录里堆垃圾）。
+        await cleanupDownloadPart({
+          partPath: resume.partPath,
+          transferred: (resume.transferred ?? 0) + resume.offset,
+          remove: (part) => rm(part, { force: true }),
+          log: options.log
+        });
+        throw error;
+      }
+      // 先落最终位置再计入完成：rename 失败不算完成。
+      await commitDownloadPart({
+        partPath: resume.partPath,
+        target,
+        remove: (part) => rm(part, { force: true }),
+        renamePart: rename,
+        log: options.log
       });
       completedFiles += 1;
       report('downloading', relative);
