@@ -23,7 +23,9 @@ interface ExtensionManifest {
       linux?: string;
       mac?: string;
     }>;
-    views?: Record<string, Array<{ id: string; name: string; type?: string; icon?: string }>>;
+    views?: Record<string, Array<{
+      id: string; name: string; type?: string; icon?: string; contextualTitle?: string;
+    }>>;
   };
 }
 
@@ -187,6 +189,17 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   assert.equal(extensionSource.includes('recordObservedAgentSource'), false);
   assert.equal(extensionSource.includes('runAgentMcpOperation'), false);
   await assert.rejects(access(new URL('../src/agent-mcp-registry.ts', import.meta.url)));
+});
+
+test('contributes the remote Git history view to the Source Control panel', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  // 与源代码管理在同一处：内置 scm 容器，不再占用 SAFS 侧边栏。
+  assert.deepEqual(manifest.contributes?.views?.scm, [{
+    id: 'safs.gitHistory', name: '远程 Git 历史', contextualTitle: '远程 Git 历史 (SAFS)'
+  }]);
+  assert.equal(manifest.contributes?.views?.safs?.some((view) => view.id === 'safs.gitHistory'), false);
 });
 
 test('contributes the Agent activity Webview in the SAFS sidebar', async () => {

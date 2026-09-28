@@ -289,10 +289,13 @@
           "name": "Agent 活动",
           "type": "webview",
           "icon": "resources/agent-activity.svg"
-        },
+        }
+      ],
+      "scm": [
         {
           "id": "safs.gitHistory",
-          "name": "远程 Git 历史"
+          "name": "远程 Git 历史",
+          "contextualTitle": "远程 Git 历史 (SAFS)"
         }
       ]
     },
