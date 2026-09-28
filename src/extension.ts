@@ -1732,12 +1732,15 @@ async function visualDownload(
     );
   }
   return downloadRemoteFile(
-    session, remotePath, { size: stat.size, mtimeMs: stat.mtime }, forcedLocalPath, transferTimeoutMs
+    session, remotePath,
+    { size: stat.size, mtimeMs: stat.mtime, permissions: stat.permissions },
+    forcedLocalPath, transferTimeoutMs
   );
 }
 
 async function downloadRemoteFile(
-  session: SftpSession, remotePath: string, remote: { size: number; mtimeMs: number },
+  session: SftpSession, remotePath: string,
+  remote: { size: number; mtimeMs: number; permissions?: number },
   forcedLocalPath?: string, transferTimeoutMs?: number
 ): Promise<boolean> {
   const totalBytes = remote.size;
@@ -1800,6 +1803,7 @@ async function downloadRemoteFile(
         target,
         remove: (part) => rm(part, { force: true }),
         renamePart: rename,
+        permissions: remote.permissions,
         log: (message) => bridgeOutput?.appendLine(message)
       });
       progress.report({

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, stat, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, stat, writeFile, rm, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { Writable } from 'node:stream';
@@ -8,15 +8,16 @@ import { uploadRemoteTree } from '../src/remote-upload';
 import { uploadPartName } from '../src/resume-plan';
 import { SftpSession } from '../src/sftp/session';
 
-function remote(failWrite = false, failCommit = false) {
+function remote(failWrite = false, failCommit = false, existingPermissions = 0o640) {
   const files = new Map<string, string>([['/dest/source/a', 'old']]);
   const dirs = new Set(['/', '/dest']);
+  const committed: Array<{ to: string; mode?: number }> = [];
   let active = 0, peak = 0;
   const session = {
     transport: 'sftp',
     stat: async (name: string) => {
       if (dirs.has(name)) return { type: 'directory' };
-      if (files.has(name)) return { type: 'file', permissions: 0o640 };
+      if (files.has(name)) return { type: 'file', permissions: existingPermissions };
       throw Object.assign(new Error('missing'), { code: 2 });
     },
     createDirectory: async (name: string) => { dirs.add(name); },
@@ -31,13 +32,14 @@ function remote(failWrite = false, failCommit = false) {
         destroy(error, done) { active--; done(error); }
       });
     },
-    replaceFile: async (from: string, to: string) => {
+    replaceFile: async (from: string, to: string, mode?: number) => {
       if (failCommit) throw new Error('commit failed');
+      committed.push({ to, mode });
       files.set(to, files.get(from)!); files.delete(from);
     },
     deleteFile: async (name: string) => { files.delete(name); }
   } as unknown as SftpSession;
-  return { session, files, dirs, peak: () => peak };
+  return { session, files, dirs, committed, peak: () => peak };
 }
 
 async function sources(t: { after(fn: () => Promise<void>): void }) {
@@ -245,4 +247,55 @@ test('an interrupted large upload keeps its part for the next attempt', async (t
     signal: controller.signal
   }));
   assert.ok(written >= 1024 * 1024, `expected a keepable part, wrote ${written}`);
+});
+
+test('a fresh upload of an executable source lands executable', async (t) => {
+  const r = remote();
+  const [source] = await sources(t);
+  const script = path.join(source, 'run.sh');
+  await writeFile(script, '#!/bin/sh\necho ok\n');
+  if (process.platform === 'win32') return t.skip('Windows has no executable bit');
+  await chmod(script, 0o755);
+
+  await uploadRemoteTree({ session: r.session, sources: [source], targetDir: '/dest' });
+
+  // 这里曾恒为 0o644：脚本上传后 `./run.sh` 直接 Permission denied。
+  assert.equal(r.committed.find((entry) => entry.to === '/dest/source/run.sh')?.mode, 0o755);
+});
+
+test('a fresh upload of a non-executable source keeps the remote default', async (t) => {
+  const r = remote();
+  const [source] = await sources(t);
+
+  await uploadRemoteTree({ session: r.session, sources: [source], targetDir: '/dest' });
+
+  // b 在远端还不存在（a 是 mock 预置的已有文件），走的是新文件默认权限那条路。
+  assert.equal(r.committed.find((entry) => entry.to === '/dest/source/b')?.mode, 0o644);
+});
+
+test('replacing an existing remote file keeps its permissions', async (t) => {
+  const r = remote();
+  const [source] = await sources(t);
+
+  await uploadRemoteTree({ session: r.session, sources: [source], targetDir: '/dest' });
+
+  // 远端 /dest/source/a 原本是 0o640：覆盖上传不该把远端已定的读写范围改掉。
+  assert.equal(r.committed.find((entry) => entry.to === '/dest/source/a')?.mode, 0o640);
+});
+
+test('re-uploading repairs executable bits dropped by an earlier upload', async (t) => {
+  // 远端此刻是「上一次上传」的产物：文件在，但权限位已经掉成 0o644。
+  const r = remote(false, false, 0o644);
+  const [source] = await sources(t);
+  const script = path.join(source, 'run.sh');
+  await writeFile(script, '#!/bin/sh\n');
+  if (process.platform === 'win32') return t.skip('Windows has no executable bit');
+  await chmod(script, 0o755);
+  // 这次覆盖的是「文件已在远端」的分支：不预置的话走的是新文件默认值那条路。
+  r.files.set('/dest/source/run.sh', 'stale');
+
+  await uploadRemoteTree({ session: r.session, sources: [source], targetDir: '/dest' });
+
+  // 沿用远端的读写位、补回可执行位：重复上传能把之前丢掉的可执行位修回来。
+  assert.equal(r.committed.find((entry) => entry.to === '/dest/source/run.sh')?.mode, 0o755);
 });

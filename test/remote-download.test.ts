@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -12,6 +12,8 @@ interface FakeEntry {
   type: 'file' | 'directory' | 'symbolic-link';
   content?: string;
   mtimeMs?: number;
+  /** 远端权限位：下载落盘后据此补本地可执行位。 */
+  permissions?: number;
 }
 
 function fakeSession(
@@ -58,7 +60,8 @@ function fakeSession(
     stat: async (remotePath: string) => ({
       type: entries[remotePath]?.type ?? 'file',
       size: entries[remotePath]?.content?.length ?? 0,
-      mtime: entries[remotePath]?.mtimeMs ?? remoteMtimeMs, ctime: 0
+      mtime: entries[remotePath]?.mtimeMs ?? remoteMtimeMs, ctime: 0,
+      permissions: entries[remotePath]?.permissions
     })
   } as unknown as SftpSession;
   return { session, maxActive: () => maximum, events, starts };
@@ -177,4 +180,26 @@ test('a part from an older remote version is not reused', async () => {
   assert.equal(remote.starts[0].start, undefined);
   assert.equal(result.transferredBytes, content.length);
   assert.equal((await readFile(target)).length, content.length);
+});
+
+test('remote executable bits carry over without touching local read/write bits', async (t) => {
+  if (process.platform === 'win32') return t.skip('Windows has no executable bit');
+  const remote = fakeSession({
+    '/root/run.sh': { type: 'file', content: '#!/bin/sh\n', permissions: 0o755 },
+    '/root/data.txt': { type: 'file', content: 'a', permissions: 0o600 }
+  });
+  const localRoot = path.join(await mkdtemp(path.join(os.tmpdir(), 'safs-download-')), 'copy');
+
+  await downloadRemoteDirectoryTree({
+    session: remote.session, remoteRoot: '/root', localRoot, concurrency: 1
+  });
+
+  const script = (await stat(path.join(localRoot, 'run.sh'))).mode & 0o777;
+  const data = (await stat(path.join(localRoot, 'data.txt'))).mode & 0o777;
+  // 残片是按本地 umask 建的：不补权限位的话 0755 的脚本下载回来是 0644，
+  // `./run.sh` 直接 Permission denied。
+  assert.equal(script & 0o111, 0o111);
+  assert.equal(data & 0o111, 0);
+  // 读写范围仍由本地 umask 决定：远端 0600 不该把本地文件收窄成只有属主可读。
+  assert.equal(script & 0o666, data & 0o666);
 });

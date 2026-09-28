@@ -1,12 +1,16 @@
 import { createReadStream } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import * as path from 'node:path';
+import { grantExecutableBits } from './file-mode';
 import {
   isTransferPartName, planResume, pruneTransferParts, shouldKeepPart, uploadPartName,
   type ResumeSourceSignature
 } from './resume-plan';
 import { SftpSession } from './sftp/session';
 import { pipeStreams } from './stream-file';
+
+/** 新文件的远端默认权限：与补可执行位之前的行为一致，读写范围不因这次修复改变。 */
+const DEFAULT_UPLOAD_MODE = 0o644;
 
 export async function uploadRemoteTree(options: {
   session: SftpSession;
@@ -70,16 +74,23 @@ export async function uploadRemoteTree(options: {
     check();
     await ensure(path.posix.dirname(remote));
     await options.verifyFile?.(remote);
-    let mode = 0o644;
+    // 本地源的 size+mtime 既用于续传签名，也用于推导远端权限，一次取齐。
+    const entry = await lstat(local);
+    // 权限：目标已存在则沿用远端权限，新文件用远端默认 0644。两种情况下都补上本地源的
+    // 可执行位——上传通道本身不保留权限位，不补的话 0755 的脚本落到远端就不可执行
+    // （`./run.sh` 直接 Permission denied），在 git 仓库里还会被报成一整批
+    // `mode change 100755 => 100644`。补在「沿用远端权限」之后，所以重复上传一个
+    // 之前丢过权限位的文件也能自愈。
+    let mode = DEFAULT_UPLOAD_MODE;
     try {
       const previous = await session.stat(remote, signal);
       if (previous.type !== 'file') throw new Error(`上传目标不是普通文件：${remote}`);
       mode = previous.permissions ?? mode;
     } catch (error) { if (!missing(error)) throw error; }
+    mode = grantExecutableBits(mode, entry.mode);
 
     // 续传判定：残片名里编进了「本会话 + 本地源 size+mtime」。本地文件在两次尝试
     // 之间被改过，签名就变、名字就对不上，绝无可能把两个版本的字节拼在一起。
-    const entry = await lstat(local);
     const signature: ResumeSourceSignature = { size: entry.size, mtimeMs: entry.mtimeMs };
     const temporary = uploadPartName(remote, signature);
     targetDirectories.add(path.posix.dirname(remote));

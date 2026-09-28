@@ -631,6 +631,7 @@ export class RemoteSyncManager {
         target: localFull,
         remove: (part) => fs.rm(part, { force: true }),
         renamePart: (from, to) => fs.rename(from, to),
+        permissions: remoteStat.permissions,
         log: (message) => this.log(message)
       });
       const written = await fs.stat(localFull);

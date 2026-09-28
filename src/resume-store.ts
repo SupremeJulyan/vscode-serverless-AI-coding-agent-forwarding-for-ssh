@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises';
 import * as path from 'node:path';
+import { applyLocalExecutableBits } from './file-mode';
 import {
   downloadPartPath, planResume, shouldKeepPart,
   type ResumeReason, type ResumeSourceSignature
@@ -92,17 +93,20 @@ export async function cleanupDownloadPart(options: {
 }
 
 /**
- * 把残片落到最终位置。
+ * 把残片落到最终位置，并按远端源权限补回本地可执行位。
  *
  * 先删目标再 rename：Windows 上 rename 不能覆盖已存在的文件。失败的**唯一**后果是
  * 残片被删掉、下一次全量重来（不会影响已存在的目标文件内容），所以不向上抛错——
  * 这跟「rename 失败就算传输失败」是同一件事，而调用方本来就处于失败路径上。
+ * 权限补不上同理不算失败：内容已经完整落盘。
  */
 export async function commitDownloadPart(options: {
   partPath: string;
   target: string;
   remove: (target: string) => Promise<void>;
   renamePart: (from: string, to: string) => Promise<void>;
+  /** 远端源权限位：据此给落盘文件补可执行位。缺省（stat 没给出权限）时不动本地权限。 */
+  permissions?: number;
   log?: (message: string) => void;
 }): Promise<void> {
   try {
@@ -111,5 +115,7 @@ export async function commitDownloadPart(options: {
   } catch (error) {
     await options.remove(options.partPath).catch(() => undefined);
     options.log?.(`下载落盘失败 ${options.target}: ${String(error)}`);
+    return;
   }
+  await applyLocalExecutableBits(options.target, options.permissions, options.log);
 }

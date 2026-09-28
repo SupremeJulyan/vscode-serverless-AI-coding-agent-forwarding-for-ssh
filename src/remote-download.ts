@@ -129,6 +129,7 @@ export async function downloadRemoteDirectoryTree(options: {
         target,
         remove: (part) => rm(part, { force: true }),
         renamePart: rename,
+        permissions: info.permissions,
         log: options.log
       });
       completedFiles += 1;
