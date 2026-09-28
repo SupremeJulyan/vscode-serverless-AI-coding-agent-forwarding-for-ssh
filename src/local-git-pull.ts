@@ -105,10 +105,21 @@ export async function pullThroughLocalGit(options: LocalPullOptions): Promise<Lo
     const imported = (await local(['-C', repository, 'rev-parse', 'refs/heads/safs-base'], signal)).trim();
     if (imported !== target.oid) throw new Error('传输期间远端分支发生变化，请重新拉取。');
     // 快进判定在本地做：分叉时不必先把增量传回远端再失败。
-    // `safs-pull..safs-base` 为空等价于 base 是 pull 的祖先（可快进）。
-    const behind = Number((await local(['-C', repository, 'rev-list', '--count',
-      'refs/heads/safs-pull..refs/heads/safs-base'], signal)).trim());
-    if (!Number.isFinite(behind) || behind > 0) {
+    // incoming = 上游有、远端没有的提交；outgoing = 远端有、上游没有的提交。
+    // incoming > 0 且 outgoing = 0 时 base 是 pull 的祖先，可快进。
+    const count = async (range: string) => Number((await local([
+      '-C', repository, 'rev-list', '--count', range], signal)).trim());
+    const incoming = await count('refs/heads/safs-base..refs/heads/safs-pull');
+    const outgoing = await count('refs/heads/safs-pull..refs/heads/safs-base');
+    if (!Number.isFinite(incoming) || !Number.isFinite(outgoing)) {
+      throw new Error('无法比较远端分支与上游分支。');
+    }
+    if (incoming === 0) {
+      // 上游提交都已在远端分支里（远端更靠前，或上游被回退）：与 git pull --ff-only 一样什么都不做。
+      options.report?.('远端分支已包含上游的全部提交，无需合并。');
+      return { status: 'up-to-date', oid: target.oid };
+    }
+    if (outgoing > 0) {
       throw new Error('远端分支与上游已分叉，无法快进合并；请在远端终端手动处理。');
     }
     await local(['-C', repository, 'bundle', 'create', delta, 'refs/heads/safs-pull',

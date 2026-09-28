@@ -93,6 +93,24 @@ test('relay refuses to merge diverged history and leaves the remote branch alone
   assert.deepEqual(await readdir(storagePath), []);
 });
 
+test('relay treats a remote branch ahead of upstream as up to date', async t => {
+  const { upstream, source, storagePath, git, local } = await fixture(t);
+  await writeFile(path.join(source, 'file.txt'), 'first\nlocal\n');
+  await git.run(['add', '.']); await git.commit('local work');
+  const target = { ...await resolvePullTarget(git), url: upstream };
+  let downloads = 0;
+  const result = await pullThroughLocalGit({
+    storagePath, local, target,
+    downloadBundle: async file => { downloads++; await git.run(['bundle', 'create', file, 'refs/heads/main']); },
+    deliverBundle: async () => { throw new Error('远端更靠前时不应回传'); }
+  });
+  // 与 git pull --ff-only 一致：上游提交已经在远端分支里，什么都不做。
+  assert.deepEqual(result, { status: 'up-to-date', oid: target.oid });
+  assert.equal((await git.run(['rev-parse', 'refs/heads/main'])).trim(), target.oid);
+  assert.equal(downloads, 1); // 判定需要远端对象，这一次下载无法省。
+  assert.deepEqual(await readdir(storagePath), []);
+});
+
 test('relay cleans up when the download fails and never force merges', async t => {
   const { upstream, storagePath, advanceUpstream, git, local } = await fixture(t);
   await advanceUpstream('first\nsecond\n');
