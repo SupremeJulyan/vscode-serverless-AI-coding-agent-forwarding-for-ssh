@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.9.10",
+  "version": "1.9.11",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -834,7 +834,7 @@
           "type": "string",
           "default": "git",
           "scope": "machine",
-          "description": "本地（VS Code 扩展宿主环境）Git 可执行文件路径，用于中转推送与拉取。默认从 PATH 查找 git。"
+          "description": "本地（VS Code 扩展宿主环境）Git 可执行文件路径，用于中转推送、拉取与提取。默认从 PATH 查找 git。"
         },
         "safs.git.pushUrl": {
           "type": "string",

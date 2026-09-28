@@ -1,6 +1,6 @@
 [package]
 name = "safs-cli"
-version = "1.9.10"
+version = "1.9.11"
 edition = "2021"
 
 [[bin]]
