@@ -4,6 +4,7 @@ import { GitChange, GitRunner, isGitConflict, RemoteGit } from './remote-git';
 
 interface Repository {
   uri: vscode.Uri;
+  name: string;
   git: RemoteGit;
   scm: vscode.SourceControl;
   index: vscode.SourceControlResourceGroup;
@@ -19,14 +20,35 @@ interface Resource extends vscode.SourceControlResourceState {
   staged: boolean;
 }
 
+/** 提交内容不可变，历史视图可以不带 revision 直接引用某个提交里的文件。 */
+export function gitSnapshotUri(repository: vscode.Uri, file: string, ref: string, empty = false): vscode.Uri {
+  return repository.with({
+    scheme: 'safs-git', path: path.posix.join(repository.path, file),
+    query: JSON.stringify({ repository: repository.toString(), ref, file, empty })
+  });
+}
+
 /** Runs Git on the SSH host; never treats a SAFS placeholder as a local repository. */
 export class RemoteGitScm implements vscode.Disposable {
   private readonly repositories = new Map<string, Repository>();
   private readonly subscriptions: vscode.Disposable[] = [];
+  private readonly repositoryEmitter = new vscode.EventEmitter<void>();
+  private readonly historyEmitter = new vscode.EventEmitter<void>();
+  /** 已发现的仓库集合发生变化（新增/关闭）。 */
+  readonly onDidChangeRepositories = this.repositoryEmitter.event;
+  /** 提交、拉取、推送之后：历史内容可能变了。 */
+  readonly onDidChangeHistory = this.historyEmitter.event;
   private discovering = false;
   private readonly failures = new Map<string, { message: string; retryAt: number }>();
   private disposed = false;
   private readonly timer: ReturnType<typeof setInterval>;
+
+  /** 供历史视图复用同一批仓库实例（同一个 RemoteGit，避免重复发现）。 */
+  repositoriesInUse(): { uri: vscode.Uri; name: string; git: RemoteGit }[] {
+    return [...this.repositories.values()].map(repository => ({
+      uri: repository.uri, name: repository.name, git: repository.git
+    }));
+  }
 
   constructor(
     private readonly runner: (uri: vscode.Uri) => Promise<GitRunner>,
@@ -34,13 +56,14 @@ export class RemoteGitScm implements vscode.Disposable {
     private readonly localPush: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
     private readonly localPull: (uri: vscode.Uri, git: RemoteGit) => Promise<void>
   ) {
+    this.subscriptions.push(this.repositoryEmitter, this.historyEmitter);
     this.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('safs-git', {
       provideTextDocumentContent: async uri => {
         const data = JSON.parse(uri.query) as { repository: string; ref: string; file: string; empty: boolean };
         const repository = this.repositories.get(data.repository);
         if (!repository) throw new Error('远程 Git 仓库已关闭。');
         if (data.empty) return '';
-        if (!['HEAD', ''].includes(data.ref)) throw new Error('Invalid Git revision');
+        if (!/^(?:HEAD|[a-f0-9]{7,64})?$/.test(data.ref)) throw new Error('Invalid Git revision');
         return repository.git.run(['show', `${data.ref}:${data.file}`]);
       }
     }));
@@ -80,6 +103,7 @@ export class RemoteGitScm implements vscode.Disposable {
               if (action === 'push') await this.localPush(repository.uri, repository.git);
               else if (action === 'pull') await this.localPull(repository.uri, repository.git);
               else await repository.git.run([action]);
+              if (action !== 'fetch') this.historyEmitter.fire();
             } finally {
               await this.update(repository).catch(error => this.log(String(error)));
             }
@@ -97,6 +121,7 @@ export class RemoteGitScm implements vscode.Disposable {
         await repository.git.commit(message);
         if (repository.scm.inputBox.value === message) repository.scm.inputBox.value = '';
         await this.update(repository);
+        this.historyEmitter.fire();
       });
     });
     this.subscriptions.push(
@@ -133,8 +158,9 @@ export class RemoteGitScm implements vscode.Disposable {
     try {
       const folders = (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'safs');
       const active = new Set(folders.map(folder => folder.uri.toString()));
+      let changed = false;
       for (const [key, repository] of this.repositories) {
-        if (!active.has(key)) { this.close(repository); this.repositories.delete(key); }
+        if (!active.has(key)) { this.close(repository); this.repositories.delete(key); changed = true; }
       }
       for (const folder of folders) {
         if (this.disposed) return;
@@ -151,7 +177,7 @@ export class RemoteGitScm implements vscode.Disposable {
             if (this.disposed) return;
             const scm = vscode.scm.createSourceControl('safs-git', `Git (SAFS) · ${folder.name}`, folder.uri);
             repository = {
-              uri: folder.uri, git, scm,
+              uri: folder.uri, name: folder.name, git, scm,
               index: scm.createResourceGroup('index', '已暂存的更改'),
               working: scm.createResourceGroup('working', '更改'),
               conflicts: scm.createResourceGroup('conflicts', '合并冲突'),
@@ -162,6 +188,7 @@ export class RemoteGitScm implements vscode.Disposable {
             scm.inputBox.placeholder = '提交说明（Ctrl+Enter 提交已暂存更改）';
             scm.acceptInputCommand = { command: 'safs.git.commit', title: '提交', arguments: [scm] };
             this.repositories.set(key, repository);
+            changed = true;
           }
           await this.enqueue(repository, () => this.update(repository!));
           this.failures.delete(key);
@@ -172,6 +199,7 @@ export class RemoteGitScm implements vscode.Disposable {
           if (interactive) void vscode.window.showErrorMessage(`SAFS Git: ${message}`);
         }
       }
+      if (changed && !this.disposed) this.repositoryEmitter.fire();
     } finally { this.discovering = false; }
   }
 
@@ -196,9 +224,11 @@ export class RemoteGitScm implements vscode.Disposable {
   }
 
   private snapshot(repository: Repository, file: string, ref: string, empty = false): vscode.Uri {
-    return repository.uri.with({ scheme: 'safs-git', path: path.posix.join(repository.uri.path, file), query: JSON.stringify({
-      repository: repository.uri.toString(), ref, file, empty, revision: repository.revision
-    }) });
+    // revision 让每次刷新后的暂存区对比 URI 变化，避免 VS Code 复用旧内容。
+    const uri = gitSnapshotUri(repository.uri, file, ref, empty);
+    const query = JSON.parse(uri.query) as Record<string, unknown>;
+    query.revision = repository.revision;
+    return uri.with({ query: JSON.stringify(query) });
   }
 
   private async openChange(resource: Resource): Promise<void> {

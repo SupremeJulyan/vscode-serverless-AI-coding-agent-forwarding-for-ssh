@@ -256,6 +256,16 @@
         "command": "safs.git.push",
         "title": "SAFS Git: 通过本地 Git 推送",
         "icon": "$(arrow-up)"
+      },
+      {
+        "command": "safs.git.refreshHistory",
+        "title": "SAFS Git: 刷新远程历史",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "safs.git.copyCommitId",
+        "title": "SAFS Git: 复制提交 ID",
+        "icon": "$(copy)"
       }
     ],
     "viewsContainers": {
@@ -279,10 +289,18 @@
           "name": "Agent 活动",
           "type": "webview",
           "icon": "resources/agent-activity.svg"
+        },
+        {
+          "id": "safs.gitHistory",
+          "name": "远程 Git 历史"
         }
       ]
     },
     "viewsWelcome": [
+      {
+        "view": "safs.gitHistory",
+        "contents": "尚未打开远程 Git 仓库。\n在「远程目录」中打开 Git 仓库根目录后，这里会列出该仓库的提交历史。\n[添加远程目录](command:safs.addRemoteDirectory)"
+      },
       {
         "view": "safs.mounts",
         "contents": "尚未配置远程目录。\n[添加远程目录](command:safs.addRemoteDirectory)\n[打开配置](command:safs.openConfig)",
@@ -352,9 +370,19 @@
           "command": "safs.status",
           "when": "view == safs.mounts",
           "group": "safs@2"
+        },
+        {
+          "command": "safs.git.refreshHistory",
+          "when": "view == safs.gitHistory",
+          "group": "navigation@0"
         }
       ],
       "view/item/context": [
+        {
+          "command": "safs.git.copyCommitId",
+          "when": "view == safs.gitHistory && viewItem == safsGitCommit",
+          "group": "safs@1"
+        },
         {
           "command": "safs.addHostCredentials",
           "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",

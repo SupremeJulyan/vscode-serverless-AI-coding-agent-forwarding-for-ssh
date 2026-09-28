@@ -9,6 +9,12 @@ class Uri {
   with(values: Partial<Uri>) { return new Uri(values.scheme ?? this.scheme, values.path ?? this.path, values.query ?? this.query, this.authority); }
 }
 const disposable = () => ({ dispose() {} });
+class EventEmitter {
+  private readonly listeners: (() => void)[] = [];
+  readonly event = (listener: () => void) => { this.listeners.push(listener); return disposable(); };
+  fire() { for (const listener of [...this.listeners]) listener(); }
+  dispose() { this.listeners.length = 0; }
+}
 
 test('SCM isolates repositories, compares index vs worktree and disposes removed roots', async () => {
   const commands = new Map<string, (...args: any[]) => Promise<unknown>>();
@@ -24,6 +30,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   let status = 'MM file.txt\0A  added.txt\0D  deleted.txt\0R  renamed.txt\0original.txt\0UU conflict.txt\0';
   Object.assign(vscode, {
     Uri: { joinPath: (uri: Uri, file: string) => uri.with({ path: path.posix.join(uri.path, file) }) },
+    EventEmitter,
     ProgressLocation: { SourceControl: 1 },
     commands: {
       registerCommand: (name: string, callback: (...args: any[]) => Promise<unknown>) => {

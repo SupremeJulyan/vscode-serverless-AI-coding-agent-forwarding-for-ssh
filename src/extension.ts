@@ -2,6 +2,7 @@ import { localGitRunner, pushThroughLocalGit, resolvePushTarget } from './local-
 import { pullThroughLocalGit, resolvePullTarget } from './local-git-pull';
 import { RemoteGit } from './remote-git';
 import { RemoteGitScm } from './remote-git-scm';
+import { RemoteGitHistory } from './remote-git-history';
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
   ensureUnixCliPath, globalNativeCli, installNativeCli, removeNativeCli,
@@ -6081,7 +6082,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Restore workspaces on startup
   await guard(restoreRemoteWorkspaces);
   await guard(restoreSyncedLocalWorkspaceTerminal);
-  context.subscriptions.push(new RemoteGitScm(async (uri) => {
+  const gitScm = new RemoteGitScm(async (uri) => {
     const location = parseRemoteUri(uri.toString());
     const { folder } = await mountAndFolder(location.mountName);
     const remoteCwd = remotePathForUri(folder, location.remotePath);
@@ -6099,7 +6100,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         truncated: result.truncated === true
       };
     };
-  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally, pullRemoteRepositoryLocally));
+  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally, pullRemoteRepositoryLocally);
+  context.subscriptions.push(gitScm, new RemoteGitHistory(
+    () => gitScm.repositoriesInUse(),
+    (message) => bridgeOutput?.appendLine(`[Git] ${message}`),
+    gitScm.onDidChangeRepositories, gitScm.onDidChangeHistory));
 
   tree.refresh();
 
