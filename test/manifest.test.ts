@@ -53,6 +53,20 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
 });
 
+test('extension and native CLI release versions stay synchronized', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  const cargo = await readFile(new URL('../native-cli/Cargo.toml', import.meta.url), 'utf8');
+  const nativeSource = await readFile(
+    new URL('../native-cli/src/main.rs', import.meta.url), 'utf8'
+  );
+  assert.match(cargo, new RegExp(`^version = "${manifest.version.replaceAll('.', '\\.')}"$`, 'm'));
+  assert.ok(nativeSource.includes(
+    `assert_eq!(env!("CARGO_PKG_VERSION"), "${manifest.version}")`
+  ));
+});
+
 test('every SAFS menu item references a contributed command', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
