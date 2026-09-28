@@ -34,7 +34,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '2.0.0');
+  assert.equal(manifest.version, '2.0.1');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -77,6 +77,19 @@ test('contributes a remote-directory switch command instead of relying on the lo
   ) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
   assert.ok(commands.some((item) => item.command === 'safs.switchRemoteDirectory'));
+});
+
+test('the empty remote Git panel offers adding or cloning a repository', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest & { contributes?: { viewsWelcome?: Array<{ view: string; contents: string }> } };
+  const commands = manifest.contributes?.commands ?? [];
+  assert.equal(commands.find(item => item.command === 'safs.cloneGitRepository')?.title,
+    '克隆 Git 仓库');
+  assert.ok(manifest.activationEvents?.includes('onCommand:safs.cloneGitRepository'));
+  const welcome = manifest.contributes?.viewsWelcome?.find(item => item.view === 'safs.gitHistory');
+  assert.match(welcome?.contents ?? '', /\[添加远程 Git 目录\]\(command:safs\.addRemoteDirectory\)/);
+  assert.match(welcome?.contents ?? '', /\[克隆 Git 仓库\]\(command:safs\.cloneGitRepository\)/);
 });
 
 test('remote directory commands can select a connection from a local or empty window', async () => {
@@ -232,7 +245,7 @@ test('contributes the remote Git history view to the Source Control panel', asyn
   ) as ExtensionManifest;
   // 与源代码管理在同一处：内置 scm 容器，不再占用 SAFS 侧边栏。
   assert.deepEqual(manifest.contributes?.views?.scm, [{
-    id: 'safs.gitHistory', name: '远程 Git 历史', contextualTitle: '远程 Git 历史 (SAFS)'
+    id: 'safs.gitHistory', name: 'SAFS 远程 Git 面板', contextualTitle: 'SAFS 远程 Git 面板'
   }]);
   assert.equal(manifest.contributes?.views?.safs?.some((view) => view.id === 'safs.gitHistory'), false);
 });

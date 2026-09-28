@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -48,6 +48,7 @@
     "onCommand:safs.status",
     "onCommand:safs.openConfig",
     "onCommand:safs.addRemoteDirectory",
+    "onCommand:safs.cloneGitRepository",
     "onCommand:safs.addSshConfig",
     "onCommand:safs.addHostCredentials",
     "onCommand:safs.renameHost",
@@ -102,6 +103,11 @@
         "command": "safs.addRemoteDirectory",
         "title": "添加远程目录",
         "icon": "$(add)"
+      },
+      {
+        "command": "safs.cloneGitRepository",
+        "title": "克隆 Git 仓库",
+        "icon": "$(repo-clone)"
       },
       {
         "command": "safs.addHostCredentials",
@@ -303,15 +309,15 @@
       "scm": [
         {
           "id": "safs.gitHistory",
-          "name": "远程 Git 历史",
-          "contextualTitle": "远程 Git 历史 (SAFS)"
+          "name": "SAFS 远程 Git 面板",
+          "contextualTitle": "SAFS 远程 Git 面板"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "safs.gitHistory",
-        "contents": "尚未打开远程 Git 仓库。\n在「远程目录」中打开 Git 仓库根目录后，这里会列出该仓库的提交历史。\n[添加远程目录](command:safs.addRemoteDirectory)"
+        "contents": "尚未打开远程 Git 仓库。\n在「远程目录」中打开 Git 仓库根目录后，这里会列出该仓库的提交历史。\n[添加远程 Git 目录](command:safs.addRemoteDirectory)\n[克隆 Git 仓库](command:safs.cloneGitRepository)"
       },
       {
         "view": "safs.mounts",

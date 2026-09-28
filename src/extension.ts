@@ -17,7 +17,7 @@ import { pageDirectory, searchResult } from './remote-results';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import * as vscode from 'vscode';
 import {
@@ -1003,6 +1003,92 @@ async function switchRemoteDirectory(): Promise<void> {
   agentTrace('Open', `切换远程目录：${previousPath ?? '<local>'} -> ${resolved}`);
   await vscode.commands.executeCommand(
     'vscode.openFolder', vscode.Uri.parse(folderUri(folder, resolved))
+  );
+}
+
+/** Derive the checkout directory without letting a URL become a local path. */
+export function gitCloneDirectoryName(repositoryUrl: string): string {
+  const clean = repositoryUrl.trim().replace(/[?#].*$/, '').replace(/[\\/]+$/, '');
+  const leaf = clean.slice(Math.max(clean.lastIndexOf('/'), clean.lastIndexOf(':')) + 1)
+    .replace(/\.git$/i, '');
+  const safe = leaf.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/[. ]+$/, '');
+  return safe || 'repository';
+}
+
+/** Clone with local Git/credentials, transfer the working tree, then offer either open mode. */
+async function cloneGitRepository(): Promise<void> {
+  const repositoryUrl = await input({
+    title: '克隆 Git 仓库',
+    prompt: 'Git 仓库地址',
+    placeHolder: '例如 git@github.com:owner/repository.git',
+    validateInput: required('Git 仓库地址')
+  });
+  if (repositoryUrl === undefined) return;
+  const mount = await selectMount('选择要上传到的远程挂载');
+  if (!mount) return;
+  const folder = await ensureFolder(mount);
+  const session = await pool.get(folder.hostName);
+  const defaultDirectory = await session.realpath('.');
+  const picked = await promptRemoteDirectory(
+    session, folder.remoteRoot, defaultDirectory, mount.name,
+    '克隆 Git 仓库：选择远程目标父目录'
+  );
+  if (!picked) return;
+  const parentDir = picked.startsWith('/')
+    ? path.posix.normalize(picked)
+    : path.posix.resolve(defaultDirectory, picked);
+  if (!isRemotePathInsideRoot(folder.remoteRoot, parentDir)) {
+    throw new Error(`远程目录必须位于挂载根目录 ${folder.remoteRoot} 内`);
+  }
+  const resolvedParent = await session.realpath(parentDir);
+  const repositoryName = gitCloneDirectoryName(repositoryUrl);
+  const remoteRepository = path.posix.join(resolvedParent, repositoryName);
+  try {
+    await session.stat(remoteRepository);
+    throw new Error(`远程目标已存在：${remoteRepository}。请选择其他目录或先处理已有目录。`);
+  } catch (error) {
+    if (!isMissingRemoteError(error)) throw error;
+  }
+
+  const stagingRoot = path.join(vscodeContext.globalStorageUri.fsPath, 'git-clone');
+  await mkdir(stagingRoot, { recursive: true });
+  const temporary = await mkdtemp(path.join(stagingRoot, 'clone-'));
+  const localRepository = path.join(temporary, repositoryName);
+  try {
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: 'SAFS：正在使用本地 Git 克隆仓库',
+      cancellable: true
+    }, async (progress, token) => {
+      const controller = new AbortController();
+      const cancelled = token.onCancellationRequested(() => controller.abort());
+      try {
+        progress.report({ message: repositoryUrl.trim() });
+        await localGitRunner()(['clone', '--', repositoryUrl.trim(), localRepository], controller.signal);
+      } finally {
+        cancelled.dispose();
+      }
+    });
+    const uploaded = await visualUpload(
+      [vscode.Uri.file(localRepository)], mount.name, resolvedParent
+    );
+    if (!uploaded) return;
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+
+  await recordDirectoryHistory(vscodeContext, mount.name, remoteRepository);
+  const action = await vscode.window.showInformationMessage(
+    `SAFS：Git 仓库已上传到 ${mount.name}:${remoteRepository}`,
+    '切换到此目录', '在新窗口打开'
+  );
+  if (!action) return;
+  const localRoot = localRootForFolder(folder);
+  await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, remoteRepository);
+  await writeLastRemoteDirectory(localRoot, folder.remoteRoot, remoteRepository);
+  await vscode.commands.executeCommand(
+    'vscode.openFolder', vscode.Uri.parse(folderUri(folder, remoteRepository)),
+    action === '在新窗口打开'
   );
 }
 
@@ -5948,6 +6034,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tree.refresh();
   });
   command('switchRemoteDirectory', switchRemoteDirectory);
+  command('cloneGitRepository', cloneGitRepository);
   command('completeRemoteDirectory', completeRemoteDirectory);
   command('syncToLocal', (uri) => syncToLocal(uri as vscode.Uri | undefined));
   command('syncToRemote', (uri) => syncToRemote(uri as vscode.Uri | undefined));
