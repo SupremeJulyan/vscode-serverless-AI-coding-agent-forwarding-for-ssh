@@ -1,4 +1,4 @@
-import { localGitRunner, pushThroughLocalGit, resolvePushTarget } from './local-git-push';
+import { localGitRunner, pushThroughLocalGit, resolvePushTarget, resolveShallowBoundaries } from './local-git-push';
 import { pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget } from './local-git-pull';
 import { RemoteGit } from './remote-git';
 import { RemoteGitScm } from './remote-git-scm';
@@ -3854,6 +3854,8 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
   const remoteCwd = remotePathForUri(folder, location.remotePath);
   const configuration = vscode.workspace.getConfiguration('safs', uri);
   const target = await resolvePushTarget(git, configuration.get<string>('git.pushUrl', '').trim() || undefined);
+  // 浅克隆的远端只能打出到边界提交为止的 bundle：先问远端要边界，本地照样声明。
+  const shallowBoundaries = await resolveShallowBoundaries(git, `refs/heads/${target.branch}`);
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 推送'
   }, async progress => {
@@ -3864,6 +3866,7 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
       await pushThroughLocalGit({
         storagePath: path.join(vscodeContext.globalStorageUri.fsPath, 'git-relay'),
         target, local: localGitRunner(configuration.get<string>('git.localPath', 'git')),
+        shallowBoundaries,
         signal: controller.signal, report: message => progress.report({ message }),
         downloadBundle: async destination => {
           controller.signal.throwIfAborted();
@@ -3893,6 +3896,8 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
   const remoteCwd = remotePathForUri(folder, location.remotePath);
   const configuration = vscode.workspace.getConfiguration('safs', uri);
   const target = await resolvePullTarget(git);
+  // 浅克隆的远端只能打出到边界提交为止的 bundle：先问远端要边界，本地照样声明。
+  const shallowBoundaries = await resolveShallowBoundaries(git, `refs/heads/${target.branch}`);
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 拉取'
   }, async progress => {
@@ -3903,6 +3908,7 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
       const result = await pullThroughLocalGit({
         storagePath: path.join(vscodeContext.globalStorageUri.fsPath, 'git-relay'),
         target, local: localGitRunner(configuration.get<string>('git.localPath', 'git')),
+        shallowBoundaries,
         signal: controller.signal, report: message => progress.report({ message }),
         downloadBundle: async destination => {
           controller.signal.throwIfAborted();
@@ -3961,6 +3967,8 @@ async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pr
   const remoteCwd = remotePathForUri(folder, location.remotePath);
   const configuration = vscode.workspace.getConfiguration('safs', uri);
   const target = await resolveFetchTarget(git);
+  // 浅克隆的远端只能打出到边界提交为止的 bundle：先问远端要边界，本地照样声明。
+  const shallowBoundaries = await resolveShallowBoundaries(git, target.tracking);
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 提取'
   }, async progress => {
@@ -3971,6 +3979,7 @@ async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pr
       const result = await fetchThroughLocalGit({
         storagePath: path.join(vscodeContext.globalStorageUri.fsPath, 'git-relay'),
         target, local: localGitRunner(configuration.get<string>('git.localPath', 'git')),
+        shallowBoundaries,
         signal: controller.signal, report: message => progress.report({ message }),
         downloadBundle: async destination => {
           controller.signal.throwIfAborted();

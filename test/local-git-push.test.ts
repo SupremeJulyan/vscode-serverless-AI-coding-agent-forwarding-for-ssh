@@ -2,13 +2,30 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, writeFile, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { RemoteGit, GitRunner } from '../src/remote-git';
-import { localGitRunner, pushThroughLocalGit, resolvePushTarget, validatePushUrl } from '../src/local-git-push';
+import {
+  declareShallowBoundaries, describeShallowPushFailure, localGitRunner, pushThroughLocalGit,
+  resolveShallowBoundaries, resolvePushTarget, validatePushUrl
+} from '../src/local-git-push';
 
 const exec = promisify(execFile);
+
+function shellRunner(cwd: string): GitRunner {
+  return async command => {
+    try { const result = await exec('/bin/sh', ['-c', command], { cwd }); return { ...result, exitCode: 0 }; }
+    catch (error) { const result = error as any; return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr }; }
+  };
+}
+
+async function identity(repository: string): Promise<void> {
+  for (const [key, value] of [['user.name', 'Relay Test'], ['user.email', 'relay@example.test']]) {
+    await exec('git', ['-C', repository, 'config', key, value]);
+  }
+}
+
 async function fixture(t: any) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'safs-relay-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -17,18 +34,12 @@ async function fixture(t: any) {
   const storagePath = path.join(root, 'cache');
   await exec('git', ['init', '-b', 'topic', source]);
   await exec('git', ['init', '--bare', destination]);
-  for (const [key, value] of [['user.name', 'Relay Test'], ['user.email', 'relay@example.test']]) {
-    await exec('git', ['-C', source, 'config', key, value]);
-  }
+  await identity(source);
   await writeFile(path.join(source, 'file.txt'), 'committed');
   await exec('git', ['-C', source, 'add', '.']);
   await exec('git', ['-C', source, 'commit', '-m', 'initial']);
   await exec('git', ['-C', source, 'remote', 'add', 'origin', 'https://example.test/project.git']);
-  const runner: GitRunner = async command => {
-    try { const result = await exec('/bin/sh', ['-c', command], { cwd: source }); return { ...result, exitCode: 0 }; }
-    catch (error) { const result = error as any; return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr }; }
-  };
-  return { root, source, destination, storagePath, git: new RemoteGit(runner), local: localGitRunner() };
+  return { root, source, destination, storagePath, git: new RemoteGit(shellRunner(source)), local: localGitRunner() };
 }
 
 test('relay pushes exact committed history, leaves working changes behind, cleans up', async t => {
@@ -103,4 +114,107 @@ test('local push destinations reject remote paths and executable helpers', () =>
   assert.throws(() => validatePushUrl('/srv/repo'), /读到：\/srv\/repo/);
   assert.throws(() => validatePushUrl('https://user:secret@host/repo\n'),
     /https:\/\/user:<hidden>@host\/repo\\x0a/);
+});
+
+test('complete repositories report no shallow boundaries', async t => {
+  const { git } = await fixture(t);
+  assert.deepEqual(await resolveShallowBoundaries(git, 'refs/heads/topic'), []);
+  await assert.rejects(declareShallowBoundaries(path.join(os.tmpdir(), 'safs-unused-relay'), ['not-a-commit-id']),
+    /Invalid Git commit ID/);
+  // 边界说明只跟着浅克隆出现，别的失败原因（比如凭据）不该被安上这个尾巴。
+  const boundary = '81ef4c4c566722a20d4c9586020fa8ab39f1049b';
+  assert.match(describeShallowPushFailure([boundary], 'shallow update not allowed'), /git fetch --unshallow/);
+  assert.equal(describeShallowPushFailure([boundary], 'Authentication failed'), 'Authentication failed');
+  assert.equal(describeShallowPushFailure([], 'shallow update not allowed'), 'shallow update not allowed');
+});
+
+test('shallow remote pushes by declaring the same boundary in the relay', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'safs-shallow-push-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const upstream = path.join(root, 'upstream.git');
+  const seed = path.join(root, 'seed');
+  const source = path.join(root, 'remote');
+  const storagePath = path.join(root, 'cache');
+  await exec('git', ['init', '-q', '--bare', '-b', 'topic', upstream]);
+  await exec('git', ['clone', '-q', upstream, seed]);
+  await identity(seed);
+  await writeFile(path.join(seed, 'file.txt'), 'upstream\n');
+  await exec('git', ['-C', seed, 'add', '.']);
+  await exec('git', ['-C', seed, 'commit', '-qm', 'upstream']);
+  await writeFile(path.join(seed, 'file.txt'), 'upstream again\n');
+  await exec('git', ['-C', seed, 'commit', '-qam', 'upstream again']);
+  await exec('git', ['-C', seed, 'push', '-q', 'origin', 'topic']);
+  // 远端是浅克隆：对象库里只有边界提交往上的历史，边界提交的父对象根本没有。
+  await exec('git', ['clone', '-q', '--depth', '1', `file://${upstream}`, source]);
+  await identity(source);
+  await writeFile(path.join(source, 'local.txt'), 'local\n');
+  await exec('git', ['-C', source, 'add', '.']);
+  await exec('git', ['-C', source, 'commit', '-qm', 'local']);
+  await exec('git', ['-C', source, 'remote', 'set-url', 'origin', 'https://example.test/project.git']);
+
+  const git = new RemoteGit(shellRunner(source));
+  const local = localGitRunner();
+  const target = { ...await resolvePushTarget(git), url: upstream };
+  const shallowBoundaries = await resolveShallowBoundaries(git, 'refs/heads/topic');
+  assert.equal(shallowBoundaries.length, 1);
+  assert.equal(shallowBoundaries[0], (await exec('git', ['-C', source, 'rev-parse', 'HEAD^'])).stdout.trim());
+  const downloadBundle = async (file: string) => { await git.run(['bundle', 'create', file, 'refs/heads/topic']); };
+
+  // 不声明边界，bundle 里缺的正是边界提交的父对象：导入以这条报错失败（用户看到的那条）。
+  await assert.rejects(pushThroughLocalGit({ storagePath, local, target, downloadBundle }),
+    /necessary objects|Could not read/);
+  assert.deepEqual(await readdir(storagePath), []);
+
+  await pushThroughLocalGit({ storagePath, local, target, downloadBundle, shallowBoundaries });
+  assert.equal((await local(['-C', upstream, 'rev-parse', 'refs/heads/topic'])).trim(), target.oid);
+  // 对端拿到的是完整历史：浅边界只存在于中转仓库，推送后上游照旧是完整仓库。
+  assert.equal(await local(['-C', upstream, 'show', 'topic:local.txt']), 'local\n');
+  assert.equal((await local(['-C', upstream, 'rev-list', '--count', 'refs/heads/topic'])).trim(), '3');
+  assert.equal((await local(['-C', upstream, 'rev-parse', '--is-shallow-repository'])).trim(), 'false');
+  await exec('git', ['-C', upstream, 'fsck', '--no-dangling']);
+  assert.deepEqual(await readdir(storagePath), []);
+});
+
+test('shallow relay explains a target that lacks the truncated history', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'safs-shallow-reject-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const upstream = path.join(root, 'upstream.git');
+  const fork = path.join(root, 'fork.git');
+  const seed = path.join(root, 'seed');
+  const source = path.join(root, 'remote');
+  const storagePath = path.join(root, 'cache');
+  await exec('git', ['init', '-q', '--bare', '-b', 'topic', fork]);
+  await exec('git', ['clone', '-q', fork, seed]);
+  await identity(seed);
+  await writeFile(path.join(seed, 'file.txt'), 'one\n');
+  await exec('git', ['-C', seed, 'add', '.']);
+  await exec('git', ['-C', seed, 'commit', '-qm', 'one']);
+  await exec('git', ['-C', seed, 'push', '-q', 'origin', 'topic']);
+  await exec('git', ['clone', '-q', '--depth', '1', `file://${fork}`, source]);
+  await identity(source);
+  await writeFile(path.join(source, 'local.txt'), 'local\n');
+  await exec('git', ['-C', source, 'add', '.']);
+  await exec('git', ['-C', source, 'commit', '-qm', 'local']);
+  await exec('git', ['-C', source, 'remote', 'set-url', 'origin', 'https://example.test/project.git']);
+  // 目标仓库只有一条无关的历史：浅边界之前的对象谁都没有，推送只能被拒。
+  await exec('git', ['init', '-q', '--bare', '-b', 'topic', upstream]);
+  const other = path.join(root, 'other');
+  await exec('git', ['init', '-q', '-b', 'topic', other]);
+  await identity(other);
+  await writeFile(path.join(other, 'other.txt'), 'other\n');
+  await exec('git', ['-C', other, 'add', '.']);
+  await exec('git', ['-C', other, 'commit', '-qm', 'other']);
+  await exec('git', ['-C', other, 'push', '-q', upstream, 'topic']);
+  const unchanged = (await exec('git', ['-C', upstream, 'rev-parse', 'refs/heads/topic'])).stdout.trim();
+
+  const git = new RemoteGit(shellRunner(source));
+  const local = localGitRunner();
+  const target = { ...await resolvePushTarget(git), url: upstream };
+  const shallowBoundaries = await resolveShallowBoundaries(git, 'refs/heads/topic');
+  assert.equal(shallowBoundaries.length, 1);
+  await assert.rejects(pushThroughLocalGit({ storagePath, local, target, shallowBoundaries,
+    downloadBundle: async file => { await git.run(['bundle', 'create', file, 'refs/heads/topic']); }
+  }), /git fetch --unshallow/);
+  assert.equal((await local(['-C', upstream, 'rev-parse', 'refs/heads/topic'])).trim(), unchanged);
+  assert.deepEqual(await readdir(storagePath), []);
 });

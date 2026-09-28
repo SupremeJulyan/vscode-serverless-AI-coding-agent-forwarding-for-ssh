@@ -1,8 +1,50 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { RemoteGit } from './remote-git';
 import { executeCaptured } from './process';
 import { redactSensitiveText } from './redact';
+
+const objectId = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+
+/**
+ * 浅克隆的远端只能打出到边界提交为止的 bundle：bundle 自己仍声称「完整历史」，
+ * 但边界提交的父对象并不在里面，本地导入会以
+ * 「Could not read <父提交>／Failed to traverse parents of commit <边界提交>／
+ * did not send all necessary objects」失败。
+ *
+ * 中转仓库先声明同样的浅边界，遍历到此为止，导入就能通过；
+ * 推送时这些边界会作为 shallow 行发给对端，对端需要已有边界之前的对象。
+ */
+export async function declareShallowBoundaries(
+  repository: string, boundaries: readonly string[] | undefined
+): Promise<void> {
+  const entries = [...new Set((boundaries ?? []).map(boundary => boundary.trim()).filter(Boolean))];
+  if (!entries.length) return;
+  for (const entry of entries) if (!objectId.test(entry)) throw new Error('Invalid Git commit ID');
+  await writeFile(path.join(repository, 'shallow'), `${entries.join('\n')}\n`);
+}
+
+/** 远端的浅克隆边界提交：与远端 `.git/shallow` 一致，按要被中转的 ref 取；完整仓库返回空数组。 */
+export async function resolveShallowBoundaries(git: RemoteGit, ref: string): Promise<string[]> {
+  // 老版本 Git 不认识这个选项：当作完整仓库（真正的错误随后照常报出）。
+  const kind = await git.run(['rev-parse', '--is-shallow-repository']).catch(() => 'false');
+  if (kind.trim() !== 'true') return [];
+  const output = (await git.run(['rev-list', '--max-parents=0', ref])).trim();
+  return output ? output.split('\n').map(line => line.trim()).filter(Boolean) : [];
+}
+
+/**
+ * 推送失败时的浅克隆说明：中转仓库只有边界往上的历史，
+ * 目标仓库若没有边界之前的对象，对端会以 shallow update not allowed 或
+ * did not send all necessary objects 拒绝——报错本身看不出这层原因。
+ */
+export function describeShallowPushFailure(boundaries: readonly string[] | undefined, message: string): string {
+  if (!boundaries?.length) return message;
+  if (!/shallow|necessary objects|non-fast-forward|fetch first|rejected/i.test(message)) return message;
+  const ids = boundaries.map(boundary => boundary.slice(0, 12)).join('、');
+  return `${message}（远端仓库是浅克隆，历史在 ${ids} 处被截断；`
+    + `目标仓库若没有边界之前的对象就无法完成推送，可先在远端执行 git fetch --unshallow 后重试。）`;
+}
 
 export interface PushTarget {
   branch: string;
@@ -74,7 +116,7 @@ export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): P
       + `来源：${overrideUrl ? 'safs.git.pushUrl' : `远端 remote.${remote}.pushurl / url`}。`);
   }
   const oid = (await git.run(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
-  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)) throw new Error('Invalid Git commit ID');
+  if (!objectId.test(oid)) throw new Error('Invalid Git commit ID');
   return { branch, destination, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1' };
 }
 
@@ -98,6 +140,8 @@ export interface LocalPushOptions {
   storagePath: string;
   target: PushTarget;
   local: LocalGitRunner;
+  /** 远端是浅克隆时的边界提交（`resolveShallowBoundaries`）；中转仓库要先声明同样的边界。 */
+  shallowBoundaries?: string[];
   /** Creates and transfers a full branch bundle using the existing SAFS transport. */
   downloadBundle: (destination: string) => Promise<void>;
   signal?: AbortSignal;
@@ -117,14 +161,21 @@ export async function pushThroughLocalGit(options: LocalPushOptions): Promise<vo
     await options.downloadBundle(bundle);
     signal?.throwIfAborted();
     await local(['init', '--bare', `--object-format=${target.objectFormat}`, repository], signal);
+    // 浅克隆远端的 bundle 只到边界提交为止：先声明边界，导入才不会缺父对象。
+    await declareShallowBoundaries(repository, options.shallowBoundaries);
     await local(['-C', repository, 'fetch', '--no-tags', bundle,
       `refs/heads/${target.branch}:refs/heads/safs-push`], signal);
     const imported = (await local(['-C', repository, 'rev-parse', 'refs/heads/safs-push'], signal)).trim();
     if (imported !== target.oid) throw new Error('传输期间远端分支发生变化，请重新推送。');
     options.report?.('正在使用本地 Git 和凭据推送…');
     // Explicit one-branch refspec; never inherit mirror/force/all behavior from the remote repo.
-    await local(['-C', repository, '-c', 'push.followTags=false', 'push', '--porcelain',
-      '--', target.url, `${target.oid}:${target.destination}`], signal);
+    try {
+      await local(['-C', repository, '-c', 'push.followTags=false', 'push', '--porcelain',
+        '--', target.url, `${target.oid}:${target.destination}`], signal);
+    } catch (error) {
+      throw new Error(describeShallowPushFailure(
+        options.shallowBoundaries, error instanceof Error ? error.message : String(error)));
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

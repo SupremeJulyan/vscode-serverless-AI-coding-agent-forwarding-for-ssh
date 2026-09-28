@@ -6,7 +6,7 @@ import { mkdtemp, writeFile, readFile, rm, readdir, copyFile } from 'node:fs/pro
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { RemoteGit, GitRunner } from '../src/remote-git';
-import { localGitRunner, validateFetchUrl } from '../src/local-git-push';
+import { localGitRunner, resolveShallowBoundaries, validateFetchUrl } from '../src/local-git-push';
 import { describeFetchFailure, fetchThroughLocalGit, pullThroughLocalGit, resolveFetchTarget, resolvePullTarget } from '../src/local-git-pull';
 
 const exec = promisify(execFile);
@@ -252,5 +252,60 @@ test('relay fetch tolerates a rewritten upstream', async t => {
   // 回退到远端已有的提交：没有对象要传，只更新跟踪 ref（bundle 不允许为空）。
   assert.deepEqual(counts, { downloads: 1, deliveries: 0, refUpdates: 1 });
   assert.equal((await git.run(['rev-parse', 'refs/remotes/origin/main'])).trim(), rewound);
+  assert.deepEqual(await readdir(storagePath), []);
+});
+
+test('relay pulls into a shallow remote by declaring the same boundary locally', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'safs-shallow-pull-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const upstream = path.join(root, 'upstream.git');
+  const seed = path.join(root, 'seed');
+  const source = path.join(root, 'remote');
+  const storagePath = path.join(root, 'cache');
+  const identity = async (repository: string) => {
+    for (const [key, value] of [['user.name', 'Relay Test'], ['user.email', 'relay@example.test']]) {
+      await exec('git', ['-C', repository, 'config', key, value]);
+    }
+  };
+  await exec('git', ['init', '-q', '--bare', '-b', 'main', upstream]);
+  await exec('git', ['clone', '-q', upstream, seed]);
+  await identity(seed);
+  await writeFile(path.join(seed, 'file.txt'), 'first\n');
+  await exec('git', ['-C', seed, 'add', '.']);
+  await exec('git', ['-C', seed, 'commit', '-qm', 'first']);
+  await exec('git', ['-C', seed, 'push', '-q', 'origin', 'main']);
+  // 远端是深 1 的浅克隆：边界提交就是它的 HEAD，边界提交的父对象不在对象库里。
+  await exec('git', ['clone', '-q', '--depth', '1', `file://${upstream}`, source]);
+  await identity(source);
+  await exec('git', ['-C', source, 'remote', 'set-url', 'origin', 'https://example.test/project.git']);
+  await writeFile(path.join(seed, 'file.txt'), 'second\n');
+  await exec('git', ['-C', seed, 'commit', '-qam', 'second']);
+  await exec('git', ['-C', seed, 'push', '-q', 'origin', 'main']);
+  const expected = (await exec('git', ['-C', upstream, 'rev-parse', 'refs/heads/main'])).stdout.trim();
+
+  const runner: GitRunner = async command => {
+    try { const result = await exec('/bin/sh', ['-c', command], { cwd: source }); return { ...result, exitCode: 0 }; }
+    catch (error) { const result = error as any; return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr }; }
+  };
+  const git = new RemoteGit(runner);
+  const local = localGitRunner();
+  const target = { ...await resolvePullTarget(git), url: upstream };
+  const shallowBoundaries = await resolveShallowBoundaries(git, 'refs/heads/main');
+  assert.equal(shallowBoundaries.length, 1);
+  assert.equal(shallowBoundaries[0], (await exec('git', ['-C', source, 'rev-parse', 'HEAD'])).stdout.trim());
+  const result = await pullThroughLocalGit({
+    storagePath, local, target, shallowBoundaries,
+    downloadBundle: async file => { await git.run(['bundle', 'create', file, 'refs/heads/main']); },
+    deliverBundle: async (bundle, oid) => {
+      const uploaded = path.join(root, 'uploaded.bundle');
+      await copyFile(bundle, uploaded);
+      await git.run(['fetch', uploaded, '+refs/heads/safs-pull:refs/remotes/origin/main']);
+      await git.run(['merge', '--ff-only', 'refs/remotes/origin/main']);
+      assert.equal((await git.run(['rev-parse', '--verify', 'refs/heads/main^{commit}'])).trim(), oid);
+    }
+  });
+  assert.deepEqual(result, { status: 'merged', oid: expected });
+  assert.equal(await readFile(path.join(source, 'file.txt'), 'utf8'), 'second\n');
+  assert.equal((await git.run(['rev-parse', 'refs/heads/main'])).trim(), expected);
   assert.deepEqual(await readdir(storagePath), []);
 });

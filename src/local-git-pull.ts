@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { RemoteGit } from './remote-git';
-import { LocalGitRunner, validateFetchUrl } from './local-git-push';
+import { LocalGitRunner, declareShallowBoundaries, validateFetchUrl } from './local-git-push';
 
 export interface PullTarget {
   /** 远端当前分支：合并目标，也是中转包携带的分支名。 */
@@ -62,6 +62,8 @@ export interface LocalPullOptions {
   storagePath: string;
   target: PullTarget;
   local: LocalGitRunner;
+  /** 远端是浅克隆时的边界提交（`resolveShallowBoundaries`）；中转仓库要先声明同样的边界。 */
+  shallowBoundaries?: string[];
   /** 远端生成当前分支的完整 bundle 并传到本地；调用方负责远端临时文件的清理。 */
   downloadBundle: (destination: string) => Promise<void>;
   /** 把增量 bundle 传回远端，在远端 fetch 后 --ff-only 合并到当前分支，并校验提交 ID。 */
@@ -105,6 +107,8 @@ export async function pullThroughLocalGit(options: LocalPullOptions): Promise<Lo
     await options.downloadBundle(base);
     signal?.throwIfAborted();
     // 本地先拿到远端已有的对象，才能只把「远端还没有的部分」传回去。
+    // 浅克隆的远端 bundle 只到边界提交为止：声明同样的边界，导入才不会缺父对象。
+    await declareShallowBoundaries(repository, options.shallowBoundaries);
     await local(['-C', repository, 'fetch', '--no-tags', base,
       `refs/heads/${target.branch}:refs/heads/safs-base`], signal);
     const imported = (await local(['-C', repository, 'rev-parse', 'refs/heads/safs-base'], signal)).trim();
@@ -169,6 +173,8 @@ export interface LocalFetchOptions {
   storagePath: string;
   target: FetchTarget;
   local: LocalGitRunner;
+  /** 远端是浅克隆时的边界提交（`resolveShallowBoundaries`）；中转仓库要先声明同样的边界。 */
+  shallowBoundaries?: string[];
   /** 远端把当前跟踪 ref 打成 bundle 传回本地；base 不存在时不会调用。 */
   downloadBundle: (destination: string) => Promise<void>;
   /** 把增量 bundle 传回远端并更新跟踪 ref；调用方负责校验它已指向 expected。 */
@@ -213,6 +219,8 @@ export async function fetchThroughLocalGit(options: LocalFetchOptions): Promise<
       await options.downloadBundle(base);
       signal?.throwIfAborted();
       // 本地先拿到远端已有的对象，才能只把「远端还没有的部分」传回去。
+      // 浅克隆的远端 bundle 只到边界提交为止：声明同样的边界，导入才不会缺父对象。
+      await declareShallowBoundaries(repository, options.shallowBoundaries);
       await local(['-C', repository, 'fetch', '--no-tags', base,
         `${target.tracking}:refs/heads/safs-base`], signal);
       const imported = (await local(['-C', repository, 'rev-parse', 'refs/heads/safs-base'], signal)).trim();
