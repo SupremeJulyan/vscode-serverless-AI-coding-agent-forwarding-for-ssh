@@ -29,6 +29,10 @@ async function fixture(t: any) {
   await exec('git', ['-C', seed, 'push', '-q', 'origin', 'main']);
   // 远端从上游克隆后即与上游断网：URL 换成网络地址，本地中转才允许使用。
   await exec('git', ['clone', '-q', upstream, source]);
+  // CI runner 没有全局 git 身份：远端仓库也显式配置，避免用例依赖宿主机 ~/.gitconfig。
+  for (const [key, value] of [['user.name', 'Relay Test'], ['user.email', 'relay@example.test']]) {
+    await exec('git', ['-C', source, 'config', key, value]);
+  }
   await exec('git', ['-C', source, 'remote', 'set-url', 'origin', 'https://example.test/project.git']);
   const runner: GitRunner = async command => {
     try { const result = await exec('/bin/sh', ['-c', command], { cwd: source }); return { ...result, exitCode: 0 }; }
