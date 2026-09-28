@@ -34,7 +34,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.9.12');
+  assert.equal(manifest.version, '2.0.0');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -189,6 +189,22 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   assert.equal(extensionSource.includes('recordObservedAgentSource'), false);
   assert.equal(extensionSource.includes('runAgentMcpOperation'), false);
   await assert.rejects(access(new URL('../src/agent-mcp-registry.ts', import.meta.url)));
+});
+
+test('the history view title bar offers the same Git actions', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  const titles = (manifest.contributes?.menus?.['view/title'] ?? [])
+    .filter(item => item.when === 'view == safs.gitHistory');
+  // 与源代码管理面板一致的布局：刷新/提交常驻，提取/拉取/推送收在 ... 里。
+  assert.deepEqual(titles, [
+    { command: 'safs.git.refreshHistory', when: 'view == safs.gitHistory', group: 'navigation@0' },
+    { command: 'safs.git.commit', when: 'view == safs.gitHistory', group: 'navigation@1' },
+    { command: 'safs.git.fetch', when: 'view == safs.gitHistory', group: 'remote' },
+    { command: 'safs.git.pull', when: 'view == safs.gitHistory', group: 'remote' },
+    { command: 'safs.git.push', when: 'view == safs.gitHistory', group: 'remote' }
+  ]);
 });
 
 test('git commands keep short titles and group under the SAFS Git category', async () => {

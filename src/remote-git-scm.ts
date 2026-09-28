@@ -114,7 +114,16 @@ export class RemoteGitScm implements vscode.Disposable {
     command('commit', async (source?: vscode.SourceControl) => {
       const repository = await this.select(source);
       if (!repository) return;
-      const message = repository.scm.inputBox.value;
+      let message = repository.scm.inputBox.value;
+      if (!source) {
+        // 从「远程 Git 历史」标题栏触发时没有输入框上下文，直接问一句提交说明。
+        message = await vscode.window.showInputBox({
+          prompt: `${repository.name}：提交说明（只提交已暂存更改）`,
+          value: message, ignoreFocusOut: true,
+          validateInput: value => value.trim() ? undefined : '请输入提交说明。'
+        }) ?? '';
+        if (!message.trim()) return;
+      }
       await this.enqueue(repository, async () => {
         await this.update(repository);
         if (repository.conflicts.resourceStates.length) throw new Error('请先解决并暂存冲突。');

@@ -57,6 +57,9 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   Object.assign(vscode.window, {
     state: { focused: true }, onDidChangeWindowState: disposable,
     showErrorMessage: async (message: string) => { errors.push(message); },
+    // 历史视图标题栏没有输入框：提交走 showInputBox，多仓库时走 showQuickPick。
+    showInputBox: async () => 'view commit',
+    showQuickPick: async (items: any[]) => items[0],
     withProgress: async (_options: unknown, task: () => Promise<void>) => task()
   });
   const { RemoteGitScm } = require('../src/remote-git-scm') as typeof import('../src/remote-git-scm');
@@ -98,6 +101,9 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     await commands.get('safs.git.commit')!(b);
     assert.equal(b.inputBox.value, '');
     assert.ok(executions.some(command => command.root === rootB.path && command.command.includes("'commit' '-m' 'commit B'")));
+    // 历史视图标题栏触发：没有 SourceControl 上下文，先选仓库（单选走 QuickPick）再问提交说明。
+    await commands.get('safs.git.commit')!();
+    assert.ok(executions.some(command => command.root === rootA.path && command.command.includes("'commit' '-m' 'view commit'")));
     await commands.get('safs.git.push')!(b);
     assert.deepEqual(localPushes, [rootB.path]);
     assert.ok(!executions.some(command => command.command.includes("'push'")));
