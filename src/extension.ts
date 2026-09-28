@@ -1,3 +1,6 @@
+import { localGitRunner, pushThroughLocalGit, resolvePushTarget } from './local-git-push';
+import { RemoteGit } from './remote-git';
+import { RemoteGitScm } from './remote-git-scm';
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
   ensureUnixCliPath, globalNativeCli, installNativeCli, removeNativeCli,
@@ -3607,7 +3610,9 @@ async function executeRemoteCommand(
 ): Promise<Record<string, unknown>> {
   if (!input.command?.trim()) throw new Error('Remote command must not be empty.');
   const { mount, folder } = await mountAndFolder(input.mountName);
-  const workspaceRoot = currentWorkspacePath(folder);
+  // SCM binds each command to its own workspace folder, including multi-root windows.
+  const workspaceRoot = input.source === 'remote_git' && input.remoteCwd
+    ? input.remoteCwd : currentWorkspacePath(folder);
   const requestedCwd = input.remoteCwd?.startsWith('/')
     ? path.posix.normalize(input.remoteCwd)
     : path.posix.resolve(workspaceRoot, input.remoteCwd ?? '.');
@@ -3675,7 +3680,7 @@ async function executeRemoteCommand(
   // Explicit, session-only terminal forwarding applies only to Agent task commands.
   // Searches keep their isolated execution path and file operations remain on SFTP.
   const activeTerminal = activeAgentCommandTerminal();
-  if (source !== 'remote_search' && activeTerminal) {
+  if (source !== 'remote_search' && source !== 'remote_git' && activeTerminal) {
     // The terminal's own working directory always wins in terminal mode.
     // The Agent-supplied remoteCwd may come from a stale workspace context and
     // must never be used to cd the terminal away from where the user is.
@@ -3817,6 +3822,53 @@ async function executeRemoteCommand(
   } finally {
     await credentials?.cleanup();
   }
+}
+
+async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Promise<void> {
+  const location = parseRemoteUri(uri.toString());
+  const { folder } = await mountAndFolder(location.mountName);
+  const remoteCwd = remotePathForUri(folder, location.remotePath);
+  const configuration = vscode.workspace.getConfiguration('safs', uri);
+  const target = await resolvePushTarget(git, configuration.get<string>('git.pushUrl', '').trim() || undefined);
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 推送'
+  }, async progress => {
+    const controller = new AbortController();
+    const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120000);
+    const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    try {
+      await pushThroughLocalGit({
+        storagePath: path.join(vscodeContext.globalStorageUri.fsPath, 'git-relay'),
+        target, local: localGitRunner(configuration.get<string>('git.localPath', 'git')),
+        signal: controller.signal, report: message => progress.report({ message }),
+        downloadBundle: async destination => {
+          controller.signal.throwIfAborted();
+          const session = await pool.get(folder.hostName);
+          // --git-path also resolves correctly for linked worktrees; bundles stay out of the work tree.
+          const bundlePath = (await git.run(['rev-parse', '--git-path', `safs-${randomBytes(16).toString('hex')}.bundle`])).trim();
+          const remoteBundle = path.posix.resolve(remoteCwd, bundlePath);
+          try {
+            await git.run(['bundle', 'create', remoteBundle, `refs/heads/${target.branch}`]);
+            controller.signal.throwIfAborted();
+            const source = await session.readFileStream(remoteBundle, controller.signal);
+            await writeStreamToFile(source, destination, { signal: controller.signal });
+          } finally {
+            for (const temporary of [remoteBundle, `${remoteBundle}.lock`]) {
+              await session.deleteFile(temporary).catch(error => {
+                if (error?.code !== 2 && error?.code !== 'ENOENT') {
+                  bridgeOutput?.appendLine(`[Git] 无法清理临时文件 ${temporary}: ${redactSensitiveText(String(error))}`);
+                }
+              });
+            }
+          }
+        }
+      });
+      void vscode.window.showInformationMessage('SAFS：已通过本地 Git 推送。');
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(`本地 Git 推送超时（${timeoutMs} ms），请刷新目标仓库确认是否已收到提交。`);
+      throw new Error(redactSensitiveText(error instanceof Error ? error.message : String(error)));
+    } finally { if (timeout) clearTimeout(timeout); }
+  });
 }
 
 async function remoteSearch(input: RemoteSearchOptions & {
@@ -5950,6 +6002,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Restore workspaces on startup
   await guard(restoreRemoteWorkspaces);
   await guard(restoreSyncedLocalWorkspaceTerminal);
+  context.subscriptions.push(new RemoteGitScm(async (uri) => {
+    const location = parseRemoteUri(uri.toString());
+    const { folder } = await mountAndFolder(location.mountName);
+    const remoteCwd = remotePathForUri(folder, location.remotePath);
+    return async (command) => {
+      if (!(vscode.workspace.workspaceFolders ?? []).some(candidate => candidate.uri.toString() === uri.toString())) {
+        throw new Error('远程 Git 工作区已关闭。');
+      }
+      const result = await executeRemoteCommand(context, {
+        command, mountName: location.mountName, remoteCwd,
+        source: 'remote_git', captureForMcp: true
+      });
+      return {
+        exitCode: typeof result.exitCode === 'number' ? result.exitCode : null,
+        stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? ''),
+        truncated: result.truncated === true
+      };
+    };
+  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally));
+
   tree.refresh();
 
   // 每次切换到远程文件或同步镜像文件时：若设置开启则同步远程终端；

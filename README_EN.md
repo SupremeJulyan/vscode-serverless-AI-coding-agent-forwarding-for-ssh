@@ -274,3 +274,20 @@ Recommendations:
 - They can be combined: use SAFS for daily editing and Agent file operations, and SSH/rsync for reviewed operations scripts or bulk transfers.
 
 > “Passwordless” does not mean “unprotected.” Prefer a passphrase-protected private key with `ssh-agent`, create a dedicated least-privilege account for the Agent, and use `from=` or `command=` restrictions in `authorized_keys` where appropriate. Do not give the Agent root login or passwordless `sudo`.
+
+## Remote Git source control
+
+Open a remote **Git repository root** with SAFS to see `Git (SAFS)` in VS Code Source Control. Status, diff, staging and commits run on the SSH host using its Git configuration and commit identity. Push runs through local Git using local networking and credentials. Workspace synchronization and Agent forwarding are not required.
+
+- Browse staged changes, working tree changes and conflicts. Click a file to compare HEAD, index and working tree content; untracked and conflicted files open directly.
+- Use **+ / −** to stage or unstage files, including multiple selections. Enter a message and click **✓** or press Ctrl+Enter (Cmd+Enter on macOS) to commit staged changes only.
+- The repository menu provides fetch, pull (`--ff-only`) and push through local Git. Push sends only the current branch, using the remote repository’s push remote / push URL and its corresponding upstream branch, or the current branch name if no upstream is configured. It does not force push, set upstream, or inherit mirror/custom push refspecs.
+- Status refreshes after remote saves, on window focus and every 15 seconds while the window is active. Failures back off for 60 seconds. Run `SAFS Git: 刷新远程 Git` to retry immediately and display errors.
+
+The SSH host needs Git and a configured `user.name` / `user.email`. The local environment needs Git 2.29+ and working repository credentials (a credential helper or SSH agent). Push creates a branch bundle in the remote Git directory, downloads it through the existing SAFS SFTP/SCP connection into an isolated local bare repository, and pushes using local Git. The SSH host does not need access to the Git hosting service. Temporary files are cleaned up after success or failure; remote cleanup failures are logged.
+
+Set `safs.git.localPath` to select the local Git executable and `safs.git.pushUrl` to override the push URL, for example when a remote SSH alias is unavailable locally. Local means the VS Code extension host environment: an extension running in WSL uses WSL Git and credentials.
+
+Each push transfers the current branch’s complete reachable history and requires corresponding disk space and time; the timeout follows `safs.agentMcpTimeoutMs`. Bundles contain Git objects only, excluding Git LFS payloads and submodule repositories; use a local clone containing those assets for such repositories. The panel does not provide interactive credential input. Fetch and pull still run remotely and require remote networking and authentication. Use the SAFS terminal for upstream setup, init/clone, branch switching and advanced conflict resolution. Terminal changes are picked up by subsequent refreshes.
+
+Each `safs://` workspace root represents one repository, including worktree roots. Nested repositories are not scanned; open the repository root rather than a subdirectory. Diff previews are intended for text files. Command output exceeding 16 MiB fails explicitly instead of showing truncated state. Local `file://` mirrors continue to use VS Code's built-in Git integration.
