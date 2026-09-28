@@ -1,4 +1,5 @@
 import { localGitRunner, pushThroughLocalGit, resolvePushTarget } from './local-git-push';
+import { pullThroughLocalGit, resolvePullTarget } from './local-git-pull';
 import { RemoteGit } from './remote-git';
 import { RemoteGitScm } from './remote-git-scm';
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
@@ -16,6 +17,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { access, mkdir, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import * as vscode from 'vscode';
 import {
   BridgeConfig, deriveMounts, ensureConfigFile, expandHome, HostConfig, loadConfig, MountConfig,
@@ -53,7 +55,7 @@ import {
 import { connectSftp } from './sftp/client';
 import { connectSystemScp } from './sftp/system-session';
 import { SftpSession } from './sftp/session';
-import { writeStreamToFile } from './stream-file';
+import { writeStreamToFile, pipeStreams } from './stream-file';
 import {
   cleanupDownloadPart, commitDownloadPart, prepareDownloadResume
 } from './resume-store';
@@ -3824,6 +3826,23 @@ async function executeRemoteCommand(
   }
 }
 
+/** --git-path also resolves correctly for linked worktrees; bundles stay out of the work tree. */
+async function remoteGitBundlePath(git: RemoteGit, remoteCwd: string): Promise<string> {
+  const bundlePath = (await git.run(['rev-parse', '--git-path', `safs-${randomBytes(16).toString('hex')}.bundle`])).trim();
+  return path.posix.resolve(remoteCwd, bundlePath);
+}
+
+/** 中转包用完即删：远端清理失败只记日志，不影响已完成的中转结果。 */
+async function removeRemoteGitTemporaries(session: SftpSession, paths: string[]): Promise<void> {
+  for (const temporary of paths) {
+    await session.deleteFile(temporary).catch(error => {
+      if (error?.code !== 2 && error?.code !== 'ENOENT') {
+        bridgeOutput?.appendLine(`[Git] 无法清理临时文件 ${temporary}: ${redactSensitiveText(String(error))}`);
+      }
+    });
+  }
+}
+
 async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Promise<void> {
   const location = parseRemoteUri(uri.toString());
   const { folder } = await mountAndFolder(location.mountName);
@@ -3844,28 +3863,88 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
         downloadBundle: async destination => {
           controller.signal.throwIfAborted();
           const session = await pool.get(folder.hostName);
-          // --git-path also resolves correctly for linked worktrees; bundles stay out of the work tree.
-          const bundlePath = (await git.run(['rev-parse', '--git-path', `safs-${randomBytes(16).toString('hex')}.bundle`])).trim();
-          const remoteBundle = path.posix.resolve(remoteCwd, bundlePath);
+          const remoteBundle = await remoteGitBundlePath(git, remoteCwd);
           try {
             await git.run(['bundle', 'create', remoteBundle, `refs/heads/${target.branch}`]);
             controller.signal.throwIfAborted();
             const source = await session.readFileStream(remoteBundle, controller.signal);
             await writeStreamToFile(source, destination, { signal: controller.signal });
           } finally {
-            for (const temporary of [remoteBundle, `${remoteBundle}.lock`]) {
-              await session.deleteFile(temporary).catch(error => {
-                if (error?.code !== 2 && error?.code !== 'ENOENT') {
-                  bridgeOutput?.appendLine(`[Git] 无法清理临时文件 ${temporary}: ${redactSensitiveText(String(error))}`);
-                }
-              });
-            }
+            await removeRemoteGitTemporaries(session, [remoteBundle, `${remoteBundle}.lock`]);
           }
         }
       });
       void vscode.window.showInformationMessage('SAFS：已通过本地 Git 推送。');
     } catch (error) {
       if (controller.signal.aborted) throw new Error(`本地 Git 推送超时（${timeoutMs} ms），请刷新目标仓库确认是否已收到提交。`);
+      throw new Error(redactSensitiveText(error instanceof Error ? error.message : String(error)));
+    } finally { if (timeout) clearTimeout(timeout); }
+  });
+}
+
+async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Promise<void> {
+  const location = parseRemoteUri(uri.toString());
+  const { folder } = await mountAndFolder(location.mountName);
+  const remoteCwd = remotePathForUri(folder, location.remotePath);
+  const configuration = vscode.workspace.getConfiguration('safs', uri);
+  const target = await resolvePullTarget(git);
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 拉取'
+  }, async progress => {
+    const controller = new AbortController();
+    const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120000);
+    const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    try {
+      const result = await pullThroughLocalGit({
+        storagePath: path.join(vscodeContext.globalStorageUri.fsPath, 'git-relay'),
+        target, local: localGitRunner(configuration.get<string>('git.localPath', 'git')),
+        signal: controller.signal, report: message => progress.report({ message }),
+        downloadBundle: async destination => {
+          controller.signal.throwIfAborted();
+          const session = await pool.get(folder.hostName);
+          const remoteBundle = await remoteGitBundlePath(git, remoteCwd);
+          try {
+            await git.run(['bundle', 'create', remoteBundle, `refs/heads/${target.branch}`]);
+            controller.signal.throwIfAborted();
+            const source = await session.readFileStream(remoteBundle, controller.signal);
+            await writeStreamToFile(source, destination, { signal: controller.signal });
+          } finally {
+            await removeRemoteGitTemporaries(session, [remoteBundle, `${remoteBundle}.lock`]);
+          }
+        },
+        deliverBundle: async (source, expected) => {
+          controller.signal.throwIfAborted();
+          const session = await pool.get(folder.hostName);
+          const remoteBundle = await remoteGitBundlePath(git, remoteCwd);
+          try {
+            const sink = await session.writeFileStream(remoteBundle, {
+              create: true, overwrite: false, mode: 0o600
+            }, controller.signal);
+            await pipeStreams(createReadStream(source), sink, { signal: controller.signal });
+            controller.signal.throwIfAborted();
+            // 只更新当前分支的远程跟踪 ref：不套用远端配置里的 mirror / 自定义 refspec。
+            try {
+              await git.run(['fetch', remoteBundle,
+                `+refs/heads/safs-pull:refs/remotes/${target.remote}/${target.branch}`]);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (/prerequisite/i.test(message)) throw new Error('远端分支在拉取期间被改写，请重新拉取。');
+              throw error;
+            }
+            const head = (await git.run(['symbolic-ref', '--quiet', 'HEAD'])).trim();
+            if (head !== `refs/heads/${target.branch}`) throw new Error('远端已切换分支，已取消合并。');
+            await git.run(['merge', '--ff-only', `refs/remotes/${target.remote}/${target.branch}`]);
+            const merged = (await git.run(['rev-parse', '--verify', `refs/heads/${target.branch}^{commit}`])).trim();
+            if (merged !== expected) throw new Error('合并后远端分支与预期提交不一致，请检查远端仓库。');
+          } finally {
+            await removeRemoteGitTemporaries(session, [remoteBundle, `${remoteBundle}.lock`]);
+          }
+        }
+      });
+      void vscode.window.showInformationMessage(
+        result.status === 'up-to-date' ? 'SAFS：已是最新，无需拉取。' : 'SAFS：已通过本地 Git 拉取。');
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(`本地 Git 拉取超时（${timeoutMs} ms），请刷新远端仓库确认是否已更新。`);
       throw new Error(redactSensitiveText(error instanceof Error ? error.message : String(error)));
     } finally { if (timeout) clearTimeout(timeout); }
   });
@@ -6020,7 +6099,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         truncated: result.truncated === true
       };
     };
-  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally));
+  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally, pullRemoteRepositoryLocally));
 
   tree.refresh();
 

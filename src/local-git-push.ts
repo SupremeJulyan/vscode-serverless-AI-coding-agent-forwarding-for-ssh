@@ -11,13 +11,26 @@ export interface PushTarget {
   objectFormat: 'sha1' | 'sha256';
 }
 
+/** 中转必须连网络地址：远端文件系统路径或自定义 helper 不能被本地 Git 当成目标。 */
+function isNetworkGitUrl(url: string): boolean {
+  if (/[\r\n\0]/.test(url) || url.startsWith('-')) return false;
+  if (/^(https?|ssh|git):\/\/[^/]+\/.+/.test(url)) return true;
+  return !url.includes('://') && /^(?:[^@\s/:]+@)?[^\s/:]+:.+/.test(url)
+    && !/^[A-Za-z]:/.test(url) && !url.includes('::');
+}
+
 /** A remote filesystem path or custom helper must never become a local push destination. */
 export function validatePushUrl(url: string): void {
-  if (/[\r\n\0]/.test(url) || url.startsWith('-')) throw new Error('无效的 Git 推送地址。');
-  if (/^(https?|ssh|git):\/\/[^/]+\/.+/.test(url)) return;
-  if (!url.includes('://') && /^(?:[^@\s/:]+@)?[^\s/:]+:.+/.test(url)
-      && !/^[A-Za-z]:/.test(url) && !url.includes('::')) return;
-  throw new Error('本地中转需要 HTTPS / SSH Git 地址；远端文件路径不能作为本地推送地址。可设置 safs.git.pushUrl。');
+  if (!isNetworkGitUrl(url)) {
+    throw new Error('本地中转需要 HTTPS / SSH Git 地址；远端文件路径不能作为本地推送地址。可设置 safs.git.pushUrl。');
+  }
+}
+
+/** 拉取方向同理：远端仓库的 fetch URL 也不能是它自己的文件路径。 */
+export function validateFetchUrl(url: string): void {
+  if (!isNetworkGitUrl(url)) {
+    throw new Error('本地中转需要 HTTPS / SSH Git 地址；远端文件路径不能作为本地拉取地址。');
+  }
 }
 
 export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): Promise<PushTarget> {

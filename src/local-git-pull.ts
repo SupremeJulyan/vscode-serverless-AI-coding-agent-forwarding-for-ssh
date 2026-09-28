@@ -1,0 +1,123 @@
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import * as path from 'node:path';
+import { RemoteGit } from './remote-git';
+import { LocalGitRunner, validateFetchUrl } from './local-git-push';
+
+export interface PullTarget {
+  /** 远端当前分支：合并目标，也是中转包携带的分支名。 */
+  branch: string;
+  /** 远端配置的 remote 名，用于在远端更新 `refs/remotes/<remote>/<branch>`。 */
+  remote: string;
+  /** 上游分支的完整 ref，本地按它取新提交。 */
+  upstream: string;
+  /** 本地 Git 要连接的地址（远端仓库的 fetch URL）。 */
+  url: string;
+  /** 远端分支当前提交，传输前后都按它校验。 */
+  oid: string;
+  objectFormat: 'sha1' | 'sha256';
+}
+
+/**
+ * 解析拉取目标：与 `git pull` 一致，当前分支必须有上游
+ * （`branch.<name>.remote` + `branch.<name>.merge`），否则宁可不做。
+ */
+export async function resolvePullTarget(git: RemoteGit): Promise<PullTarget> {
+  const ref = (await git.run(['symbolic-ref', '--quiet', 'HEAD'])).trim();
+  if (!ref.startsWith('refs/heads/')) throw new Error('请先切换到要拉取的分支。');
+  const branch = ref.slice('refs/heads/'.length);
+  const remote = await git.config(`branch.${branch}.remote`);
+  const merge = await git.config(`branch.${branch}.merge`);
+  if (!remote || remote === '.' || !merge?.startsWith('refs/heads/')) {
+    throw new Error('当前分支没有上游分支：请在远端终端执行 git branch --set-upstream-to=<远程>/<分支>。');
+  }
+  await git.run(['check-ref-format', merge]);
+  let urls: string[];
+  try {
+    urls = (await git.run(['remote', 'get-url', '--all', remote])).trim().split('\n').filter(Boolean);
+  } catch {
+    throw new Error(`远端仓库 ${remote} 不存在：请检查当前分支的上游配置。`);
+  }
+  if (urls.length !== 1) throw new Error('仓库配置了多个 fetch URL，无法确定本地中转地址。');
+  validateFetchUrl(urls[0]);
+  const oid = (await git.run(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)) throw new Error('Invalid Git commit ID');
+  return { branch, remote, upstream: merge, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1' };
+}
+
+/** 本地凭据缺失时的提示：中转拉取的取新提交发生在本地，这是最常见的失败。 */
+export function describeFetchFailure(url: string, message: string): string {
+  if (/could not read Username|terminal prompts disabled|Authentication failed|Permission denied \(publickey\)/i.test(message)) {
+    return `本地 Git 无法认证 ${url}：请先在本地配置凭据（credential helper），或改用本地可达的 SSH 地址`
+      + `（如 git@host:path，或用 url.<base>.insteadOf 重写）。原始错误：${message}`;
+  }
+  return message;
+}
+
+export interface LocalPullOptions {
+  storagePath: string;
+  target: PullTarget;
+  local: LocalGitRunner;
+  /** 远端生成当前分支的完整 bundle 并传到本地；调用方负责远端临时文件的清理。 */
+  downloadBundle: (destination: string) => Promise<void>;
+  /** 把增量 bundle 传回远端，在远端 fetch 后 --ff-only 合并到当前分支，并校验提交 ID。 */
+  deliverBundle: (source: string, expected: string) => Promise<void>;
+  signal?: AbortSignal;
+  report?: (message: string) => void;
+}
+
+export interface LocalPullResult { status: 'up-to-date' | 'merged'; oid: string }
+
+/**
+ * 经本地 Git 拉取：远端不出网、没有凭据也能更新。
+ *
+ * 顺序刻意是先本地取上游、再下载远端历史：远端提交 ID 在 resolvePullTarget
+ * 里已经拿到，已是最新时连 bundle 都不用传。
+ */
+export async function pullThroughLocalGit(options: LocalPullOptions): Promise<LocalPullResult> {
+  const { target, local, signal } = options;
+  await local(['--version'], signal); // Fail before creating a potentially large remote bundle.
+  await mkdir(options.storagePath, { recursive: true });
+  const directory = await mkdtemp(path.join(options.storagePath, 'pull-'));
+  try {
+    const repository = path.join(directory, 'relay.git');
+    const base = path.join(directory, 'remote.bundle');
+    const delta = path.join(directory, 'delta.bundle');
+    await local(['init', '--bare', `--object-format=${target.objectFormat}`, repository], signal);
+    options.report?.('正在用本地 Git 和凭据获取上游提交…');
+    try {
+      await local(['-C', repository, 'fetch', '--no-tags', target.url,
+        `${target.upstream}:refs/heads/safs-pull`], signal);
+    } catch (error) {
+      throw new Error(describeFetchFailure(target.url, error instanceof Error ? error.message : String(error)));
+    }
+    const fetched = (await local(['-C', repository, 'rev-parse', 'refs/heads/safs-pull'], signal)).trim();
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(fetched)) throw new Error('Invalid Git commit ID');
+    if (fetched === target.oid) {
+      options.report?.('已是最新提交，无需拉取。');
+      return { status: 'up-to-date', oid: fetched };
+    }
+    options.report?.('正在通过 SAFS 下载远端提交历史…');
+    await options.downloadBundle(base);
+    signal?.throwIfAborted();
+    // 本地先拿到远端已有的对象，才能只把「远端还没有的部分」传回去。
+    await local(['-C', repository, 'fetch', '--no-tags', base,
+      `refs/heads/${target.branch}:refs/heads/safs-base`], signal);
+    const imported = (await local(['-C', repository, 'rev-parse', 'refs/heads/safs-base'], signal)).trim();
+    if (imported !== target.oid) throw new Error('传输期间远端分支发生变化，请重新拉取。');
+    // 快进判定在本地做：分叉时不必先把增量传回远端再失败。
+    // `safs-pull..safs-base` 为空等价于 base 是 pull 的祖先（可快进）。
+    const behind = Number((await local(['-C', repository, 'rev-list', '--count',
+      'refs/heads/safs-pull..refs/heads/safs-base'], signal)).trim());
+    if (!Number.isFinite(behind) || behind > 0) {
+      throw new Error('远端分支与上游已分叉，无法快进合并；请在远端终端手动处理。');
+    }
+    await local(['-C', repository, 'bundle', 'create', delta, 'refs/heads/safs-pull',
+      '--not', 'refs/heads/safs-base'], signal);
+    signal?.throwIfAborted();
+    options.report?.('正在把上游提交传回远端…');
+    await options.deliverBundle(delta, fetched);
+    return { status: 'merged', oid: fetched };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}

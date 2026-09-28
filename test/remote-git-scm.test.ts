@@ -17,6 +17,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   const executions: { root: string; command: string }[] = [];
   const opened: any[][] = [];
   const localPushes: string[] = [];
+  const localPulls: string[] = [];
   let contentProvider: any;
   const rootA = new Uri('safs', '/placeholder/a');
   const rootB = new Uri('safs', '/placeholder/b');
@@ -58,7 +59,8 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     if (command.includes("'symbolic-ref'")) stdout = 'main\n';
     if (command.includes("'show'")) stdout = 'snapshot\n';
     return { exitCode: 0, stdout, stderr: '' };
-  }, message => errors.push(message), async uri => { localPushes.push(uri.path); });
+  }, message => errors.push(message), async uri => { localPushes.push(uri.path); },
+  async uri => { localPulls.push(uri.path); });
   try {
     for (let attempt = 0; attempt < 100 && sources.length < 2; attempt++) await new Promise(resolve => setImmediate(resolve));
     await scm.refresh();
@@ -92,7 +94,8 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     assert.deepEqual(localPushes, [rootB.path]);
     assert.ok(!executions.some(command => command.command.includes("'push'")));
     await commands.get('safs.git.pull')!(a);
-    assert.ok(executions.some(command => command.command.includes("'pull' '--ff-only'")));
+    assert.deepEqual(localPulls, [rootA.path]);
+    assert.ok(!executions.some(command => command.command.includes("'pull'")));
     vscode.workspace.workspaceFolders = [{ uri: rootB, name: 'B' }];
     await scm.refresh();
     assert.equal(a.disposed, true);
