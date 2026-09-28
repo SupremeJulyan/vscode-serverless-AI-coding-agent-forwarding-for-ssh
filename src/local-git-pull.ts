@@ -70,7 +70,7 @@ export interface LocalPullOptions {
   report?: (message: string) => void;
 }
 
-export interface LocalPullResult { status: 'up-to-date' | 'merged'; oid: string }
+export interface LocalPullResult { status: 'up-to-date' | 'merged' | 'fetched'; oid: string }
 
 /**
  * 经本地 Git 拉取：远端不出网、没有凭据也能更新。
@@ -133,6 +133,110 @@ export async function pullThroughLocalGit(options: LocalPullOptions): Promise<Lo
     options.report?.('正在把上游提交传回远端…');
     await options.deliverBundle(delta, fetched);
     return { status: 'merged', oid: fetched };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+export interface FetchTarget {
+  /** 远端当前分支（决定默认的跟踪 ref 名）。 */
+  branch: string;
+  remote: string;
+  /** 上游分支的完整 ref。 */
+  upstream: string;
+  /** 远端要更新的远程跟踪 ref。 */
+  tracking: string;
+  url: string;
+  /** 远端跟踪 ref 当前指向；不存在时 undefined（首次提取发全量包）。 */
+  base?: string;
+  objectFormat: 'sha1' | 'sha256';
+}
+
+/** 提取只更新当前分支的远程跟踪 ref，不动工作区；同样要求当前分支有上游。 */
+export async function resolveFetchTarget(git: RemoteGit): Promise<FetchTarget> {
+  const pull = await resolvePullTarget(git);
+  const tracking = `refs/remotes/${pull.remote}/${pull.branch}`;
+  await git.run(['check-ref-format', tracking]);
+  const value = (await git.probe(['rev-parse', '--verify', '--quiet', `${tracking}^{commit}`]))?.trim();
+  if (value && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) throw new Error('Invalid Git commit ID');
+  return {
+    branch: pull.branch, remote: pull.remote, upstream: pull.upstream, tracking,
+    url: pull.url, base: value || undefined, objectFormat: pull.objectFormat
+  };
+}
+
+export interface LocalFetchOptions {
+  storagePath: string;
+  target: FetchTarget;
+  local: LocalGitRunner;
+  /** 远端把当前跟踪 ref 打成 bundle 传回本地；base 不存在时不会调用。 */
+  downloadBundle: (destination: string) => Promise<void>;
+  /** 把增量 bundle 传回远端并更新跟踪 ref；调用方负责校验它已指向 expected。 */
+  deliverBundle: (source: string, expected: string) => Promise<void>;
+  /** 远端已有全部所需对象时（上游被回退到远端已有的提交）只更新跟踪 ref。 */
+  updateRef: (oid: string) => Promise<void>;
+  signal?: AbortSignal;
+  report?: (message: string) => void;
+}
+
+/**
+ * 经本地 Git 提取上游更新：远端不出网、没有凭据也能更新远程跟踪 ref。
+ *
+ * 与拉取共用同一套机制，区别是不做合并：允许上游被回退（跟踪 ref 用 `+` 强制更新），
+ * 工作区与当前分支完全不动。
+ */
+export async function fetchThroughLocalGit(options: LocalFetchOptions): Promise<LocalPullResult> {
+  const { target, local, signal } = options;
+  await local(['--version'], signal);
+  await mkdir(options.storagePath, { recursive: true });
+  const directory = await mkdtemp(path.join(options.storagePath, 'fetch-'));
+  try {
+    const repository = path.join(directory, 'relay.git');
+    const base = path.join(directory, 'remote.bundle');
+    const delta = path.join(directory, 'delta.bundle');
+    await local(['init', '--bare', `--object-format=${target.objectFormat}`, repository], signal);
+    options.report?.('正在用本地 Git 和凭据获取上游提交…');
+    try {
+      await local(['-C', repository, 'fetch', '--no-tags', target.url,
+        `${target.upstream}:refs/heads/safs-pull`], signal);
+    } catch (error) {
+      throw new Error(describeFetchFailure(target.url, error instanceof Error ? error.message : String(error)));
+    }
+    const fetched = (await local(['-C', repository, 'rev-parse', 'refs/heads/safs-pull'], signal)).trim();
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(fetched)) throw new Error('Invalid Git commit ID');
+    if (fetched === target.base) {
+      options.report?.('远程跟踪引用已是最新。');
+      return { status: 'up-to-date', oid: fetched };
+    }
+    if (target.base) {
+      options.report?.('正在通过 SAFS 下载远端跟踪引用…');
+      await options.downloadBundle(base);
+      signal?.throwIfAborted();
+      // 本地先拿到远端已有的对象，才能只把「远端还没有的部分」传回去。
+      await local(['-C', repository, 'fetch', '--no-tags', base,
+        `${target.tracking}:refs/heads/safs-base`], signal);
+      const imported = (await local(['-C', repository, 'rev-parse', 'refs/heads/safs-base'], signal)).trim();
+      if (imported !== target.base) throw new Error('传输期间远端跟踪引用发生变化，请重新提取。');
+      // 上游被回退到远端已有的提交时没有任何对象要传，而且 bundle 也不允许为空：
+      // 这种情况只把跟踪 ref 指过去。（`safs-base..safs-pull` 为空即 pull ⊆ base。）
+      const incoming = Number((await local(['-C', repository, 'rev-list', '--count',
+        'refs/heads/safs-base..refs/heads/safs-pull'], signal)).trim());
+      if (!Number.isFinite(incoming)) throw new Error('无法比较远端跟踪引用与上游分支。');
+      if (incoming === 0) {
+        options.report?.('上游提交远端都已具备，只更新跟踪引用。');
+        await options.updateRef(fetched);
+        return { status: 'fetched', oid: fetched };
+      }
+      await local(['-C', repository, 'bundle', 'create', delta,
+        'refs/heads/safs-pull', '--not', 'refs/heads/safs-base'], signal);
+    } else {
+      // 远端还没有这条跟踪 ref：没有可用的前置提交，只能发全量包。
+      await local(['-C', repository, 'bundle', 'create', delta, 'refs/heads/safs-pull'], signal);
+    }
+    signal?.throwIfAborted();
+    options.report?.('正在把上游提交传回远端…');
+    await options.deliverBundle(delta, fetched);
+    return { status: 'fetched', oid: fetched };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

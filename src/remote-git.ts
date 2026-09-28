@@ -47,6 +47,14 @@ export class RemoteGit {
     if (result.exitCode !== 0 || result.truncated) throw new Error(result.stderr.trim() || 'Cannot read Git configuration');
     return result.stdout.replace(/\r?\n$/, '');
   }
+  /** 允许"不存在"的探测（`rev-parse --verify --quiet`）：退出码 1 返回 undefined，其它错误照抛。 */
+  async probe(args: string[]): Promise<string | undefined> {
+    const result = await this.runner(gitCommand(args));
+    if (result.truncated) throw new Error('Git output exceeded the capture limit; result was not used.');
+    if (result.exitCode === 1) return undefined;
+    if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || `Git failed (${result.exitCode})`);
+    return result.stdout;
+  }
   async status(): Promise<GitChange[]> {
     return parseGitStatus(await this.run(['status', '--porcelain=v1', '-z', '--untracked-files=all']));
   }
@@ -57,11 +65,9 @@ export class RemoteGit {
   async unstage(changes: GitChange[]): Promise<void> {
     const paths = [...new Set(changes.flatMap(c => c.originalPath ? [c.path, c.originalPath] : [c.path]))];
     if (!paths.length) return;
-    const probe = await this.runner(gitCommand(['rev-parse', '--verify', '--quiet', 'HEAD']));
-    if (probe.truncated || (probe.exitCode !== 0 && probe.exitCode !== 1)) {
-      throw new Error(probe.stderr.trim() || 'Cannot determine Git HEAD');
-    }
-    const head = probe.exitCode === 0;
+    let head: string | undefined;
+    try { head = await this.probe(['rev-parse', '--verify', '--quiet', 'HEAD']); }
+    catch { throw new Error('Cannot determine Git HEAD'); }
     // Before the first commit there is no HEAD to restore from. Remove only index entries.
     await this.run(head ? ['reset', 'HEAD', '--', ...paths] : ['rm', '--cached', '-f', '--', ...paths]);
   }

@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { RemoteGit, GitRunner } from '../src/remote-git';
 import { localGitRunner, validateFetchUrl } from '../src/local-git-push';
-import { describeFetchFailure, pullThroughLocalGit, resolvePullTarget } from '../src/local-git-pull';
+import { describeFetchFailure, fetchThroughLocalGit, pullThroughLocalGit, resolveFetchTarget, resolvePullTarget } from '../src/local-git-pull';
 
 const exec = promisify(execFile);
 
@@ -162,4 +162,95 @@ test('fetch failures name the local credential problem', () => {
     assert.throws(() => validateFetchUrl(url));
   }
   for (const url of ['https://host/repo', 'ssh://user@host:2222/repo', 'git@host:repo.git']) validateFetchUrl(url);
+});
+
+/** 复刻扩展在远端做的那几步（bundle 走本地文件，其余与 extension.ts 相同）。 */
+async function runFetch(data: any, counts: { downloads?: () => void; deliveries?: () => void; refUpdates?: () => void } = {}) {
+  const { root, upstream, storagePath, git, local } = data;
+  const target = { ...await resolveFetchTarget(git), url: upstream };
+  const result = await fetchThroughLocalGit({
+    storagePath, local, target,
+    downloadBundle: async file => {
+      counts.downloads?.();
+      await git.run(['bundle', 'create', file, target.tracking]);
+    },
+    deliverBundle: async (bundle, expected) => {
+      counts.deliveries?.();
+      const uploaded = path.join(root, 'fetched.bundle');
+      await copyFile(bundle, uploaded);
+      await git.run(['fetch', uploaded, `+refs/heads/safs-pull:${target.tracking}`]);
+      assert.equal((await git.run(['rev-parse', '--verify', `${target.tracking}^{commit}`])).trim(), expected);
+    },
+    updateRef: async oid => {
+      counts.refUpdates?.();
+      await git.run(['update-ref', target.tracking, oid]);
+      assert.equal((await git.run(['rev-parse', '--verify', `${target.tracking}^{commit}`])).trim(), oid);
+    }
+  });
+  return { result, target };
+}
+
+test('relay fetch updates only the remote tracking ref', async t => {
+  const data = await fixture(t);
+  const { upstream, source, storagePath, advanceUpstream, git, local } = data;
+  await advanceUpstream('first\nsecond\n');
+  const tip = (await local(['-C', upstream, 'rev-parse', 'refs/heads/main'])).trim();
+  const branch = (await git.run(['rev-parse', 'refs/heads/main'])).trim();
+  const working = await readFile(path.join(source, 'file.txt'), 'utf8');
+  const counts = { downloads: 0, deliveries: 0, refUpdates: 0 };
+  const { result, target } = await runFetch(data, {
+    downloads: () => counts.downloads++, deliveries: () => counts.deliveries++, refUpdates: () => counts.refUpdates++
+  });
+  assert.equal(target.tracking, 'refs/remotes/origin/main');
+  assert.deepEqual(result, { status: 'fetched', oid: tip });
+  assert.deepEqual(counts, { downloads: 1, deliveries: 1, refUpdates: 0 });
+  assert.equal((await git.run(['rev-parse', 'refs/remotes/origin/main'])).trim(), tip);
+  // 提取不动工作区、也不动当前分支。
+  assert.equal((await git.run(['rev-parse', 'refs/heads/main'])).trim(), branch);
+  assert.equal(await readFile(path.join(source, 'file.txt'), 'utf8'), working);
+  assert.deepEqual(await readdir(storagePath), []);
+  const again = await fetchThroughLocalGit({
+    storagePath, local, target: { ...await resolveFetchTarget(git), url: upstream },
+    downloadBundle: async () => { throw new Error('不应下载'); },
+    deliverBundle: async () => { throw new Error('不应回传'); },
+    updateRef: async () => { throw new Error('不应更新'); }
+  });
+  assert.deepEqual(again, { status: 'up-to-date', oid: tip });
+  assert.deepEqual(await readdir(storagePath), []);
+});
+
+test('relay fetch creates a missing tracking ref with a full bundle', async t => {
+  const data = await fixture(t);
+  const { upstream, storagePath, advanceUpstream, git, local } = data;
+  await advanceUpstream('first\nsecond\n');
+  await git.run(['update-ref', '-d', 'refs/remotes/origin/main']);
+  const tip = (await local(['-C', upstream, 'rev-parse', 'refs/heads/main'])).trim();
+  const counts = { downloads: 0, deliveries: 0, refUpdates: 0 };
+  const { result } = await runFetch(data, {
+    downloads: () => counts.downloads++, deliveries: () => counts.deliveries++, refUpdates: () => counts.refUpdates++
+  });
+  assert.deepEqual(result, { status: 'fetched', oid: tip });
+  // 远端没有跟踪 ref 时没有可用的前置提交，不发下载、直接全量包。
+  assert.deepEqual(counts, { downloads: 0, deliveries: 1, refUpdates: 0 });
+  assert.equal((await git.run(['rev-parse', 'refs/remotes/origin/main'])).trim(), tip);
+  assert.deepEqual(await readdir(storagePath), []);
+});
+
+test('relay fetch tolerates a rewritten upstream', async t => {
+  const data = await fixture(t);
+  const { upstream, seed, storagePath, advanceUpstream, git, local } = data;
+  await advanceUpstream('first\nsecond\n');
+  await runFetch(data);
+  await exec('git', ['-C', seed, 'reset', '--hard', 'HEAD~1']);
+  await exec('git', ['-C', seed, 'push', '-q', '--force', 'origin', 'main']);
+  const rewound = (await local(['-C', upstream, 'rev-parse', 'refs/heads/main'])).trim();
+  const counts = { downloads: 0, deliveries: 0, refUpdates: 0 };
+  const { result } = await runFetch(data, {
+    downloads: () => counts.downloads++, deliveries: () => counts.deliveries++, refUpdates: () => counts.refUpdates++
+  });
+  assert.deepEqual(result, { status: 'fetched', oid: rewound });
+  // 回退到远端已有的提交：没有对象要传，只更新跟踪 ref（bundle 不允许为空）。
+  assert.deepEqual(counts, { downloads: 1, deliveries: 0, refUpdates: 1 });
+  assert.equal((await git.run(['rev-parse', 'refs/remotes/origin/main'])).trim(), rewound);
+  assert.deepEqual(await readdir(storagePath), []);
 });

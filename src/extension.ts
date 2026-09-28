@@ -1,5 +1,5 @@
 import { localGitRunner, pushThroughLocalGit, resolvePushTarget } from './local-git-push';
-import { pullThroughLocalGit, resolvePullTarget } from './local-git-pull';
+import { pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget } from './local-git-pull';
 import { RemoteGit } from './remote-git';
 import { RemoteGitScm } from './remote-git-scm';
 import { RemoteGitHistory } from './remote-git-history';
@@ -3951,6 +3951,76 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
   });
 }
 
+async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Promise<void> {
+  const location = parseRemoteUri(uri.toString());
+  const { folder } = await mountAndFolder(location.mountName);
+  const remoteCwd = remotePathForUri(folder, location.remotePath);
+  const configuration = vscode.workspace.getConfiguration('safs', uri);
+  const target = await resolveFetchTarget(git);
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 提取'
+  }, async progress => {
+    const controller = new AbortController();
+    const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120000);
+    const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    try {
+      const result = await fetchThroughLocalGit({
+        storagePath: path.join(vscodeContext.globalStorageUri.fsPath, 'git-relay'),
+        target, local: localGitRunner(configuration.get<string>('git.localPath', 'git')),
+        signal: controller.signal, report: message => progress.report({ message }),
+        downloadBundle: async destination => {
+          controller.signal.throwIfAborted();
+          const session = await pool.get(folder.hostName);
+          const remoteBundle = await remoteGitBundlePath(git, remoteCwd);
+          try {
+            await git.run(['bundle', 'create', remoteBundle, target.tracking]);
+            controller.signal.throwIfAborted();
+            const source = await session.readFileStream(remoteBundle, controller.signal);
+            await writeStreamToFile(source, destination, { signal: controller.signal });
+          } finally {
+            await removeRemoteGitTemporaries(session, [remoteBundle, `${remoteBundle}.lock`]);
+          }
+        },
+        deliverBundle: async (source, expected) => {
+          controller.signal.throwIfAborted();
+          const session = await pool.get(folder.hostName);
+          const remoteBundle = await remoteGitBundlePath(git, remoteCwd);
+          try {
+            const sink = await session.writeFileStream(remoteBundle, {
+              create: true, overwrite: false, mode: 0o600
+            }, controller.signal);
+            await pipeStreams(createReadStream(source), sink, { signal: controller.signal });
+            controller.signal.throwIfAborted();
+            // 提取只更新这一条远程跟踪 ref：不动工作区，也不动当前分支。
+            try {
+              await git.run(['fetch', remoteBundle, `+refs/heads/safs-pull:${target.tracking}`]);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (/prerequisite/i.test(message)) throw new Error('远端跟踪引用在提取期间被改写，请重新提取。');
+              throw error;
+            }
+            const updated = (await git.run(['rev-parse', '--verify', `${target.tracking}^{commit}`])).trim();
+            if (updated !== expected) throw new Error('提取后远端跟踪引用与预期提交不一致，请检查远端仓库。');
+          } finally {
+            await removeRemoteGitTemporaries(session, [remoteBundle, `${remoteBundle}.lock`]);
+          }
+        },
+        updateRef: async oid => {
+          controller.signal.throwIfAborted();
+          await git.run(['update-ref', target.tracking, oid]);
+          const updated = (await git.run(['rev-parse', '--verify', `${target.tracking}^{commit}`])).trim();
+          if (updated !== oid) throw new Error('提取后远端跟踪引用与预期提交不一致，请检查远端仓库。');
+        }
+      });
+      void vscode.window.showInformationMessage(
+        result.status === 'up-to-date' ? 'SAFS：远程跟踪引用已是最新。' : 'SAFS：已通过本地 Git 提取上游更新。');
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(`本地 Git 提取超时（${timeoutMs} ms），请稍后重试。`);
+      throw new Error(redactSensitiveText(error instanceof Error ? error.message : String(error)));
+    } finally { if (timeout) clearTimeout(timeout); }
+  });
+}
+
 async function remoteSearch(input: RemoteSearchOptions & {
   mountName: string; agentName?: string; captureForMcp?: boolean;
 }): Promise<unknown> {
@@ -6100,7 +6170,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         truncated: result.truncated === true
       };
     };
-  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally, pullRemoteRepositoryLocally);
+  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally, pullRemoteRepositoryLocally, fetchRemoteRepositoryLocally);
   context.subscriptions.push(gitScm, new RemoteGitHistory(
     () => gitScm.repositoriesInUse(),
     (message) => bridgeOutput?.appendLine(`[Git] ${message}`),

@@ -54,7 +54,8 @@ export class RemoteGitScm implements vscode.Disposable {
     private readonly runner: (uri: vscode.Uri) => Promise<GitRunner>,
     private readonly log: (message: string) => void,
     private readonly localPush: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
-    private readonly localPull: (uri: vscode.Uri, git: RemoteGit) => Promise<void>
+    private readonly localPull: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
+    private readonly localFetch: (uri: vscode.Uri, git: RemoteGit) => Promise<void>
   ) {
     this.subscriptions.push(this.repositoryEmitter, this.historyEmitter);
     this.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('safs-git', {
@@ -99,10 +100,10 @@ export class RemoteGitScm implements vscode.Disposable {
         await vscode.window.withProgress({ location: vscode.ProgressLocation.SourceControl, title: `Git ${action}` },
           () => this.enqueue(repository, async () => {
             try {
-              // 推送与拉取都经本地 Git 中转（远端不需要出网或凭据）；提取仍在远端执行。
+              // 推送、拉取、提取全部经本地 Git 中转（远端不需要出网或凭据）。
               if (action === 'push') await this.localPush(repository.uri, repository.git);
               else if (action === 'pull') await this.localPull(repository.uri, repository.git);
-              else await repository.git.run([action]);
+              else await this.localFetch(repository.uri, repository.git);
               if (action !== 'fetch') this.historyEmitter.fire();
             } finally {
               await this.update(repository).catch(error => this.log(String(error)));

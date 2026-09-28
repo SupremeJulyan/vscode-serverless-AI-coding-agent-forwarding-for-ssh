@@ -24,6 +24,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   const opened: any[][] = [];
   const localPushes: string[] = [];
   const localPulls: string[] = [];
+  const localFetches: string[] = [];
   let contentProvider: any;
   const rootA = new Uri('safs', '/placeholder/a');
   const rootB = new Uri('safs', '/placeholder/b');
@@ -67,7 +68,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     if (command.includes("'show'")) stdout = 'snapshot\n';
     return { exitCode: 0, stdout, stderr: '' };
   }, message => errors.push(message), async uri => { localPushes.push(uri.path); },
-  async uri => { localPulls.push(uri.path); });
+  async uri => { localPulls.push(uri.path); }, async uri => { localFetches.push(uri.path); });
   try {
     for (let attempt = 0; attempt < 100 && sources.length < 2; attempt++) await new Promise(resolve => setImmediate(resolve));
     await scm.refresh();
@@ -103,6 +104,9 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     await commands.get('safs.git.pull')!(a);
     assert.deepEqual(localPulls, [rootA.path]);
     assert.ok(!executions.some(command => command.command.includes("'pull'")));
+    await commands.get('safs.git.fetch')!(a);
+    assert.deepEqual(localFetches, [rootA.path]);
+    assert.ok(!executions.some(command => command.command.includes("'fetch'")));
     vscode.workspace.workspaceFolders = [{ uri: rootB, name: 'B' }];
     await scm.refresh();
     assert.equal(a.disposed, true);
