@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { RemoteGit } from './remote-git';
 import { executeCaptured } from './process';
+import { redactSensitiveText } from './redact';
 
 export interface PushTarget {
   branch: string;
@@ -19,17 +20,31 @@ function isNetworkGitUrl(url: string): boolean {
     && !/^[A-Za-z]:/.test(url) && !url.includes('::');
 }
 
+/**
+ * 报错里回显读到的地址：脱敏，并把换行等控制字符写成转义——
+ * 否则「带换行的地址」在通知里看起来和正常地址一模一样，没法排查。
+ */
+export function describeRejectedUrl(url: string): string {
+  const escaped = redactSensitiveText(url).replace(
+    /[\u0000-\u001f\u007f]/g,
+    character => `\\x${character.charCodeAt(0).toString(16).padStart(2, '0')}`
+  );
+  return escaped.length > 200 ? `${escaped.slice(0, 200)}…` : escaped;
+}
+
 /** A remote filesystem path or custom helper must never become a local push destination. */
 export function validatePushUrl(url: string): void {
   if (!isNetworkGitUrl(url)) {
-    throw new Error('本地中转需要 HTTPS / SSH Git 地址；远端文件路径不能作为本地推送地址。可设置 safs.git.pushUrl。');
+    throw new Error(`本地中转需要 HTTPS / SSH Git 地址；远端文件路径不能作为本地推送地址`
+      + `（读到：${describeRejectedUrl(url)}）。可设置 safs.git.pushUrl。`);
   }
 }
 
 /** 拉取方向同理：远端仓库的 fetch URL 也不能是它自己的文件路径。 */
 export function validateFetchUrl(url: string): void {
   if (!isNetworkGitUrl(url)) {
-    throw new Error('本地中转需要 HTTPS / SSH Git 地址；远端文件路径不能作为本地拉取地址。');
+    throw new Error(`本地中转需要 HTTPS / SSH Git 地址；远端文件路径不能作为本地拉取地址`
+      + `（读到：${describeRejectedUrl(url)}）。`);
   }
 }
 
@@ -51,7 +66,13 @@ export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): P
   await git.run(['check-ref-format', destination]);
   const urls = overrideUrl ? [overrideUrl] : (await git.run(['remote', 'get-url', '--push', '--all', remote!])).trim().split('\n');
   if (urls.length !== 1) throw new Error('仓库有多个 push URL，请用 safs.git.pushUrl 指定本次推送地址。');
-  validatePushUrl(urls[0]);
+  try {
+    validatePushUrl(urls[0]);
+  } catch (error) {
+    // 报出地址是谁给的，省得对着一条看不出毛病的地址猜来源。
+    throw new Error(`${error instanceof Error ? error.message : String(error)}`
+      + `来源：${overrideUrl ? 'safs.git.pushUrl' : `远端 remote.${remote}.pushurl / url`}。`);
+  }
   const oid = (await git.run(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)) throw new Error('Invalid Git commit ID');
   return { branch, destination, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1' };

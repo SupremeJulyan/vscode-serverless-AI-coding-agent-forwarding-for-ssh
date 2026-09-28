@@ -38,7 +38,12 @@ export async function resolvePullTarget(git: RemoteGit): Promise<PullTarget> {
     throw new Error(`远端仓库 ${remote} 不存在：请检查当前分支的上游配置。`);
   }
   if (urls.length !== 1) throw new Error('仓库配置了多个 fetch URL，无法确定本地中转地址。');
-  validateFetchUrl(urls[0]);
+  try {
+    validateFetchUrl(urls[0]);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}`
+      + `来源：远端 remote.${remote}.url。`);
+  }
   const oid = (await git.run(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)) throw new Error('Invalid Git commit ID');
   return { branch, remote, upstream: merge, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1' };

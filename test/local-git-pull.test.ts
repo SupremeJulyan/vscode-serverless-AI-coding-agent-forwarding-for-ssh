@@ -145,10 +145,11 @@ test('pull target needs an upstream branch and a single network fetch URL', asyn
   await git.run(['config', 'branch.main.merge', 'refs/heads/main']);
   await git.run(['remote', 'set-url', '--add', 'origin', 'ssh://git@example.test/two.git']);
   await assert.rejects(resolvePullTarget(git), /多个 fetch URL/);
-  // 远端自己的文件路径不能作为本地拉取地址。
+  // 远端自己的文件路径不能作为本地拉取地址，报错要带上读到的地址与来源。
   await git.run(['config', '--unset-all', 'remote.origin.url']);
   await git.run(['config', '--add', 'remote.origin.url', source]);
-  await assert.rejects(resolvePullTarget(git), /本地中转需要/);
+  await assert.rejects(resolvePullTarget(git),
+    /本地中转需要[\s\S]*读到：[\s\S]*来源：远端 remote\.origin\.url/);
 });
 
 test('fetch failures name the local credential problem', () => {

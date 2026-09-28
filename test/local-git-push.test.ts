@@ -99,4 +99,8 @@ test('local push destinations reject remote paths and executable helpers', () =>
     assert.throws(() => validatePushUrl(url));
   }
   for (const url of ['https://host/repo', 'ssh://user@host:2222/repo', 'git@host:repo.git']) validatePushUrl(url);
+  // 报错要能看出读到的到底是什么：地址原样回显、控制字符转义、凭据脱敏。
+  assert.throws(() => validatePushUrl('/srv/repo'), /读到：\/srv\/repo/);
+  assert.throws(() => validatePushUrl('https://user:secret@host/repo\n'),
+    /https:\/\/user:<hidden>@host\/repo\\x0a/);
 });
