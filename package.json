@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "1.9.11",
+  "version": "1.9.12",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -224,47 +224,56 @@
       },
       {
         "command": "safs.git.refresh",
-        "title": "SAFS Git: 刷新远程 Git",
+        "category": "SAFS Git",
+        "title": "刷新",
         "icon": "$(refresh)"
       },
       {
         "command": "safs.git.stage",
-        "title": "SAFS Git: 暂存更改",
+        "category": "SAFS Git",
+        "title": "暂存",
         "icon": "$(add)"
       },
       {
         "command": "safs.git.unstage",
-        "title": "SAFS Git: 取消暂存",
+        "category": "SAFS Git",
+        "title": "取消暂存",
         "icon": "$(remove)"
       },
       {
         "command": "safs.git.commit",
-        "title": "SAFS Git: 提交已暂存更改",
+        "category": "SAFS Git",
+        "title": "提交",
         "icon": "$(check)"
       },
       {
         "command": "safs.git.fetch",
-        "title": "SAFS Git: 提取远程更新",
+        "category": "SAFS Git",
+        "title": "提取",
         "icon": "$(cloud-download)"
       },
       {
         "command": "safs.git.pull",
-        "title": "SAFS Git: 通过本地 Git 拉取（仅快进）",
+        "category": "SAFS Git",
+        "title": "拉取（仅快进）",
         "icon": "$(arrow-down)"
       },
       {
         "command": "safs.git.push",
-        "title": "SAFS Git: 通过本地 Git 推送",
+        "category": "SAFS Git",
+        "title": "推送",
         "icon": "$(arrow-up)"
       },
       {
         "command": "safs.git.refreshHistory",
-        "title": "SAFS Git: 刷新远程历史",
+        "category": "SAFS Git",
+        "title": "刷新历史",
         "icon": "$(refresh)"
       },
       {
         "command": "safs.git.copyCommitId",
-        "title": "SAFS Git: 复制提交 ID",
+        "category": "SAFS Git",
+        "title": "复制提交 ID",
         "icon": "$(copy)"
       }
     ],

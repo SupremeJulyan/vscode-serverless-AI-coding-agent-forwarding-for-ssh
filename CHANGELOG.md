@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.12
+
+- 简化 `safs.git.*` 的按钮文案：SCM 面板与「远程 Git 历史」里的按钮只显示「刷新 / 暂存 / 取消暂存 / 提交 / 提取 / 拉取（仅快进）/ 推送 / 刷新历史 / 复制提交 ID」，前缀改用命令的 `category`（`SAFS Git`），命令面板里仍是 `SAFS Git: 刷新` 这样的完整写法。只改了 `safs.git.*`，其它 SAFS 命令（如 `SAFS：可视化上传`）保持不变。
+- 插件与原生 CLI 版本升级到 1.9.12。
+
 ## 1.9.11
 
 - 提取（fetch）也改为经本地 Git 中转：与拉取共用同一套机制，只把上游的新提交传回远端并更新当前分支的远程跟踪 ref（`refs/remotes/<remote>/<branch>`），**不动工作区、也不动当前分支**。上游被回退（force push）时跟踪 ref 照常回退——这种情况远端已有全部对象，只更新引用，不传 bundle（git 也不允许空 bundle）。此前提取仍在远端执行，在只连得上 SAFS 的机器上会直接失败（`ssh: Could not resolve hostname github.com`）。至此推送、拉取、提取三个方向都不再要求远端访问 Git 托管服务或持有凭据。

@@ -8,7 +8,7 @@ interface ExtensionManifest {
   activationEvents?: string[];
   extensionKind?: string[];
   contributes?: {
-    commands?: Array<{ command: string; title: string }>;
+    commands?: Array<{ command: string; title: string; category?: string }>;
     menus?: Record<string, Array<{ command: string; when?: string; group?: string }>>;
     configuration?: {
       properties?: Record<string, {
@@ -34,7 +34,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
 
-  assert.equal(manifest.version, '1.9.11');
+  assert.equal(manifest.version, '1.9.12');
   assert.ok(manifest.activationEvents?.includes('onFileSystem:safs'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.switchRemoteDirectory'));
   assert.equal(manifest.activationEvents?.includes('*'), false);
@@ -189,6 +189,25 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   assert.equal(extensionSource.includes('recordObservedAgentSource'), false);
   assert.equal(extensionSource.includes('runAgentMcpOperation'), false);
   await assert.rejects(access(new URL('../src/agent-mcp-registry.ts', import.meta.url)));
+});
+
+test('git commands keep short titles and group under the SAFS Git category', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  const git = (manifest.contributes?.commands ?? []).filter(item => item.command.startsWith('safs.git.'));
+  // 面板按钮/菜单只显示 title，命令面板用 category 补前缀，所以标题里不再重复 "SAFS Git"。
+  assert.deepEqual(git.map(item => [item.command, item.category, item.title]), [
+    ['safs.git.refresh', 'SAFS Git', '刷新'],
+    ['safs.git.stage', 'SAFS Git', '暂存'],
+    ['safs.git.unstage', 'SAFS Git', '取消暂存'],
+    ['safs.git.commit', 'SAFS Git', '提交'],
+    ['safs.git.fetch', 'SAFS Git', '提取'],
+    ['safs.git.pull', 'SAFS Git', '拉取（仅快进）'],
+    ['safs.git.push', 'SAFS Git', '推送'],
+    ['safs.git.refreshHistory', 'SAFS Git', '刷新历史'],
+    ['safs.git.copyCommitId', 'SAFS Git', '复制提交 ID']
+  ]);
 });
 
 test('contributes the remote Git history view to the Source Control panel', async () => {
