@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  ensureUnixCliPath, globalNativeCli, installNativeCli,
+  downloadNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
   globalNativeCliSkill, nativeCliConnectionPath, nativeCliPlatform,
   nativeCliAssetName, nativeCliDownloadUrl,
   parseNativeCliVersion, removeGlobalNativeCliSkill, removeNativeCli, withoutSafsPathBlock,
@@ -52,6 +52,26 @@ test('selects native binaries for the current extension environment', () => {
   assert.equal(globalNativeCli(home, 'linux-x64'), join(home, '.local', 'bin', 'safs'));
   assert.equal(nativeCliConnectionPath(join(home, '.local', 'bin', 'safs')), join(home, '.local', 'bin', '.safs-connection.json'));
   assert.throws(() => nativeCliPlatform('linux', 'ia32'));
+});
+
+test('download failures tell the user how to retry the global CLI installation', async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(undefined, {
+      status: 404, statusText: 'Not Found'
+    });
+    await assert.rejects(
+      downloadNativeCli('https://example.test/safs-linux-x64'),
+      /HTTP 404 Not Found。确定网络正常后，使用命令“SAFS: 安装或更新全局 CLI”重新下载。/
+    );
+    globalThis.fetch = async () => { throw new Error('network unavailable'); };
+    await assert.rejects(
+      downloadNativeCli('https://example.test/safs-linux-x64'),
+      /network unavailable。确定网络正常后，使用命令“SAFS: 安装或更新全局 CLI”重新下载。/
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test('builds a concise Streamable HTTP MCP installation prompt', () => {

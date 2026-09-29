@@ -34,21 +34,24 @@ export function nativeCliDownloadUrl(version: string, platform: NativeCliPlatfor
 
 export type NativeCliDownloader = (url: string) => Promise<Uint8Array>;
 
-async function downloadNativeCli(url: string): Promise<Uint8Array> {
-  let response: Response;
+const nativeCliDownloadRetryHint =
+  '确定网络正常后，使用命令“SAFS: 安装或更新全局 CLI”重新下载。';
+
+export async function downloadNativeCli(url: string): Promise<Uint8Array> {
   try {
-    response = await fetch(url, { redirect: 'follow' });
+    const response = await fetch(url, { redirect: 'follow' });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    }
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > 10 * 1024 * 1024) {
+      throw new Error(`文件大小异常：${declared} 字节`);
+    }
+    return new Uint8Array(await response.arrayBuffer());
   } catch (error) {
-    throw new Error(`下载 SAFS CLI 失败：${error instanceof Error ? error.message : String(error)}`);
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`下载 SAFS CLI 失败：${detail}。${nativeCliDownloadRetryHint}`);
   }
-  if (!response.ok) {
-    throw new Error(`下载 SAFS CLI 失败：HTTP ${response.status} ${response.statusText}`);
-  }
-  const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > 10 * 1024 * 1024) {
-    throw new Error(`下载的 SAFS CLI 大小异常：${declared} 字节`);
-  }
-  return new Uint8Array(await response.arrayBuffer());
 }
 
 /** Parse the stable `safs --version` output without accepting unrelated numbers. */
