@@ -6305,7 +6305,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const receipts = vscodeContext.globalState.get<Record<string, SuccessfulPushReceipt>>(
         gitPushReceiptsKey, {}
       );
-      await applySuccessfulPushReceipt(git, target, receipts[pushReceiptKey(target)]);
+      const receipt = receipts[pushReceiptKey(target)];
+      const result = await applySuccessfulPushReceipt(git, target, receipt);
+      if (result === 'missing-object' && receipt) return {
+        oid: receipt.oid, previousOid: receipt.previousOid,
+        pushedCommits: receipt.pushedCommits || 1
+      };
     } catch (error) {
       // Receipt reconciliation is only a display repair. Ordinary Git state
       // remains available when a repository has no valid push destination.

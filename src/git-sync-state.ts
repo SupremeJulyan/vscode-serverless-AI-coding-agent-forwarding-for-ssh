@@ -7,7 +7,26 @@ export interface GitSyncState {
   upstreamOid?: string;
   ahead?: number;
   behind?: number;
+  /** The upstream OID is known from a local relay push but is not present on this host yet. */
+  observedUpstream?: boolean;
   kind: 'tracked' | 'unborn' | 'detached' | 'no-upstream' | 'missing-upstream' | 'unknown';
+}
+
+export interface ObservedPushState {
+  oid: string;
+  previousOid?: string;
+  pushedCommits: number;
+}
+
+export function applyObservedPushState(
+  state: GitSyncState, observed: ObservedPushState | undefined
+): GitSyncState {
+  if (!observed || state.kind !== 'tracked' || state.upstreamOid !== observed.previousOid
+    || state.head === observed.oid) return state;
+  return {
+    ...state, upstreamOid: observed.oid,
+    behind: Math.max(1, observed.pushedCommits || 1), observedUpstream: true
+  };
 }
 
 /** Resolve the configured fetch refspec, including upstreams with a different branch name. */

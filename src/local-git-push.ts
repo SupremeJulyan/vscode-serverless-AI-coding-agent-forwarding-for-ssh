@@ -56,12 +56,14 @@ export interface PushTarget {
   objectFormat: 'sha1' | 'sha256';
   tracking?: string;
   trackingOid?: string;
+  outgoingCommits?: number;
 }
 
 export interface SuccessfulPushReceipt {
   key: string;
   oid: string;
   previousOid?: string;
+  pushedCommits: number;
   recordedAt: number;
 }
 
@@ -74,7 +76,8 @@ export function successfulPushReceipt(target: PushTarget): SuccessfulPushReceipt
   if (!target.tracking) return undefined;
   return {
     key: pushReceiptKey(target), oid: target.oid,
-    previousOid: target.trackingOid, recordedAt: Date.now()
+    previousOid: target.trackingOid,
+    pushedCommits: Math.max(1, target.outgoingCommits ?? 1), recordedAt: Date.now()
   };
 }
 
@@ -145,14 +148,24 @@ export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): P
   // A fork/pushUrl override must not make an unrelated upstream appear synchronized.
   let tracking: string | undefined;
   let trackingOid: string | undefined;
+  let outgoingCommits: number | undefined;
   if (remote && upstreamRemote === remote && merge === destination) {
     const fetchUrl = (await git.run(['remote', 'get-url', remote])).trim();
     if (fetchUrl === urls[0]) {
       tracking = await trackingRef(git, branch);
       if (tracking) trackingOid = (await git.probe(['rev-parse', '--verify', '--quiet', tracking]))?.trim();
+      if (trackingOid) {
+        const count = (await git.run(['rev-list', '--count', `${trackingOid}..${oid}`])).trim();
+        if (!/^\d+$/.test(count)) throw new Error('Invalid Git outgoing commit count');
+        outgoingCommits = Number(count);
+      }
     }
   }
-  return { branch, destination, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1', tracking, trackingOid };
+  return {
+    branch, destination, url: urls[0], oid,
+    objectFormat: oid.length === 64 ? 'sha256' : 'sha1',
+    tracking, trackingOid, outgoingCommits
+  };
 }
 
 export type LocalGitRunner = (args: string[], signal?: AbortSignal) => Promise<string>;
@@ -230,9 +243,13 @@ export async function recordSuccessfulPush(git: RemoteGit, target: PushTarget): 
  */
 export async function applySuccessfulPushReceipt(
   git: RemoteGit, target: PushTarget, receipt: SuccessfulPushReceipt | undefined
-): Promise<boolean> {
+): Promise<'applied' | 'missing-object' | false> {
   if (!receipt || !target.tracking || receipt.key !== pushReceiptKey(target)
-    || receipt.oid !== target.oid || receipt.previousOid !== target.trackingOid) return false;
-  await recordSuccessfulPush(git, target);
-  return true;
+    || receipt.previousOid !== target.trackingOid) return false;
+  const available = (await git.probe([
+    'rev-parse', '--verify', '--quiet', `${receipt.oid}^{commit}`
+  ]))?.trim() === receipt.oid;
+  if (!available) return 'missing-object';
+  await recordSuccessfulPush(git, { ...target, oid: receipt.oid });
+  return 'applied';
 }

@@ -6,7 +6,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { RemoteGit } from '../src/remote-git';
-import { readGitSyncState, syncStateLabel, trackingRef } from '../src/git-sync-state';
+import {
+  applyObservedPushState, readGitSyncState, syncStateLabel, trackingRef
+} from '../src/git-sync-state';
 import {
   applySuccessfulPushReceipt, recordSuccessfulPush, resolvePushTarget, successfulPushReceipt
 } from '../src/local-git-push';
@@ -96,6 +98,9 @@ test('a successful push receipt repairs the same stale tracking ref on another h
   await git.run(['config', 'branch.feature.remote', 'origin']);
   await git.run(['config', 'branch.feature.merge', 'refs/heads/trunk']);
   await git.run(['update-ref', 'refs/remotes/origin/trunk', base]);
+  const missing = `${cwd}-missing`;
+  t.after(() => rm(missing, { recursive: true, force: true }));
+  await exec('git', ['clone', '-q', cwd, missing]);
   const outgoing = await commit('outgoing');
   const firstTarget = await resolvePushTarget(git);
   const receipt = successfulPushReceipt(firstTarget);
@@ -116,8 +121,25 @@ test('a successful push receipt repairs the same stale tracking ref on another h
 
   const secondTarget = await resolvePushTarget(secondGit);
   assert.equal(secondTarget.oid, outgoing);
-  assert.equal(await applySuccessfulPushReceipt(secondGit, secondTarget, receipt), true);
+  assert.equal(await applySuccessfulPushReceipt(secondGit, secondTarget, receipt), 'applied');
   assert.equal((await readGitSyncState(secondGit)).ahead, 0);
+
+  const missingGit = new RemoteGit(async command => {
+    try { return { ...await exec('/bin/sh', ['-c', command], { cwd: missing }), exitCode: 0 }; }
+    catch (error) { const value = error as any; return { stdout: value.stdout, stderr: value.stderr, exitCode: value.code }; }
+  });
+  await missingGit.run(['remote', 'set-url', 'origin', 'https://example.test/repo.git']);
+  await missingGit.run(['config', 'branch.feature.remote', 'origin']);
+  await missingGit.run(['config', 'branch.feature.merge', 'refs/heads/trunk']);
+  await missingGit.run(['update-ref', 'refs/remotes/origin/trunk', base]);
+  const missingTarget = await resolvePushTarget(missingGit);
+  assert.equal(await applySuccessfulPushReceipt(missingGit, missingTarget, receipt), 'missing-object');
+  const observed = applyObservedPushState(await readGitSyncState(missingGit), {
+    oid: receipt.oid, previousOid: receipt.previousOid, pushedCommits: receipt.pushedCommits
+  });
+  assert.equal(observed.observedUpstream, true);
+  assert.equal(observed.behind, 1);
+  assert.match(syncStateLabel(observed), /待拉取 ↓1/);
 
   // A fetch performed on the second host wins over an older receipt.
   await secondGit.run(['update-ref', 'refs/remotes/origin/trunk', base]);

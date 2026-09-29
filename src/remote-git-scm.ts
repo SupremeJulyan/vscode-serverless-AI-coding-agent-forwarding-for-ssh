@@ -1,4 +1,7 @@
-import { GitSyncState, readGitSyncState, syncStateLabel, syncStateTooltip } from './git-sync-state';
+import {
+  applyObservedPushState, GitSyncState, ObservedPushState, readGitSyncState,
+  syncStateLabel, syncStateTooltip
+} from './git-sync-state';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { GitChange, GitRunner, isGitConflict, RemoteGit } from './remote-git';
@@ -47,9 +50,10 @@ export class RemoteGitScm implements vscode.Disposable {
   private readonly timer: ReturnType<typeof setInterval>;
 
   /** 供历史视图复用同一批仓库实例（同一个 RemoteGit，避免重复发现）。 */
-  repositoriesInUse(): { uri: vscode.Uri; name: string; git: RemoteGit }[] {
+  repositoriesInUse(): { uri: vscode.Uri; name: string; git: RemoteGit; syncState?: GitSyncState }[] {
     return [...this.repositories.values()].map(repository => ({
-      uri: repository.uri, name: repository.name, git: repository.git
+      uri: repository.uri, name: repository.name, git: repository.git,
+      syncState: repository.syncState
     }));
   }
 
@@ -59,7 +63,9 @@ export class RemoteGitScm implements vscode.Disposable {
     private readonly localPush: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
     private readonly localPull: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
     private readonly localFetch: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
-    private readonly prepareSyncState?: (uri: vscode.Uri, git: RemoteGit) => Promise<void>
+    private readonly prepareSyncState?: (
+      uri: vscode.Uri, git: RemoteGit
+    ) => Promise<ObservedPushState | undefined>
   ) {
     this.subscriptions.push(this.repositoryEmitter, this.historyEmitter);
     this.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('safs-git', {
@@ -256,8 +262,8 @@ export class RemoteGitScm implements vscode.Disposable {
     const changes = await repository.git.status();
     let syncState: GitSyncState;
     try {
-      await this.prepareSyncState?.(repository.uri, repository.git);
-      syncState = await readGitSyncState(repository.git);
+      const observed = await this.prepareSyncState?.(repository.uri, repository.git);
+      syncState = applyObservedPushState(await readGitSyncState(repository.git), observed);
     }
     catch (error) {
       this.log(`Git 同步状态：${String(error)}`);

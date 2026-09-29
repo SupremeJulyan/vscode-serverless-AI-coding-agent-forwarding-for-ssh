@@ -1,4 +1,6 @@
-import { readGitSyncState, syncStateLabel, syncStateTooltip } from './git-sync-state';
+import {
+  GitSyncState, readGitSyncState, syncStateLabel, syncStateTooltip
+} from './git-sync-state';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { RemoteGit } from './remote-git';
@@ -8,7 +10,12 @@ export const historyPageSize = 50;
 /** NUL 分隔字段、RS 分隔提交：提交说明里的换行和特殊字符都不会破坏解析。 */
 export const gitLogFormat = '%H%x00%P%x00%an%x00%ae%x00%at%x00%D%x00%s%x00%b%x1e';
 
-export interface HistoryRepository { uri: vscode.Uri; name: string; git: RemoteGit }
+export interface HistoryRepository {
+  uri: vscode.Uri;
+  name: string;
+  git: RemoteGit;
+  syncState?: GitSyncState;
+}
 
 export interface HistoryCommit {
   id: string;
@@ -228,17 +235,18 @@ export class RemoteGitHistory implements vscode.TreeDataProvider<HistoryNode>, v
   private async commitNodes(repository: HistoryRepository): Promise<HistoryNode[]> {
     const state = this.state(repository.uri);
     if (!state.commits.length) {
-      const sync = await readGitSyncState(repository.git);
+      const sync = repository.syncState ?? await readGitSyncState(repository.git);
       state.summary = new MessageNode(syncStateLabel(sync), sync.behind ? 'cloud-download' : 'info');
       state.summary.tooltip = syncStateTooltip(sync);
       state.summary.command = { command: 'safs.git.fetch', title: '提取上游更新', arguments: [repository.uri] };
       state.labels = new Map();
       if (sync.kind === 'unborn') return [state.summary];
-      const revisions = sync.head && sync.upstreamOid ? [sync.head, sync.upstreamOid] : ['--all'];
+      const revisions = sync.head && sync.upstreamOid && !sync.observedUpstream
+        ? [sync.head, sync.upstreamOid] : sync.head ? [sync.head] : ['--all'];
       const commits = parseGitLog(await repository.git.run([
         'log', ...revisions, '--date-order', `--max-count=${state.limit}`, `--pretty=format:${gitLogFormat}`
       ]));
-      if (sync.head && sync.upstreamOid) {
+      if (sync.head && sync.upstreamOid && !sync.observedUpstream) {
         const differences = await repository.git.run(['rev-list', '--left-right', `${sync.head}...${sync.upstreamOid}`]);
         const outgoing = new Set<string>();
         const incoming = new Set<string>();
@@ -248,6 +256,8 @@ export class RemoteGitHistory implements vscode.TreeDataProvider<HistoryNode>, v
         }
         for (const commit of commits) state.labels.set(commit.id,
           outgoing.has(commit.id) ? '已提交待推送' : incoming.has(commit.id) ? '待拉取' : '已推送');
+      } else if (sync.observedUpstream) {
+        for (const commit of commits) state.labels.set(commit.id, '已推送');
       } else {
         for (const commit of commits) state.labels.set(commit.id, '已提交 · 推送状态未知');
       }
