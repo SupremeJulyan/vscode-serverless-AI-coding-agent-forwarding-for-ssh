@@ -1,6 +1,8 @@
+import { GitSyncState, readGitSyncState, syncStateLabel, syncStateTooltip } from './git-sync-state';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { GitChange, GitRunner, isGitConflict, RemoteGit } from './remote-git';
+import { createBranch, GitBranch, listBranches, switchBranch } from './remote-git-branch';
 
 interface Repository {
   uri: vscode.Uri;
@@ -13,6 +15,7 @@ interface Repository {
   queue: Promise<unknown>;
   disposed: boolean;
   revision: number;
+  syncState?: GitSyncState;
 }
 interface Resource extends vscode.SourceControlResourceState {
   repository: Repository;
@@ -76,6 +79,41 @@ export class RemoteGitScm implements vscode.Disposable {
     };
     command('refresh', async () => this.refresh(true));
     command('openChange', async (resource: Resource) => this.openChange(resource));
+    command('switchBranch', async (source?: vscode.SourceControl | vscode.Uri) => {
+      const repository = await this.select(source);
+      if (!repository) return;
+      await this.enqueue(repository, async () => {
+        const branches = await listBranches(repository.git);
+        if (!branches.length) throw new Error('仓库中没有可切换的分支。');
+        const selected = await vscode.window.showQuickPick(branches.map(branch => ({
+          label: `${branch.current ? '$(check) ' : ''}${branch.name}`,
+          description: branch.kind === 'local'
+            ? (branch.current ? '当前本地分支' : '本地分支')
+            : `远程跟踪分支 · 创建 ${branch.localName}`,
+          branch
+        })), { placeHolder: `${repository.name}：选择分支（仅使用远端已有引用，不联网）` });
+        if (!selected || selected.branch.current) return;
+        await switchBranch(repository.git, selected.branch as GitBranch);
+        await this.update(repository);
+        this.historyEmitter.fire();
+      });
+    });
+    command('createBranch', async (source?: vscode.SourceControl | vscode.Uri) => {
+      const repository = await this.select(source);
+      if (!repository) return;
+      const name = await vscode.window.showInputBox({
+        prompt: `${repository.name}：创建并切换到新分支`,
+        placeHolder: '例如 feature/login',
+        ignoreFocusOut: true,
+        validateInput: value => value.trim() ? undefined : '请输入分支名。'
+      });
+      if (name === undefined) return;
+      await this.enqueue(repository, async () => {
+        await createBranch(repository.git, name);
+        await this.update(repository);
+        this.historyEmitter.fire();
+      });
+    });
     for (const action of ['stage', 'unstage'] as const) {
       command(action, async (...resources: Resource[]) => {
         const groups = new Map<Repository, GitChange[]>();
@@ -104,7 +142,7 @@ export class RemoteGitScm implements vscode.Disposable {
               if (action === 'push') await this.localPush(repository.uri, repository.git);
               else if (action === 'pull') await this.localPull(repository.uri, repository.git);
               else await this.localFetch(repository.uri, repository.git);
-              if (action !== 'fetch') this.historyEmitter.fire();
+              this.historyEmitter.fire();
             } finally {
               await this.update(repository).catch(error => this.log(String(error)));
             }
@@ -116,7 +154,7 @@ export class RemoteGitScm implements vscode.Disposable {
       if (!repository) return;
       let message = repository.scm.inputBox.value;
       if (!source) {
-        // 从「远程 Git 历史」标题栏触发时没有输入框上下文，直接问一句提交说明。
+        // 从 SAFS Git View 标题栏触发时没有输入框上下文，直接问一句提交说明。
         message = await vscode.window.showInputBox({
           prompt: `${repository.name}：提交说明（只提交已暂存更改）`,
           value: message, ignoreFocusOut: true,
@@ -145,9 +183,9 @@ export class RemoteGitScm implements vscode.Disposable {
     void this.refresh();
   }
 
-  private async select(source?: vscode.SourceControl): Promise<Repository | undefined> {
+  private async select(source?: vscode.SourceControl | vscode.Uri): Promise<Repository | undefined> {
     const repositories = [...this.repositories.values()];
-    const selected = repositories.find(repository => repository.scm === source);
+    const selected = repositories.find(repository => repository.scm === source || repository.uri === source);
     if (selected) return selected;
     if (repositories.length === 1) return repositories[0];
     const item = await vscode.window.showQuickPick(repositories.map(repository => ({
@@ -215,11 +253,22 @@ export class RemoteGitScm implements vscode.Disposable {
 
   private async update(repository: Repository): Promise<void> {
     const changes = await repository.git.status();
-    const branch = (await repository.git.run(['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => 'HEAD')).trim();
+    let syncState: GitSyncState;
+    try { syncState = await readGitSyncState(repository.git); }
+    catch (error) {
+      this.log(`Git 同步状态：${String(error)}`);
+      syncState = { branch: repository.syncState?.branch ?? 'HEAD', kind: 'unknown' };
+    }
+    const changed = JSON.stringify(repository.syncState) !== JSON.stringify(syncState);
+    repository.syncState = syncState;
     if (repository.disposed) return;
     repository.revision++;
     repository.scm.count = changes.length;
-    repository.scm.statusBarCommands = [{ command: 'safs.git.refresh', title: `$(git-branch) ${branch}`, tooltip: '刷新远程 Git' }];
+    repository.scm.statusBarCommands = [
+      { command: 'safs.git.switchBranch', title: `$(git-branch) ${syncState.branch}`, tooltip: '切换远端 Git 分支', arguments: [repository.scm] },
+      { command: 'safs.git.fetch', title: syncStateLabel(syncState), tooltip: syncStateTooltip(syncState), arguments: [repository.scm] }
+    ];
+    if (changed) this.historyEmitter.fire();
     const resource = (change: GitChange, staged: boolean): Resource => {
       const uri = vscode.Uri.joinPath(repository.uri, change.path);
       const state: Resource = {

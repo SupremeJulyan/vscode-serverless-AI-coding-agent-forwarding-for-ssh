@@ -72,6 +72,9 @@ function repository(outputs: { log?: string | ((limit: number) => string); show?
     if (outputs.fail && command.includes(`'${outputs.fail}'`)) {
       return { exitCode: 128, stdout: '', stderr: `fatal: ${outputs.fail} failed` };
     }
+    if (command.includes("'symbolic-ref'")) return { exitCode: 0, stdout: 'main\n', stderr: '' };
+    if (command.includes("'rev-parse'")) return { exitCode: 0, stdout: first + '\n', stderr: '' };
+    if (command.includes("'for-each-ref'")) return { exitCode: 0, stdout: '', stderr: '' };
     if (command.includes("'log'")) {
       // 假 git 也要认 --max-count，分页断言才有意义。
       const limit = Number(/--max-count=(\d+)/.exec(command)?.[1] ?? '0');
@@ -125,8 +128,8 @@ test('tree lists commits, expands files into diffs and pages further', async () 
   const history = new RemoteGitHistory(() => [remote], () => {});
   try {
     const roots = await history.getChildren();
-    assert.equal(roots.length, 2);
-    const root = roots[0] as any;
+    assert.equal(roots.length, 3);
+    const root = roots[1] as any;
     assert.equal(root.label, 'first subject');
     assert.match(root.description, /main/);
     assert.match(root.description, /Alice/);
@@ -134,7 +137,7 @@ test('tree lists commits, expands files into diffs and pages further', async () 
     assert.equal(root.contextValue, 'safsGitCommit');
 
     // roots[1] 的父提交是 roots[0]：改动两侧分别取父提交与本提交。
-    const commit = roots[1] as any;
+    const commit = roots[2] as any;
     const files = await history.getChildren(commit) as any[];
     assert.deepEqual(files.map(file => [file.file.status, file.file.path]), [
       ['M', 'src/a.ts'], ['A', 'src/b.ts'], ['D', 'src/c.ts'], ['R', 'src/new.ts']
@@ -172,12 +175,12 @@ test('tree pages commits and groups multiple repositories', async t => {
   const history = new RemoteGitHistory(() => [remote], () => {});
   try {
     const roots = await history.getChildren() as any[];
-    assert.equal(roots.length, historyPageSize + 1);
+    assert.equal(roots.length, historyPageSize + 2);
     assert.equal(roots.at(-1).label, '加载更多…');
     assert.ok(remote.seen.at(-1)!.includes(`--max-count=${historyPageSize}`));
     await commands.get('safs.git.loadMoreCommits')!(remote.uri);
     const paged = await history.getChildren() as any[];
-    assert.equal(paged.length, historyPageSize * 2 + 1);
+    assert.equal(paged.length, historyPageSize * 2 + 2);
     assert.ok(remote.seen.at(-1)!.includes(`--max-count=${historyPageSize * 2}`));
     assert.equal(paged.at(-1).label, '加载更多…');
   } finally { history.dispose(); }
@@ -189,7 +192,7 @@ test('tree pages commits and groups multiple repositories', async t => {
     const roots = await grouped.getChildren() as any[];
     assert.deepEqual(roots.map(node => node.label), ['repo', 'repo']);
     const children = await grouped.getChildren(roots[1]) as any[];
-    assert.equal(children[0].label, 'two');
+    assert.equal(children[1].label, 'two');
   } finally { grouped.dispose(); }
 });
 
@@ -203,13 +206,13 @@ test('tree reports conflicts and copy command uses the commit id', async () => {
     assert.match(roots[0].label, /log failed/);
     assert.equal(roots[0].contextValue, 'safsGitMessage');
     assert.equal(logs.length, 1);
-    assert.match(logs[0], /远程 Git 历史/);
+    assert.match(logs[0], /SAFS Git View/);
   } finally { history.dispose(); }
 
   const withLog = repository({ log: logRecord(first, '', 'subject'), show: '' });
   const copyHistory = new RemoteGitHistory(() => [withLog], () => {});
   try {
-    const [commit] = await copyHistory.getChildren() as any[];
+    const [, commit] = await copyHistory.getChildren() as any[];
     await commands.get('safs.git.copyCommitId')!(commit);
     assert.deepEqual(copied, [first]);
     await commands.get('safs.git.copyCommitId')!(undefined);
@@ -220,4 +223,35 @@ test('tree reports conflicts and copy command uses the commit id', async () => {
   assert.equal(relativeTime(Math.floor(Date.now() / 1000) - 3600 * 5), '5 小时前');
   assert.equal(relativeTime(1600000000), '2020-09-13');
   assert.equal(path.posix.basename('/repo/src/a.ts'), 'a.ts');
+});
+
+test('history labels outgoing, incoming and shared commits and invalidates after fetch', async () => {
+  const outgoing = commitId('a'), incoming = commitId('b'), common = commitId('c');
+  let counts = '1\t1';
+  let differences = `<${outgoing}\n>${incoming}\n`;
+  const git = new RemoteGit(async command => {
+    let stdout = '';
+    if (command.includes("'symbolic-ref'")) stdout = 'main';
+    else if (command.includes("'for-each-ref'")) stdout = 'refs/remotes/origin/main';
+    else if (command.includes("'rev-parse'")) stdout = command.includes('HEAD^{commit}') ? outgoing : incoming;
+    else if (command.includes("'rev-list'")) stdout = command.includes("'--count'") ? counts : differences;
+    else if (command.includes("'log'")) stdout = logRecord(outgoing, common, 'local') + logRecord(incoming, common, 'server') + logRecord(common, '', 'shared');
+    return { exitCode: 0, stdout, stderr: '' };
+  });
+  const changed = new EventEmitter<void>();
+  const repo = { git, uri: new Uri('safs', '/status'), name: 'status' };
+  const history = new RemoteGitHistory(() => [repo], () => {}, undefined, changed.event);
+  try {
+    let nodes = await history.getChildren() as any[];
+    assert.match(nodes[0].label, /已提交待推送 ↑1.*待拉取 ↓1/);
+    assert.match(nodes[1].description, /^已提交待推送/);
+    assert.match(nodes[2].description, /^待拉取/);
+    assert.match(nodes[3].description, /^已推送/);
+    assert.match(nodes[0].tooltip, /最近一次/);
+    counts = '0\t0'; differences = '';
+    changed.fire();
+    nodes = await history.getChildren() as any[];
+    assert.match(nodes[0].label, /与上游同步/);
+    assert.ok(nodes.slice(1).every(node => node.description.startsWith('已推送')));
+  } finally { history.dispose(); }
 });

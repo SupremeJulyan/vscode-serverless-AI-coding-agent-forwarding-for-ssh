@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -235,6 +235,18 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "safs.git.switchBranch",
+        "category": "SAFS Git",
+        "title": "切换分支",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "safs.git.createBranch",
+        "category": "SAFS Git",
+        "title": "创建分支",
+        "icon": "$(git-branch-create)"
+      },
+      {
         "command": "safs.git.stage",
         "category": "SAFS Git",
         "title": "暂存",
@@ -309,8 +321,8 @@
       "scm": [
         {
           "id": "safs.gitHistory",
-          "name": "SAFS 远程 Git 面板",
-          "contextualTitle": "SAFS 远程 Git 面板"
+          "name": "SAFS Git View",
+          "contextualTitle": "SAFS Git View"
         }
       ]
     },
@@ -398,6 +410,16 @@
           "command": "safs.git.commit",
           "when": "view == safs.gitHistory",
           "group": "navigation@1"
+        },
+        {
+          "command": "safs.git.switchBranch",
+          "when": "view == safs.gitHistory",
+          "group": "navigation@2"
+        },
+        {
+          "command": "safs.git.createBranch",
+          "when": "view == safs.gitHistory",
+          "group": "navigation@3"
         },
         {
           "command": "safs.git.fetch",
@@ -519,6 +541,16 @@
           "command": "safs.git.refresh",
           "when": "scmProvider == safs-git",
           "group": "navigation@0"
+        },
+        {
+          "command": "safs.git.switchBranch",
+          "when": "scmProvider == safs-git",
+          "group": "navigation@1"
+        },
+        {
+          "command": "safs.git.createBranch",
+          "when": "scmProvider == safs-git",
+          "group": "navigation@2"
         },
         {
           "command": "safs.git.commit",

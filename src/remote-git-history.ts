@@ -1,3 +1,4 @@
+import { readGitSyncState, syncStateLabel, syncStateTooltip } from './git-sync-state';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { RemoteGit } from './remote-git';
@@ -92,15 +93,15 @@ export class RepositoryNode extends vscode.TreeItem {
 }
 
 export class CommitNode extends vscode.TreeItem {
-  constructor(readonly repository: HistoryRepository, readonly commit: HistoryCommit) {
+  constructor(readonly repository: HistoryRepository, readonly commit: HistoryCommit, status = '已提交 · 推送状态未知') {
     super(commit.subject || commit.id.slice(0, 8), vscode.TreeItemCollapsibleState.Collapsed);
     this.id = `commit:${repository.uri.toString()}:${commit.id}`;
     this.contextValue = 'safsGitCommit';
-    this.iconPath = new vscode.ThemeIcon('git-commit');
+    this.iconPath = new vscode.ThemeIcon(status === '待拉取' ? 'cloud-download' : status === '已推送' ? 'check' : 'git-commit');
     const refs = displayRefs(commit.refs);
-    this.description = [refs, commit.id.slice(0, 8), relativeTime(commit.timestamp), commit.author]
+    this.description = [status, refs, commit.id.slice(0, 8), relativeTime(commit.timestamp), commit.author]
       .filter(Boolean).join(' · ');
-    this.tooltip = [commit.subject, '', commit.id, `${commit.author} <${commit.authorEmail}>`,
+    this.tooltip = [status, commit.subject, '', commit.id, `${commit.author} <${commit.authorEmail}>`,
       new Date(commit.timestamp * 1000).toISOString(), refs, commit.body].filter(Boolean).join('\n');
   }
 }
@@ -154,7 +155,7 @@ export class RemoteGitHistory implements vscode.TreeDataProvider<HistoryNode>, v
   readonly onDidChangeTreeData = this.emitter.event;
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly cache = new Map<string, {
-    limit: number; commits: HistoryCommit[]; files: Map<string, HistoryFile[]>;
+    limit: number; commits: HistoryCommit[]; labels?: Map<string, string>; summary?: MessageNode; files: Map<string, HistoryFile[]>;
   }>();
 
   constructor(
@@ -187,7 +188,7 @@ export class RemoteGitHistory implements vscode.TreeDataProvider<HistoryNode>, v
     }
     if (onHistoryChanged) {
       this.subscriptions.push(onHistoryChanged(() => {
-        for (const state of this.cache.values()) { state.commits = []; state.files.clear(); }
+        this.cache.clear();
         this.emitter.fire(undefined);
       }));
     }
@@ -205,7 +206,7 @@ export class RemoteGitHistory implements vscode.TreeDataProvider<HistoryNode>, v
       return await this.children(node);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.log(`远程 Git 历史：${message}`);
+      this.log(`SAFS Git View：${message}`);
       return [new MessageNode(message, 'warning')];
     }
   }
@@ -227,11 +228,34 @@ export class RemoteGitHistory implements vscode.TreeDataProvider<HistoryNode>, v
   private async commitNodes(repository: HistoryRepository): Promise<HistoryNode[]> {
     const state = this.state(repository.uri);
     if (!state.commits.length) {
-      state.commits = parseGitLog(await repository.git.run([
-        'log', '--all', '--date-order', `--max-count=${state.limit}`, `--pretty=format:${gitLogFormat}`
+      const sync = await readGitSyncState(repository.git);
+      state.summary = new MessageNode(syncStateLabel(sync), sync.behind ? 'cloud-download' : 'info');
+      state.summary.tooltip = syncStateTooltip(sync);
+      state.summary.command = { command: 'safs.git.fetch', title: '提取上游更新', arguments: [repository.uri] };
+      state.labels = new Map();
+      if (sync.kind === 'unborn') return [state.summary];
+      const revisions = sync.head && sync.upstreamOid ? [sync.head, sync.upstreamOid] : ['--all'];
+      const commits = parseGitLog(await repository.git.run([
+        'log', ...revisions, '--date-order', `--max-count=${state.limit}`, `--pretty=format:${gitLogFormat}`
       ]));
+      if (sync.head && sync.upstreamOid) {
+        const differences = await repository.git.run(['rev-list', '--left-right', `${sync.head}...${sync.upstreamOid}`]);
+        const outgoing = new Set<string>();
+        const incoming = new Set<string>();
+        for (const line of differences.trim().split('\n').filter(Boolean)) {
+          if (!/^[<>][a-f0-9]{40,64}$/.test(line)) throw new Error('Invalid Git revision comparison');
+          (line[0] === '<' ? outgoing : incoming).add(line.slice(1));
+        }
+        for (const commit of commits) state.labels.set(commit.id,
+          outgoing.has(commit.id) ? '已提交待推送' : incoming.has(commit.id) ? '待拉取' : '已推送');
+      } else {
+        for (const commit of commits) state.labels.set(commit.id, '已提交 · 推送状态未知');
+      }
+      state.commits = commits;
     }
-    const nodes: HistoryNode[] = state.commits.map(commit => new CommitNode(repository, commit));
+    if (this.state(repository.uri) !== state) return this.commitNodes(repository);
+    const nodes: HistoryNode[] = state.summary ? [state.summary] : [];
+    nodes.push(...state.commits.map(commit => new CommitNode(repository, commit, state.labels?.get(commit.id))));
     if (state.commits.length >= state.limit) nodes.push(new LoadMoreNode(repository));
     return nodes;
   }

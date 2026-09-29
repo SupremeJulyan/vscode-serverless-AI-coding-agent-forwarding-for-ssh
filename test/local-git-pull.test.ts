@@ -63,7 +63,7 @@ test('relay pulls the upstream branch into the remote without touching upstream'
       assert.equal((await git.run(['rev-parse', '--verify', 'refs/heads/main^{commit}'])).trim(), oid);
     }
   });
-  assert.deepEqual(result, { status: 'merged', oid: expected });
+  assert.deepEqual(result, { status: 'merged', oid: expected, upstreamOid: expected });
   assert.equal((await git.run(['rev-parse', 'refs/heads/main'])).trim(), expected);
   assert.equal(await readFile(path.join(source, 'file.txt'), 'utf8'), 'first\nsecond\n');
   assert.equal((await local(['-C', upstream, 'rev-parse', 'refs/heads/main'])).trim(), expected);
@@ -74,7 +74,7 @@ test('relay pulls the upstream branch into the remote without touching upstream'
     downloadBundle: async () => { downloads++; throw new Error('不应下载'); },
     deliverBundle: async () => { throw new Error('不应回传'); }
   });
-  assert.deepEqual(again, { status: 'up-to-date', oid: expected });
+  assert.deepEqual(again, { status: 'up-to-date', oid: expected, upstreamOid: expected });
   assert.equal(downloads, 1);
   assert.deepEqual(await readdir(storagePath), []);
 });
@@ -109,7 +109,7 @@ test('relay treats a remote branch ahead of upstream as up to date', async t => 
     deliverBundle: async () => { throw new Error('远端更靠前时不应回传'); }
   });
   // 与 git pull --ff-only 一致：上游提交已经在远端分支里，什么都不做。
-  assert.deepEqual(result, { status: 'up-to-date', oid: target.oid });
+  assert.deepEqual(result, { status: 'up-to-date', oid: target.oid, upstreamOid: (await local(['-C', upstream, 'rev-parse', 'refs/heads/main'])).trim() });
   assert.equal((await git.run(['rev-parse', 'refs/heads/main'])).trim(), target.oid);
   assert.equal(downloads, 1); // 判定需要远端对象，这一次下载无法省。
   assert.deepEqual(await readdir(storagePath), []);
@@ -304,7 +304,7 @@ test('relay pulls into a shallow remote by declaring the same boundary locally',
       assert.equal((await git.run(['rev-parse', '--verify', 'refs/heads/main^{commit}'])).trim(), oid);
     }
   });
-  assert.deepEqual(result, { status: 'merged', oid: expected });
+  assert.deepEqual(result, { status: 'merged', oid: expected, upstreamOid: expected });
   assert.equal(await readFile(path.join(source, 'file.txt'), 'utf8'), 'second\n');
   assert.equal((await git.run(['rev-parse', 'refs/heads/main'])).trim(), expected);
   assert.deepEqual(await readdir(storagePath), []);

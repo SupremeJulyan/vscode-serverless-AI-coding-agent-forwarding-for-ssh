@@ -1,4 +1,4 @@
-import { localGitRunner, pushThroughLocalGit, resolvePushTarget, resolveShallowBoundaries } from './local-git-push';
+import { recordSuccessfulPush, localGitRunner, pushThroughLocalGit, resolvePushTarget, resolveShallowBoundaries } from './local-git-push';
 import { pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget } from './local-git-pull';
 import { RemoteGit } from './remote-git';
 import { RemoteGitScm } from './remote-git-scm';
@@ -3968,6 +3968,10 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
           }
         }
       });
+      await recordSuccessfulPush(git, target).catch(error => {
+        bridgeOutput?.appendLine(`[Git] 推送成功，但跟踪引用更新失败：${redactSensitiveText(String(error))}`);
+        void vscode.window.showWarningMessage('推送成功，但同步状态更新失败，请重新提取。');
+      });
       void vscode.window.showInformationMessage('SAFS：已通过本地 Git 推送。');
     } catch (error) {
       if (controller.signal.aborted) throw new Error(`本地 Git 推送超时（${timeoutMs} ms），请刷新目标仓库确认是否已收到提交。`);
@@ -3982,6 +3986,7 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
   const remoteCwd = remotePathForUri(folder, location.remotePath);
   const configuration = vscode.workspace.getConfiguration('safs', uri);
   const target = await resolvePullTarget(git);
+  const previousTracking = (await git.probe(['rev-parse', '--verify', '--quiet', target.tracking]))?.trim();
   // 浅克隆的远端只能打出到边界提交为止的 bundle：先问远端要边界，本地照样声明。
   const shallowBoundaries = await resolveShallowBoundaries(git, `refs/heads/${target.branch}`);
   await vscode.window.withProgress({
@@ -4022,7 +4027,7 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
             // 只更新当前分支的远程跟踪 ref：不套用远端配置里的 mirror / 自定义 refspec。
             try {
               await git.run(['fetch', remoteBundle,
-                `+refs/heads/safs-pull:refs/remotes/${target.remote}/${target.branch}`]);
+                `+refs/heads/safs-pull:${target.tracking}`]);
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               if (/prerequisite/i.test(message)) throw new Error('远端分支在拉取期间被改写，请重新拉取。');
@@ -4030,7 +4035,7 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
             }
             const head = (await git.run(['symbolic-ref', '--quiet', 'HEAD'])).trim();
             if (head !== `refs/heads/${target.branch}`) throw new Error('远端已切换分支，已取消合并。');
-            await git.run(['merge', '--ff-only', `refs/remotes/${target.remote}/${target.branch}`]);
+            await git.run(['merge', '--ff-only', target.tracking]);
             const merged = (await git.run(['rev-parse', '--verify', `refs/heads/${target.branch}^{commit}`])).trim();
             if (merged !== expected) throw new Error('合并后远端分支与预期提交不一致，请检查远端仓库。');
           } finally {
@@ -4038,6 +4043,10 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
           }
         }
       });
+      if (result.status === 'up-to-date' && result.upstreamOid) {
+        await git.run(['update-ref', target.tracking, result.upstreamOid,
+          previousTracking ?? '0'.repeat(target.oid.length)]);
+      }
       void vscode.window.showInformationMessage(
         result.status === 'up-to-date' ? 'SAFS：已是最新，无需拉取。' : 'SAFS：已通过本地 Git 拉取。');
     } catch (error) {

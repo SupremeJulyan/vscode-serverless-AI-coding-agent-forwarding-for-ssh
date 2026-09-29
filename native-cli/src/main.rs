@@ -967,7 +967,7 @@ mod tests {
 
     #[test]
     fn package_version_matches_the_extension_release() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "2.0.1");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "2.0.2");
     }
 
     #[test]

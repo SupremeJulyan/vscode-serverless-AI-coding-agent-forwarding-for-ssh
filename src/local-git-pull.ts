@@ -1,3 +1,4 @@
+import { trackingRef } from './git-sync-state';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { RemoteGit } from './remote-git';
@@ -8,6 +9,7 @@ export interface PullTarget {
   branch: string;
   /** 远端配置的 remote 名，用于在远端更新 `refs/remotes/<remote>/<branch>`。 */
   remote: string;
+  tracking: string;
   /** 上游分支的完整 ref，本地按它取新提交。 */
   upstream: string;
   /** 本地 Git 要连接的地址（远端仓库的 fetch URL）。 */
@@ -46,7 +48,9 @@ export async function resolvePullTarget(git: RemoteGit): Promise<PullTarget> {
   }
   const oid = (await git.run(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)) throw new Error('Invalid Git commit ID');
-  return { branch, remote, upstream: merge, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1' };
+  const tracking = await trackingRef(git, branch);
+  if (!tracking) throw new Error('上游没有对应的 fetch refspec，请检查远端仓库配置。');
+  return { branch, remote, tracking, upstream: merge, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1' };
 }
 
 /** 本地凭据缺失时的提示：中转拉取的取新提交发生在本地，这是最常见的失败。 */
@@ -72,7 +76,7 @@ export interface LocalPullOptions {
   report?: (message: string) => void;
 }
 
-export interface LocalPullResult { status: 'up-to-date' | 'merged' | 'fetched'; oid: string }
+export interface LocalPullResult { status: 'up-to-date' | 'merged' | 'fetched'; oid: string; upstreamOid?: string }
 
 /**
  * 经本地 Git 拉取：远端不出网、没有凭据也能更新。
@@ -101,7 +105,7 @@ export async function pullThroughLocalGit(options: LocalPullOptions): Promise<Lo
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(fetched)) throw new Error('Invalid Git commit ID');
     if (fetched === target.oid) {
       options.report?.('已是最新提交，无需拉取。');
-      return { status: 'up-to-date', oid: fetched };
+      return { status: 'up-to-date', oid: fetched, upstreamOid: fetched };
     }
     options.report?.('正在通过 SAFS 下载远端提交历史…');
     await options.downloadBundle(base);
@@ -126,7 +130,7 @@ export async function pullThroughLocalGit(options: LocalPullOptions): Promise<Lo
     if (incoming === 0) {
       // 上游提交都已在远端分支里（远端更靠前，或上游被回退）：与 git pull --ff-only 一样什么都不做。
       options.report?.('远端分支已包含上游的全部提交，无需合并。');
-      return { status: 'up-to-date', oid: target.oid };
+      return { status: 'up-to-date', oid: target.oid, upstreamOid: fetched };
     }
     if (outgoing > 0) {
       throw new Error('远端分支与上游已分叉，无法快进合并；请在远端终端手动处理。');
@@ -136,7 +140,7 @@ export async function pullThroughLocalGit(options: LocalPullOptions): Promise<Lo
     signal?.throwIfAborted();
     options.report?.('正在把上游提交传回远端…');
     await options.deliverBundle(delta, fetched);
-    return { status: 'merged', oid: fetched };
+    return { status: 'merged', oid: fetched, upstreamOid: fetched };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -159,7 +163,7 @@ export interface FetchTarget {
 /** 提取只更新当前分支的远程跟踪 ref，不动工作区；同样要求当前分支有上游。 */
 export async function resolveFetchTarget(git: RemoteGit): Promise<FetchTarget> {
   const pull = await resolvePullTarget(git);
-  const tracking = `refs/remotes/${pull.remote}/${pull.branch}`;
+  const tracking = pull.tracking;
   await git.run(['check-ref-format', tracking]);
   const value = (await git.probe(['rev-parse', '--verify', '--quiet', `${tracking}^{commit}`]))?.trim();
   if (value && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) throw new Error('Invalid Git commit ID');

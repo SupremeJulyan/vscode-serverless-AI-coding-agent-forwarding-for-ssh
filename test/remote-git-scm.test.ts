@@ -58,19 +58,27 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     state: { focused: true }, onDidChangeWindowState: disposable,
     showErrorMessage: async (message: string) => { errors.push(message); },
     // 历史视图标题栏没有输入框：提交走 showInputBox，多仓库时走 showQuickPick。
-    showInputBox: async () => 'view commit',
-    showQuickPick: async (items: any[]) => items[0],
+    showInputBox: async (options?: { prompt?: string }) =>
+      options?.prompt?.includes('创建并切换') ? 'feature/new' : 'view commit',
+    showQuickPick: async (items: any[], options?: { placeHolder?: string }) =>
+      options?.placeHolder?.includes('选择分支') ? items[1] : items[0],
     withProgress: async (_options: unknown, task: () => Promise<void>) => task()
   });
   const { RemoteGitScm } = require('../src/remote-git-scm') as typeof import('../src/remote-git-scm');
+  let counts = '2\t3';
   const scm = new RemoteGitScm(async uri => async command => {
     executions.push({ root: uri.path, command });
     let stdout = '';
     if (command.includes("'status'")) stdout = status;
     if (command.includes("'symbolic-ref'")) stdout = 'main\n';
     if (command.includes("'show'")) stdout = 'snapshot\n';
+    if (command.includes("'rev-parse'") && !command.includes("'--show-prefix'")) stdout = 'a'.repeat(40);
+    if (command.includes("'for-each-ref'") && command.includes('%00')) {
+      stdout = 'refs/heads/main\0main\0*\0\nrefs/heads/topic\0topic\0 \0\n';
+    } else if (command.includes("'for-each-ref'")) stdout = 'refs/remotes/origin/main';
+    if (command.includes("'rev-list'")) stdout = counts;
     return { exitCode: 0, stdout, stderr: '' };
-  }, message => errors.push(message), async uri => { localPushes.push(uri.path); },
+  }, message => errors.push(message), async uri => { localPushes.push(uri.path); counts = '0\t3'; },
   async uri => { localPulls.push(uri.path); }, async uri => { localFetches.push(uri.path); });
   try {
     for (let attempt = 0; attempt < 100 && sources.length < 2; attempt++) await new Promise(resolve => setImmediate(resolve));
@@ -78,6 +86,8 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     assert.equal(sources.length, 2);
     const a = sources[0];
     const b = sources[1];
+    assert.match(a.statusBarCommands[1].title, /已提交待推送 ↑2.*待拉取 ↓3/);
+    assert.equal(a.statusBarCommands[0].command, 'safs.git.switchBranch');
     const index = a.groups.find((group: any) => group.id === 'index');
     const working = a.groups.find((group: any) => group.id === 'working');
     assert.equal(index.resourceStates.length, 4);
@@ -104,13 +114,28 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     // 历史视图标题栏触发：没有 SourceControl 上下文，先选仓库（单选走 QuickPick）再问提交说明。
     await commands.get('safs.git.commit')!();
     assert.ok(executions.some(command => command.root === rootA.path && command.command.includes("'commit' '-m' 'view commit'")));
+    const switchStart = executions.length;
+    await commands.get('safs.git.switchBranch')!(a);
+    assert.ok(executions.slice(switchStart).some(command =>
+      command.root === rootA.path && command.command.includes("'switch' 'topic'")));
+    assert.ok(executions.slice(switchStart).every(command => !/fetch|pull/.test(command.command)));
+    const createStart = executions.length;
+    await commands.get('safs.git.createBranch')!(a);
+    assert.ok(executions.slice(createStart).some(command =>
+      command.root === rootA.path && command.command.includes("'switch' '-c' 'feature/new'")));
+    assert.ok(executions.slice(createStart).every(command => !/fetch|pull|--force/.test(command.command)));
     await commands.get('safs.git.push')!(b);
     assert.deepEqual(localPushes, [rootB.path]);
+    assert.equal(b.statusBarCommands[1].title, '待拉取 ↓3');
     assert.ok(!executions.some(command => command.command.includes("'push'")));
     await commands.get('safs.git.pull')!(a);
     assert.deepEqual(localPulls, [rootA.path]);
     assert.ok(!executions.some(command => command.command.includes("'pull'")));
+    let historyEvents = 0;
+    const listener = scm.onDidChangeHistory(() => { historyEvents++; });
     await commands.get('safs.git.fetch')!(a);
+    assert.ok(historyEvents > 0);
+    listener.dispose();
     assert.deepEqual(localFetches, [rootA.path]);
     assert.ok(!executions.some(command => command.command.includes("'fetch'")));
     vscode.workspace.workspaceFolders = [{ uri: rootB, name: 'B' }];

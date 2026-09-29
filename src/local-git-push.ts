@@ -1,3 +1,4 @@
+import { trackingRef } from './git-sync-state';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { RemoteGit } from './remote-git';
@@ -52,6 +53,8 @@ export interface PushTarget {
   url: string;
   oid: string;
   objectFormat: 'sha1' | 'sha256';
+  tracking?: string;
+  trackingOid?: string;
 }
 
 /** 中转必须连网络地址：远端文件系统路径或自定义 helper 不能被本地 Git 当成目标。 */
@@ -117,7 +120,18 @@ export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): P
   }
   const oid = (await git.run(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
   if (!objectId.test(oid)) throw new Error('Invalid Git commit ID');
-  return { branch, destination, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1' };
+  // Only update fetch tracking when push and fetch refer to exactly the same destination.
+  // A fork/pushUrl override must not make an unrelated upstream appear synchronized.
+  let tracking: string | undefined;
+  let trackingOid: string | undefined;
+  if (remote && upstreamRemote === remote && merge === destination) {
+    const fetchUrl = (await git.run(['remote', 'get-url', remote])).trim();
+    if (fetchUrl === urls[0]) {
+      tracking = await trackingRef(git, branch);
+      if (tracking) trackingOid = (await git.probe(['rev-parse', '--verify', '--quiet', tracking]))?.trim();
+    }
+  }
+  return { branch, destination, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1', tracking, trackingOid };
 }
 
 export type LocalGitRunner = (args: string[], signal?: AbortSignal) => Promise<string>;
@@ -179,4 +193,11 @@ export async function pushThroughLocalGit(options: LocalPushOptions): Promise<vo
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+/** Compare-and-swap avoids overwriting a concurrent fetch with an older push receipt. */
+export async function recordSuccessfulPush(git: RemoteGit, target: PushTarget): Promise<void> {
+  if (!target.tracking) return;
+  await git.run(['update-ref', target.tracking, target.oid,
+    target.trackingOid ?? '0'.repeat(target.oid.length)]);
 }
