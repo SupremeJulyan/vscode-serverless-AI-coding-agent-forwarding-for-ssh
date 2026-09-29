@@ -44,6 +44,24 @@ test('executeCaptured excludes stdout before a command marker from output and ha
   assert.equal(result.truncated, false);
 });
 
+test('aborting executeCaptured terminates descendants that keep output pipes open', async (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX process-group test');
+  const controller = new AbortController();
+  const started = Date.now();
+  const running = executeCaptured({
+    command: process.execPath,
+    args: ['-e', [
+      "const { spawn } = require('node:child_process');",
+      "spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 1, 2] });",
+      'setInterval(() => {}, 1000);'
+    ].join('')]
+  }, controller.signal);
+  setTimeout(() => controller.abort(), 50);
+  const result = await running;
+  assert.equal(result.exitCode, 130);
+  assert.ok(Date.now() - started < 1500, 'abort waited for a descendant-held pipe');
+});
+
 test('reports the command error without replacing it with an outer timeout', async () => {
   await assert.rejects(
     executeWithStdin(

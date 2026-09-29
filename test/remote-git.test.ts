@@ -79,6 +79,21 @@ test('partial staging, rename, deletion and unstaging against HEAD', async t => 
   assert.equal((await git.status())[0].working, 'D');
 });
 
+test('discard restores tracked content from the index and removes selected untracked files', async t => {
+  const { cwd, git } = await fixture(t);
+  await writeFile(path.join(cwd, 'tracked.txt'), 'committed\n');
+  await git.stage(await git.status());
+  await git.commit('initial');
+  await writeFile(path.join(cwd, 'tracked.txt'), 'staged\n');
+  await git.stage(await git.status());
+  await writeFile(path.join(cwd, 'tracked.txt'), 'working\n');
+  await writeFile(path.join(cwd, 'untracked.txt'), 'remove me\n');
+  const changes = await git.status();
+  await git.discard(changes.filter(change => change.working !== ' '));
+  assert.equal(await readFile(path.join(cwd, 'tracked.txt'), 'utf8'), 'staged\n');
+  assert.deepEqual(await git.status(), [{ index: 'M', working: ' ', path: 'tracked.txt' }]);
+});
+
 test('failures and truncated output are rejected', async () => {
   await assert.rejects(new RemoteGit(async () => ({ exitCode: 0, stdout: ' M a\0', stderr: '', truncated: true })).status(), /capture limit/);
   await assert.rejects(new RemoteGit(async () => ({ exitCode: 128, stdout: '', stderr: 'SSH failed' })).status(), /SSH failed/);

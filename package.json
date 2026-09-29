@@ -265,6 +265,12 @@
         "icon": "$(remove)"
       },
       {
+        "command": "safs.git.discard",
+        "category": "SAFS Git",
+        "title": "还原更改",
+        "icon": "$(discard)"
+      },
+      {
         "command": "safs.git.commit",
         "category": "SAFS Git",
         "title": "提交",
@@ -383,6 +389,10 @@
         },
         {
           "command": "safs.git.unstage",
+          "when": "false"
+        },
+        {
+          "command": "safs.git.discard",
           "when": "false"
         }
       ],
@@ -578,6 +588,11 @@
         {
           "command": "safs.git.unstage",
           "when": "scmProvider == safs-git && scmResourceGroup == index",
+          "group": "inline"
+        },
+        {
+          "command": "safs.git.discard",
+          "when": "scmProvider == safs-git && scmResourceGroup == working",
           "group": "inline"
         }
       ]
@@ -784,6 +799,13 @@
           "minimum": 0,
           "default": 120000,
           "description": "Unified timeout for Agent MCP forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
+        },
+        "safs.git.operationTimeoutMs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 600000,
+          "scope": "machine",
+          "description": "Timeout for SAFS Git push, pull, and fetch relay operations (milliseconds). 0 disables the timeout."
         },
         "safs.agentInterface": {
           "type": "string",

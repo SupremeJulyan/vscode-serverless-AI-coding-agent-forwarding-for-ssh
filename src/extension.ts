@@ -3951,7 +3951,7 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
     location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 推送'
   }, async progress => {
     const controller = new AbortController();
-    const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120000);
+    const timeoutMs = configuration.get<number>('git.operationTimeoutMs', 600000);
     const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
       await pushThroughLocalGit({
@@ -4009,7 +4009,7 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
     location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 拉取'
   }, async progress => {
     const controller = new AbortController();
-    const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120000);
+    const timeoutMs = configuration.get<number>('git.operationTimeoutMs', 600000);
     const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
       const result = await pullThroughLocalGit({
@@ -4084,7 +4084,7 @@ async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pr
     location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 提取'
   }, async progress => {
     const controller = new AbortController();
-    const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120000);
+    const timeoutMs = configuration.get<number>('git.operationTimeoutMs', 600000);
     const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
       const result = await fetchThroughLocalGit({

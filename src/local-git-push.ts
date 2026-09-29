@@ -168,16 +168,25 @@ export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): P
   };
 }
 
-export type LocalGitRunner = (args: string[], signal?: AbortSignal) => Promise<string>;
+export type LocalGitRunner = (
+  args: string[], signal?: AbortSignal, report?: (message: string) => void
+) => Promise<string>;
 
 /** Run where the extension host lives, preserving its credential helper and SSH agent. */
 export function localGitRunner(executable = 'git'): LocalGitRunner {
-  return async (args, signal) => {
+  return async (args, signal, report) => {
     signal?.throwIfAborted();
     const result = await executeCaptured({
       command: executable, args,
       env: { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' }
-    }, signal);
+    }, signal, 1024 * 1024, report ? {
+      stderr: chunk => {
+        const line = chunk.split(/[\r\n]/).map(value => value.trim()).filter(Boolean).at(-1);
+        if (line && /(?:Enumerating|Counting|Compressing|Receiving|Resolving) objects|Resolving deltas/i.test(line)) {
+          report(`本地 Git：${redactSensitiveText(line)}`);
+        }
+      }
+    } : {});
     if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || `Local Git failed (${result.exitCode})`);
     if (result.truncated) throw new Error('Local Git output exceeded the capture limit.');
     return result.stdout;

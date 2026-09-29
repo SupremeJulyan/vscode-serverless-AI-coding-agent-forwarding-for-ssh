@@ -71,6 +71,19 @@ export class RemoteGit {
     // Before the first commit there is no HEAD to restore from. Remove only index entries.
     await this.run(head ? ['reset', 'HEAD', '--', ...paths] : ['rm', '--cached', '-f', '--', ...paths]);
   }
+  async discard(changes: GitChange[]): Promise<void> {
+    const tracked = new Set<string>();
+    const untracked = new Set<string>();
+    for (const change of changes) {
+      const paths = change.originalPath ? [change.path, change.originalPath] : [change.path];
+      for (const path of paths) (change.index === '?' ? untracked : tracked).add(path);
+    }
+    // Worktree changes are restored from the index so partially staged content stays intact.
+    if (tracked.size) await this.run(['restore', '--worktree', '--', ...tracked]);
+    // `restore` cannot remove untracked files. Git clean keeps literal pathspec handling and
+    // removes only the explicitly selected, non-ignored files reported by status.
+    if (untracked.size) await this.run(['clean', '-f', '--', ...untracked]);
+  }
   async commit(message: string): Promise<void> {
     if (!message.trim()) throw new Error('请输入提交说明。');
     await this.run(['-c', 'core.editor=true', 'commit', '-m', message]);

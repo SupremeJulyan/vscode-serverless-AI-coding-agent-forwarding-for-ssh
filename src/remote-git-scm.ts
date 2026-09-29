@@ -148,11 +148,36 @@ export class RemoteGitScm implements vscode.Disposable {
         for (const [repository, changes] of groups) {
           await this.enqueue(repository, async () => {
             try { await repository.git[action](changes); }
-            finally { await this.update(repository); }
+            // Index/worktree operations cannot change HEAD or its upstream. Reuse the
+            // current sync state instead of paying for many extra SSH Git queries.
+            finally { await this.update(repository, false); }
           });
         }
       });
     }
+    command('discard', async (...resources: Resource[]) => {
+      const selected = resources.filter(resource =>
+        resource?.repository && resource.change && !resource.staged && !isGitConflict(resource.change));
+      if (!selected.length) return;
+      const confirmation = await vscode.window.showWarningMessage(
+        selected.length === 1
+          ? `确定还原“${selected[0].change.path}”的更改吗？此操作无法撤销。`
+          : `确定还原选中的 ${selected.length} 项更改吗？此操作无法撤销。`,
+        { modal: true }, '还原更改');
+      if (confirmation !== '还原更改') return;
+      const groups = new Map<Repository, GitChange[]>();
+      for (const resource of selected) {
+        const changes = groups.get(resource.repository) ?? [];
+        changes.push(resource.change);
+        groups.set(resource.repository, changes);
+      }
+      for (const [repository, changes] of groups) {
+        await this.enqueue(repository, async () => {
+          try { await repository.git.discard(changes); }
+          finally { await this.update(repository, false); }
+        });
+      }
+    });
     for (const action of ['fetch', 'pull', 'push'] as const) {
       command(action, async (source?: vscode.SourceControl) => {
         const repository = await this.select(source);
@@ -273,16 +298,18 @@ export class RemoteGitScm implements vscode.Disposable {
     } finally { this.discovering = false; }
   }
 
-  private async update(repository: Repository): Promise<void> {
+  private async update(repository: Repository, refreshSyncState = true): Promise<void> {
     const changes = await repository.git.status();
-    let syncState: GitSyncState;
-    try {
-      const observed = await this.prepareSyncState?.(repository.uri, repository.git);
-      syncState = applyObservedPushState(await readGitSyncState(repository.git), observed);
-    }
-    catch (error) {
-      this.log(`Git 同步状态：${String(error)}`);
-      syncState = { branch: repository.syncState?.branch ?? 'HEAD', kind: 'unknown' };
+    let syncState = repository.syncState;
+    if (refreshSyncState || !syncState) {
+      try {
+        const observed = await this.prepareSyncState?.(repository.uri, repository.git);
+        syncState = applyObservedPushState(await readGitSyncState(repository.git), observed);
+      }
+      catch (error) {
+        this.log(`Git 同步状态：${String(error)}`);
+        syncState = { branch: repository.syncState?.branch ?? 'HEAD', kind: 'unknown' };
+      }
     }
     const changed = JSON.stringify(repository.syncState) !== JSON.stringify(syncState);
     repository.syncState = syncState;

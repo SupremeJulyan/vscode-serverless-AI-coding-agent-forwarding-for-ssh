@@ -20,6 +20,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   const commands = new Map<string, (...args: any[]) => Promise<unknown>>();
   const sources: any[] = [];
   const errors: string[] = [];
+  const warnings: string[] = [];
   const executions: { root: string; command: string }[] = [];
   const opened: any[][] = [];
   const localPushes: string[] = [];
@@ -57,6 +58,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   Object.assign(vscode.window, {
     state: { focused: true }, onDidChangeWindowState: disposable,
     showErrorMessage: async (message: string) => { errors.push(message); },
+    showWarningMessage: async (message: string) => { warnings.push(message); return '还原更改'; },
     // 历史视图标题栏没有输入框：提交走 showInputBox，多仓库时走 showQuickPick。
     showInputBox: async (options?: { prompt?: string }) =>
       options?.prompt?.includes('创建并切换') ? 'feature/new' : 'view commit',
@@ -106,6 +108,14 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     await commands.get('safs.git.stage')!(working.resourceStates[0]);
     assert.ok(executions.slice(before).every(command => command.root === rootA.path));
     assert.ok(executions.slice(before).some(command => command.command.includes("'add' '--' 'file.txt'")));
+    assert.ok(executions.slice(before).some(command => command.command.includes("'status'")));
+    assert.ok(executions.slice(before).every(command =>
+      !command.command.includes("'symbolic-ref'") && !command.command.includes("'rev-list'")));
+    const discardStart = executions.length;
+    await commands.get('safs.git.discard')!(working.resourceStates[0]);
+    assert.ok(executions.slice(discardStart).some(command =>
+      command.root === rootA.path && command.command.includes("'restore' '--worktree' '--' 'file.txt'")));
+    assert.match(warnings[0], /file\.txt/);
     status = 'M  file.txt\0';
     b.inputBox.value = 'commit B';
     await commands.get('safs.git.commit')!(b);

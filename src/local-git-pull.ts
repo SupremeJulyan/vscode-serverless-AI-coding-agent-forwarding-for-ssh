@@ -96,8 +96,8 @@ export async function pullThroughLocalGit(options: LocalPullOptions): Promise<Lo
     await local(['init', '--bare', `--object-format=${target.objectFormat}`, repository], signal);
     options.report?.('正在用本地 Git 和凭据获取上游提交…');
     try {
-      await local(['-C', repository, 'fetch', '--no-tags', target.url,
-        `${target.upstream}:refs/heads/safs-pull`], signal);
+      await local(['-C', repository, 'fetch', '--progress', '--no-tags', target.url,
+        `${target.upstream}:refs/heads/safs-pull`], signal, options.report);
     } catch (error) {
       throw new Error(describeFetchFailure(target.url, error instanceof Error ? error.message : String(error)));
     }
@@ -207,8 +207,8 @@ export async function fetchThroughLocalGit(options: LocalFetchOptions): Promise<
     await local(['init', '--bare', `--object-format=${target.objectFormat}`, repository], signal);
     options.report?.('正在用本地 Git 和凭据获取上游提交…');
     try {
-      await local(['-C', repository, 'fetch', '--no-tags', target.url,
-        `${target.upstream}:refs/heads/safs-pull`], signal);
+      await local(['-C', repository, 'fetch', '--progress', '--no-tags', target.url,
+        `${target.upstream}:refs/heads/safs-pull`], signal, options.report);
     } catch (error) {
       throw new Error(describeFetchFailure(target.url, error instanceof Error ? error.message : String(error)));
     }

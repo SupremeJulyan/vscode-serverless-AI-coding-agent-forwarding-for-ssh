@@ -154,6 +154,27 @@ export interface CapturedProcessResult {
   truncated: boolean;
 }
 
+/** Stop the command and helpers such as `git -> ssh -> ProxyCommand` together. */
+function terminateProcessTree(
+  child: import('node:child_process').ChildProcess
+): ReturnType<typeof setTimeout> | undefined {
+  if (!child.pid) return undefined;
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+      windowsHide: true, stdio: 'ignore'
+    });
+    killer.on('error', () => child.kill());
+    return undefined;
+  }
+  try { process.kill(-child.pid, 'SIGTERM'); }
+  catch { child.kill('SIGTERM'); }
+  const force = setTimeout(() => {
+    try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already exited */ }
+  }, 2000);
+  force.unref();
+  return force;
+}
+
 export async function executeCaptured(
   plan: CommandPlan, signal?: AbortSignal, maxOutputBytes = 1024 * 1024,
   handlers: ProcessOutputHandlers = {}
@@ -166,6 +187,7 @@ export async function executeCaptured(
       env: { ...process.env, ...plan.env },
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
       ...(invocation.windowsVerbatimArguments
         ? { windowsVerbatimArguments: true }
         : {})
@@ -197,11 +219,13 @@ export async function executeCaptured(
       capture(stderr, chunk);
       handlers.stderr?.(chunk.toString());
     });
-    const abort = () => child.kill();
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const abort = () => { forceKill = terminateProcessTree(child); };
     signal?.addEventListener('abort', abort, { once: true });
     child.once('error', reject);
     child.once('close', (code) => {
       signal?.removeEventListener('abort', abort);
+      if (forceKill) clearTimeout(forceKill);
       for (const part of stdoutStripper?.finish() ?? []) capture(stdout, part);
       resolve({
         exitCode: code ?? (signal?.aborted ? 130 : 1),
