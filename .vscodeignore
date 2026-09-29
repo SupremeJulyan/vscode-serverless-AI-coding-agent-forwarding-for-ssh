@@ -5,6 +5,7 @@ resources/agent-mcp/**
 tsconfig.json
 esbuild.js
 node_modules/**
+bin/**
 *.vsix
 *.png
 *.gif

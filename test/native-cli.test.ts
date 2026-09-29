@@ -4,8 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  bundledNativeCli, ensureUnixCliPath, globalNativeCli, installNativeCli,
+  ensureUnixCliPath, globalNativeCli, installNativeCli,
   globalNativeCliSkill, nativeCliConnectionPath, nativeCliPlatform,
+  nativeCliAssetName, nativeCliDownloadUrl,
   parseNativeCliVersion, removeGlobalNativeCliSkill, removeNativeCli, withoutSafsPathBlock,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
@@ -40,7 +41,13 @@ test('selects native binaries for the current extension environment', () => {
   assert.equal(nativeCliPlatform('darwin', 'arm64'), 'darwin-arm64');
   assert.equal(nativeCliPlatform('win32', 'x64'), 'win32-x64');
   assert.equal(nativeCliPlatform('win32', 'arm64'), 'win32-arm64');
-  assert.match(bundledNativeCli('root', 'win32-x64'), /safs\.exe$/);
+  assert.equal(nativeCliAssetName('win32-x64'), 'safs-win32-x64.exe');
+  assert.equal(nativeCliAssetName('linux-arm64'), 'safs-linux-arm64');
+  assert.equal(
+    nativeCliDownloadUrl('2.0.2', 'linux-x64'),
+    'https://github.com/SupremeJulyan/vscode-serverless-AI-coding-agent-forwarding-for-ssh/releases/download/v2.0.2/safs-linux-x64'
+  );
+  assert.throws(() => nativeCliDownloadUrl('../main', 'linux-x64'));
   const home = join(tmpdir(), 'safs-native-home');
   assert.equal(globalNativeCli(home, 'linux-x64'), join(home, '.local', 'bin', 'safs'));
   assert.equal(nativeCliConnectionPath(join(home, '.local', 'bin', 'safs')), join(home, '.local', 'bin', '.safs-connection.json'));
@@ -88,21 +95,22 @@ test('builds a Windows user PATH removal without embedding the directory', () =>
   assert.match(plan.args[3], /SetEnvironmentVariable\('Path'/);
 });
 
-test('installs only the selected platform executable from the extension bundle', async () => {
+test('downloads and installs only the selected platform executable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-native-cli-'));
   try {
-    const extensionRoot = join(root, 'extension');
     const home = join(root, 'home');
     const binary = Buffer.alloc(100 * 1024, 0);
     binary.set(Buffer.from('7f454c46', 'hex'));
-    const source = bundledNativeCli(extensionRoot, 'linux-x64');
-    await mkdir(join(extensionRoot, 'bin', 'linux-x64'), { recursive: true });
-    await writeFile(source, binary);
+    binary.set(Buffer.from('safs 2.0.2'), 128);
+    const urls: string[] = [];
     const installed = await installNativeCli(
-      extensionRoot, home, 'linux-x64', process.platform
+      home, 'linux-x64', '2.0.2', process.platform, async url => {
+        urls.push(url);
+        return binary;
+      }
     );
     assert.deepEqual(await readFile(installed), binary);
-    assert.deepEqual(await readFile(source), binary);
+    assert.deepEqual(urls, [nativeCliDownloadUrl('2.0.2', 'linux-x64')]);
     assert.equal(installed, join(home, '.local', 'bin', 'safs'));
     if (process.platform !== 'win32') {
       const { stat } = await import('node:fs/promises');
@@ -111,13 +119,25 @@ test('installs only the selected platform executable from the extension bundle',
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('fails clearly when the extension bundle is missing its platform CLI', async () => {
+test('rejects failed downloads and mismatched binaries without replacing the installed CLI', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-native-cli-missing-'));
   try {
-    await assert.rejects(
-      installNativeCli(join(root, 'extension'), join(root, 'home'), 'linux-x64'),
-      /插件包内缺少 linux-x64 SAFS CLI/
-    );
+    const home = join(root, 'home');
+    const executable = globalNativeCli(home, 'linux-x64');
+    await mkdir(join(home, '.local', 'bin'), { recursive: true });
+    await writeFile(executable, 'existing');
+    await assert.rejects(installNativeCli(
+      home, 'linux-x64', '2.0.2', process.platform,
+      async () => { throw new Error('offline'); }
+    ), /offline/);
+    assert.equal(await readFile(executable, 'utf8'), 'existing');
+    const wrong = Buffer.alloc(100 * 1024, 0);
+    wrong.set(Buffer.from('7f454c46', 'hex'));
+    wrong.set(Buffer.from('safs 9.9.9'), 128);
+    await assert.rejects(installNativeCli(
+      home, 'linux-x64', '2.0.2', process.platform, async () => wrong
+    ), /版本.*不一致/);
+    assert.equal(await readFile(executable, 'utf8'), 'existing');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

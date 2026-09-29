@@ -5429,10 +5429,10 @@ async function ensureGlobalCliVersion(
       : undefined;
     if (installedVersion !== extensionVersion) {
       bridgeOutput?.warn(
-        `[Agent CLI] 版本不一致，正在更新；installed=${installedVersion ?? '<unknown>'}；` +
+        `[Agent CLI] 版本不一致，正在按需下载；installed=${installedVersion ?? '<unknown>'}；` +
         `extension=${extensionVersion}；platform=${nativePlatform}`
       );
-      await installNativeCli(context.extensionUri.fsPath, agentHome, nativePlatform);
+      await installNativeCli(agentHome, nativePlatform, extensionVersion);
       const refreshedVersion = await probeInstalledCliVersion(executable);
       if (refreshedVersion !== extensionVersion) {
         throw new Error(

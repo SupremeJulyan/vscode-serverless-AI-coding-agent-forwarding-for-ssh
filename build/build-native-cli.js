@@ -24,4 +24,12 @@ mkdirSync(destinationDirectory, { recursive: true });
 const destination = path.join(destinationDirectory, executable);
 copyFileSync(source, destination);
 if (!executable.endsWith('.exe')) chmodSync(destination, 0o755);
+const releaseDirectory = 'release-assets';
+mkdirSync(releaseDirectory, { recursive: true });
+const releaseAsset = path.join(
+  releaseDirectory, `safs-${platform}${executable.endsWith('.exe') ? '.exe' : ''}`
+);
+copyFileSync(source, releaseAsset);
+if (!releaseAsset.endsWith('.exe')) chmodSync(releaseAsset, 0o755);
 console.log(`SAFS native CLI: ${destination}`);
+console.log(`SAFS release asset: ${releaseAsset}`);

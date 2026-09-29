@@ -18,8 +18,37 @@ export function nativeCliPlatform(
   return `${os}-${cpu}` as NativeCliPlatform;
 }
 
-export function bundledNativeCli(extensionRoot: string, platform: NativeCliPlatform): string {
-  return path.join(extensionRoot, 'bin', platform, platform.startsWith('win32-') ? 'safs.exe' : 'safs');
+const nativeCliReleaseBase =
+  'https://github.com/SupremeJulyan/vscode-serverless-AI-coding-agent-forwarding-for-ssh/releases/download';
+
+export function nativeCliAssetName(platform: NativeCliPlatform): string {
+  return `safs-${platform}${platform.startsWith('win32-') ? '.exe' : ''}`;
+}
+
+export function nativeCliDownloadUrl(version: string, platform: NativeCliPlatform): string {
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(`无效的 SAFS CLI 版本：${version}`);
+  }
+  return `${nativeCliReleaseBase}/v${version}/${nativeCliAssetName(platform)}`;
+}
+
+export type NativeCliDownloader = (url: string) => Promise<Uint8Array>;
+
+async function downloadNativeCli(url: string): Promise<Uint8Array> {
+  let response: Response;
+  try {
+    response = await fetch(url, { redirect: 'follow' });
+  } catch (error) {
+    throw new Error(`下载 SAFS CLI 失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!response.ok) {
+    throw new Error(`下载 SAFS CLI 失败：HTTP ${response.status} ${response.statusText}`);
+  }
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > 10 * 1024 * 1024) {
+    throw new Error(`下载的 SAFS CLI 大小异常：${declared} 字节`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 /** Parse the stable `safs --version` output without accepting unrelated numbers. */
@@ -27,14 +56,19 @@ export function parseNativeCliVersion(output: string): string | undefined {
   return /^safs\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s*$/m.exec(output)?.[1];
 }
 
-function validateNativeCli(content: Uint8Array, platform: NativeCliPlatform): void {
+function validateNativeCli(
+  content: Uint8Array, platform: NativeCliPlatform, version: string
+): void {
   if (content.byteLength < 100 * 1024 || content.byteLength > 10 * 1024 * 1024) {
-    throw new Error(`插件内置的 SAFS CLI 大小异常：${content.byteLength} 字节`);
+    throw new Error(`下载的 SAFS CLI 大小异常：${content.byteLength} 字节`);
   }
   const expected = platform.startsWith('win32-') ? '4d5a'
     : platform.startsWith('darwin-') ? 'cffaedfe' : '7f454c46';
   const actual = Buffer.from(content.subarray(0, expected.length / 2)).toString('hex');
-  if (actual !== expected) throw new Error(`插件内置的 SAFS CLI 文件格式与 ${platform} 不符`);
+  if (actual !== expected) throw new Error(`下载的 SAFS CLI 文件格式与 ${platform} 不符`);
+  if (!Buffer.from(content).includes(Buffer.from(`safs ${version}`))) {
+    throw new Error(`下载的 SAFS CLI 版本与插件版本 ${version} 不一致`);
+  }
 }
 
 export function globalNativeCli(home: string, platform: NativeCliPlatform): string {
@@ -117,24 +151,21 @@ export function windowsUserPathRemovePlan(binDirectory: string): CommandPlan {
   };
 }
 
-/** Atomically install the matching CLI carried inside the extension package. */
+/** Download, validate, and replace only the current platform CLI. */
 export async function installNativeCli(
-  extensionRoot: string, home: string, platform: NativeCliPlatform,
-  hostPlatform: NodeJS.Platform = process.platform
+  home: string, platform: NativeCliPlatform, version: string,
+  hostPlatform: NodeJS.Platform = process.platform,
+  downloader: NativeCliDownloader = downloadNativeCli
 ): Promise<string> {
-  const source = bundledNativeCli(extensionRoot, platform);
   const destination = globalNativeCli(home, platform);
   const destinationDirectory = path.dirname(destination);
   await mkdir(destinationDirectory, { recursive: true });
   const temporary = path.join(
-    destinationDirectory, `.safs-install-${process.pid}-${randomBytes(6).toString('hex')}`
+    destinationDirectory, `.safs-download-${process.pid}-${randomBytes(6).toString('hex')}`
   );
   try {
-    const content = await readFile(source).catch((error) => {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`插件包内缺少 ${platform} SAFS CLI：${detail}`);
-    });
-    validateNativeCli(content, platform);
+    const content = await downloader(nativeCliDownloadUrl(version, platform));
+    validateNativeCli(content, platform, version);
     await writeFile(temporary, content, {
       mode: 0o700, flag: 'wx'
     });

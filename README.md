@@ -139,7 +139,7 @@ SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命�
 
 #### CLI 模式
 
-CLI 使用插件包内置的原生 `safs` 程序，六个平台的二进制均随插件安装，不再运行时联网下载。切换到 CLI 模式会安装当前扩展环境对应的程序与用户级 `~/.agents/skills/safs-cli`；运行 `SAFS: 安装或更新全局 CLI` 也会切换到该模式并主动安装或修复。扩展会读取 CLI 的真实版本；与当前插件版本不一致或旧版不支持版本查询时，会直接从当前插件包自动更新。进入 CLI 模式或在全局首次开启 Agent 转发时，扩展会复制 MCP 卸载提示词；请粘贴给 Agent，注销用户级 `safs` MCP 后重启 Agent。之后在Agent 里`输入使用safs-cli`，或者`/safs-cli` 即可使用这Skill。
+插件包不再包含 `bin` 目录。首次切换到 CLI 模式、运行 `SAFS: 安装或更新全局 CLI`，或已安装 CLI 与插件版本不一致时，扩展会从对应版本的 GitHub Release 按需下载当前平台的原生 `safs` 程序，校验文件大小、可执行格式和内嵌版本后再替换。相同版本会直接复用，不会重复下载；下载或校验失败时保留原有 CLI 并显示错误。MCP 模式不需要下载二进制。CLI 安装完成后会从程序内安装用户级 `~/.agents/skills/safs-cli`，这一步无需联网。进入 CLI 模式或在全局首次开启 Agent 转发时，扩展会复制 MCP 卸载提示词；请粘贴给 Agent，注销用户级 `safs` MCP 后重启 Agent。之后在 Agent 里输入“使用 safs-cli”，或者 `/safs-cli` 即可使用该 Skill。
 
 
 `safs workspaces` 返回的 `workspaceId` 通过 `--workspace` 显式传给每个命令，

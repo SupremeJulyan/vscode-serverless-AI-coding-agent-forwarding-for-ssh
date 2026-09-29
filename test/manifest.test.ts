@@ -180,17 +180,16 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
   const nativeCliSource = await readFile(
     new URL('../native-cli/src/main.rs', import.meta.url), 'utf8'
   );
+  const nativeCliIntegrationSource = await readFile(
+    new URL('../src/native-cli.ts', import.meta.url), 'utf8'
+  );
   const vscodeIgnore = await readFile(new URL('../.vscodeignore', import.meta.url), 'utf8');
   assert.equal(extensionSource.includes('mcp-router.cjs'), false);
   assert.equal(extensionSource.includes("'--', 'node'"), false);
   assert.equal(nativeCliSource.includes('mcp-bridge'), false);
-  assert.equal(/^bin\/\*\*$/m.test(vscodeIgnore), false);
-  for (const executable of [
-    'linux-x64/safs', 'linux-arm64/safs', 'darwin-x64/safs', 'darwin-arm64/safs',
-    'win32-x64/safs.exe', 'win32-arm64/safs.exe'
-  ]) {
-    await access(new URL(`../bin/${executable}`, import.meta.url));
-  }
+  assert.equal(/^bin\/\*\*$/m.test(vscodeIgnore), true);
+  assert.ok(nativeCliIntegrationSource.includes('releases/download'));
+  assert.ok(nativeCliIntegrationSource.includes('nativeCliDownloadUrl'));
   await access(new URL('../skills/safs-cli/SKILL.md', import.meta.url));
   await access(new URL('../skills/safs-cli/references/commands.md', import.meta.url));
   await assert.rejects(access(new URL(

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
 import { AgentHttpRouter, workspaceIdFor } from '../src/agent-http-router';
 import { cliConfigPath, writeCliConnection } from '../src/cli-integration';
-import { bundledNativeCli, nativeCliPlatform } from '../src/native-cli';
+import { nativeCliPlatform } from '../src/native-cli';
 import { executeCaptured } from '../src/process';
 
 async function freePort(): Promise<number> {
@@ -21,11 +21,14 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
+function developmentNativeCli(): string {
+  const platform = nativeCliPlatform(process.platform, process.arch);
+  return join(process.cwd(), 'bin', platform, platform.startsWith('win32-') ? 'safs.exe' : 'safs');
+}
+
 test('native CLI installs its bundled Agent Skill without a router', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-skill-'));
-  const executable = bundledNativeCli(
-    process.cwd(), nativeCliPlatform(process.platform, process.arch)
-  );
+  const executable = developmentNativeCli();
   try {
     await mkdir(join(temporary, 'project'));
     const installed = await executeCaptured({
@@ -126,9 +129,7 @@ test('native CLI lists and executes through the existing SAFS router', async () 
   });
   await router.start();
   const config = cliConfigPath(temporary);
-  const executable = bundledNativeCli(
-    process.cwd(), nativeCliPlatform(process.platform, process.arch)
-  );
+  const executable = developmentNativeCli();
   const extensionVersion = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ).version as string;
@@ -284,9 +285,7 @@ test('native CLI applies the connection-file request timeout', async () => {
   await new Promise<void>((resolve) => hanging.listen(0, '127.0.0.1', resolve));
   const address = hanging.address();
   assert.ok(address && typeof address !== 'string');
-  const executable = bundledNativeCli(
-    process.cwd(), nativeCliPlatform(process.platform, process.arch)
-  );
+  const executable = developmentNativeCli();
   try {
     const config = cliConfigPath(temporary);
     await writeCliConnection(
@@ -320,9 +319,7 @@ test('native CLI bypasses proxy variables for loopback', async () => {
     discover: () => []
   });
   await router.start();
-  const executable = bundledNativeCli(
-    process.cwd(), nativeCliPlatform(process.platform, process.arch)
-  );
+  const executable = developmentNativeCli();
   const config = cliConfigPath(temporary);
   const proxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
   const proxyEnvironment = {

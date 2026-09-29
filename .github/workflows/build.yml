@@ -38,6 +38,10 @@ jobs:
         run: node build/build-native-cli.js
         env:
           SAFS_CLI_PLATFORM: ${{ matrix.platform }}
+      - name: Verify release asset
+        run: node build/verify-native-cli.js
+        env:
+          SAFS_CLI_PLATFORM: ${{ matrix.platform }}
       - name: Smoke test native CLI
         shell: bash
         run: |
@@ -46,53 +50,48 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: safs-${{ matrix.platform }}
-          path: bin/${{ matrix.platform }}/*
+          path: release-assets/safs-${{ matrix.platform }}${{ startsWith(matrix.platform, 'win32-') && '.exe' || '' }}
           if-no-files-found: error
 
   extension:
     needs: native-cli
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: safs-linux-x64
+          path: release-assets
+      - name: Install native CLI for integration tests
+        run: |
+          cp release-assets/safs-linux-x64 bin/linux-x64/safs
+          chmod +x bin/linux-x64/safs
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: safs-*
-          path: bin
-          merge-multiple: false
-      - name: Normalize downloaded artifact directories
-        shell: bash
-        run: |
-          for artifact in bin/safs-*; do
-            platform="${artifact#bin/safs-}"
-            mkdir -p "bin/$platform"
-            mv "$artifact"/* "bin/$platform/"
-            rmdir "$artifact"
-          done
-          chmod +x bin/linux-*/safs bin/darwin-*/safs
       - run: npm ci
       - run: npm test
-      - run: node build/verify-native-cli.js
       - run: npm run vsix
       - uses: actions/upload-artifact@v4
         with:
           name: safs-universal-vsix
           path: '*.vsix'
           if-no-files-found: error
-      - name: Commit refreshed native executables
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -f bin/linux-x64/safs bin/linux-arm64/safs
-          git add -f bin/darwin-x64/safs bin/darwin-arm64/safs
-          git add -f bin/win32-x64/safs.exe bin/win32-arm64/safs.exe
-          git diff --cached --quiet && exit 0
-          git commit -m "build(cli): refresh native executables [skip ci]"
-          git push origin HEAD:main
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [native-cli, extension]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: safs-*
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
