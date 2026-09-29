@@ -1,4 +1,8 @@
-import { recordSuccessfulPush, localGitRunner, pushThroughLocalGit, resolvePushTarget, resolveShallowBoundaries } from './local-git-push';
+import {
+  applySuccessfulPushReceipt, recordSuccessfulPush, localGitRunner, pushReceiptKey,
+  pushThroughLocalGit, resolvePushTarget, resolveShallowBoundaries,
+  successfulPushReceipt, SuccessfulPushReceipt
+} from './local-git-push';
 import { pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget } from './local-git-pull';
 import { RemoteGit } from './remote-git';
 import { RemoteGitScm } from './remote-git-scm';
@@ -135,6 +139,7 @@ const mountRenames = new Map<string, string>();
 const cliInstallKey = platformStateKey('cliInstall');
 const proxyEnvironmentCheckKey = platformStateKey('proxyEnvironmentCheckV1');
 const remoteShortcutHintKey = platformStateKey('remoteShortcutHintV1');
+const gitPushReceiptsKey = platformStateKey('gitPushReceiptsV1');
 /** Serialize all mount toggles so only the first globally enabled mount installs integration. */
 let aiForwardUpdate: Promise<void> = Promise.resolve();
 const defaultConfigPath = '~/.safs/config.json';
@@ -3968,6 +3973,17 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
           }
         }
       });
+      const receipt = successfulPushReceipt(target);
+      if (receipt) {
+        const previous = vscodeContext.globalState.get<Record<string, SuccessfulPushReceipt>>(
+          gitPushReceiptsKey, {}
+        );
+        const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        const retained = Object.fromEntries(Object.entries(previous)
+          .filter(([, value]) => value.recordedAt >= cutoff));
+        retained[receipt.key] = receipt;
+        await vscodeContext.globalState.update(gitPushReceiptsKey, retained);
+      }
       await recordSuccessfulPush(git, target).catch(error => {
         bridgeOutput?.appendLine(`[Git] 推送成功，但跟踪引用更新失败：${redactSensitiveText(String(error))}`);
         void vscode.window.showWarningMessage('推送成功，但同步状态更新失败，请重新提取。');
@@ -6279,7 +6295,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         truncated: result.truncated === true
       };
     };
-  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally, pullRemoteRepositoryLocally, fetchRemoteRepositoryLocally);
+  }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally,
+  pullRemoteRepositoryLocally, fetchRemoteRepositoryLocally, async (uri, git) => {
+    try {
+      const configuration = vscode.workspace.getConfiguration('safs', uri);
+      const target = await resolvePushTarget(
+        git, configuration.get<string>('git.pushUrl', '').trim() || undefined
+      );
+      const receipts = vscodeContext.globalState.get<Record<string, SuccessfulPushReceipt>>(
+        gitPushReceiptsKey, {}
+      );
+      await applySuccessfulPushReceipt(git, target, receipts[pushReceiptKey(target)]);
+    } catch (error) {
+      // Receipt reconciliation is only a display repair. Ordinary Git state
+      // remains available when a repository has no valid push destination.
+      bridgeOutput?.appendLine(`[Git] 跨主机推送状态未同步：${redactSensitiveText(String(error))}`);
+    }
+  });
   context.subscriptions.push(gitScm, new RemoteGitHistory(
     () => gitScm.repositoriesInUse(),
     (message) => bridgeOutput?.appendLine(`[Git] ${message}`),

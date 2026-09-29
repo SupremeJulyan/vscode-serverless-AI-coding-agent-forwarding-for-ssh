@@ -7,7 +7,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { RemoteGit } from '../src/remote-git';
 import { readGitSyncState, syncStateLabel, trackingRef } from '../src/git-sync-state';
-import { recordSuccessfulPush, resolvePushTarget } from '../src/local-git-push';
+import {
+  applySuccessfulPushReceipt, recordSuccessfulPush, resolvePushTarget, successfulPushReceipt
+} from '../src/local-git-push';
 import { resolveFetchTarget, resolvePullTarget } from '../src/local-git-pull';
 const exec = promisify(execFile);
 async function fixture(t: any) {
@@ -23,7 +25,7 @@ async function fixture(t: any) {
     await writeFile(path.join(cwd, 'file'), content); await git.run(['add', '.']); await git.commit(content);
     return (await git.run(['rev-parse', 'HEAD'])).trim();
   };
-  return { git, commit };
+  return { cwd, git, commit };
 }
 
 test('states distinguish unborn, untracked, missing upstream, ahead, behind, divergence and detached HEAD', async t => {
@@ -85,4 +87,42 @@ test('fetch/pull and successful push use the actual upstream name, and push rece
 test('state errors never become a synchronized result', async () => {
   const git = new RemoteGit(async () => ({ exitCode: 255, stdout: '', stderr: 'SSH failed' }));
   await assert.rejects(readGitSyncState(git), /SSH failed/);
+});
+
+test('a successful push receipt repairs the same stale tracking ref on another host', async t => {
+  const { cwd, git, commit } = await fixture(t);
+  const base = await commit('base');
+  await git.run(['remote', 'add', 'origin', 'https://example.test/repo.git']);
+  await git.run(['config', 'branch.feature.remote', 'origin']);
+  await git.run(['config', 'branch.feature.merge', 'refs/heads/trunk']);
+  await git.run(['update-ref', 'refs/remotes/origin/trunk', base]);
+  const outgoing = await commit('outgoing');
+  const firstTarget = await resolvePushTarget(git);
+  const receipt = successfulPushReceipt(firstTarget);
+  assert.ok(receipt);
+
+  const second = `${cwd}-second`;
+  t.after(() => rm(second, { recursive: true, force: true }));
+  await exec('git', ['clone', '-q', cwd, second]);
+  const secondGit = new RemoteGit(async command => {
+    try { return { ...await exec('/bin/sh', ['-c', command], { cwd: second }), exitCode: 0 }; }
+    catch (error) { const value = error as any; return { stdout: value.stdout, stderr: value.stderr, exitCode: value.code }; }
+  });
+  await secondGit.run(['remote', 'set-url', 'origin', 'https://example.test/repo.git']);
+  await secondGit.run(['config', 'branch.feature.remote', 'origin']);
+  await secondGit.run(['config', 'branch.feature.merge', 'refs/heads/trunk']);
+  await secondGit.run(['update-ref', 'refs/remotes/origin/trunk', base]);
+  assert.equal((await readGitSyncState(secondGit)).ahead, 1);
+
+  const secondTarget = await resolvePushTarget(secondGit);
+  assert.equal(secondTarget.oid, outgoing);
+  assert.equal(await applySuccessfulPushReceipt(secondGit, secondTarget, receipt), true);
+  assert.equal((await readGitSyncState(secondGit)).ahead, 0);
+
+  // A fetch performed on the second host wins over an older receipt.
+  await secondGit.run(['update-ref', 'refs/remotes/origin/trunk', base]);
+  const changedTarget = await resolvePushTarget(secondGit);
+  await secondGit.run(['update-ref', 'refs/remotes/origin/trunk', outgoing]);
+  await assert.rejects(applySuccessfulPushReceipt(secondGit, changedTarget, receipt), /cannot lock ref/);
+  assert.equal((await secondGit.run(['rev-parse', 'refs/remotes/origin/trunk'])).trim(), outgoing);
 });

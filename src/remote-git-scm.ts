@@ -58,7 +58,8 @@ export class RemoteGitScm implements vscode.Disposable {
     private readonly log: (message: string) => void,
     private readonly localPush: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
     private readonly localPull: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
-    private readonly localFetch: (uri: vscode.Uri, git: RemoteGit) => Promise<void>
+    private readonly localFetch: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
+    private readonly prepareSyncState?: (uri: vscode.Uri, git: RemoteGit) => Promise<void>
   ) {
     this.subscriptions.push(this.repositoryEmitter, this.historyEmitter);
     this.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('safs-git', {
@@ -254,7 +255,10 @@ export class RemoteGitScm implements vscode.Disposable {
   private async update(repository: Repository): Promise<void> {
     const changes = await repository.git.status();
     let syncState: GitSyncState;
-    try { syncState = await readGitSyncState(repository.git); }
+    try {
+      await this.prepareSyncState?.(repository.uri, repository.git);
+      syncState = await readGitSyncState(repository.git);
+    }
     catch (error) {
       this.log(`Git 同步状态：${String(error)}`);
       syncState = { branch: repository.syncState?.branch ?? 'HEAD', kind: 'unknown' };

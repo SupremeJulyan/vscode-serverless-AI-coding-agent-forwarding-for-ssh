@@ -1,4 +1,5 @@
 import { trackingRef } from './git-sync-state';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { RemoteGit } from './remote-git';
@@ -55,6 +56,26 @@ export interface PushTarget {
   objectFormat: 'sha1' | 'sha256';
   tracking?: string;
   trackingOid?: string;
+}
+
+export interface SuccessfulPushReceipt {
+  key: string;
+  oid: string;
+  previousOid?: string;
+  recordedAt: number;
+}
+
+/** Hash the destination so persisted receipts never contain credential-bearing Git URLs. */
+export function pushReceiptKey(target: Pick<PushTarget, 'url' | 'destination'>): string {
+  return createHash('sha256').update(target.url).update('\0').update(target.destination).digest('hex');
+}
+
+export function successfulPushReceipt(target: PushTarget): SuccessfulPushReceipt | undefined {
+  if (!target.tracking) return undefined;
+  return {
+    key: pushReceiptKey(target), oid: target.oid,
+    previousOid: target.trackingOid, recordedAt: Date.now()
+  };
 }
 
 /** 中转必须连网络地址：远端文件系统路径或自定义 helper 不能被本地 Git 当成目标。 */
@@ -200,4 +221,18 @@ export async function recordSuccessfulPush(git: RemoteGit, target: PushTarget): 
   if (!target.tracking) return;
   await git.run(['update-ref', target.tracking, target.oid,
     target.trackingOid ?? '0'.repeat(target.oid.length)]);
+}
+
+/**
+ * Carry a successful local relay push to another SAFS host that has the same
+ * commit checked out but still has the exact pre-push tracking ref. Matching
+ * the old ref makes this safe when that host has fetched newer upstream state.
+ */
+export async function applySuccessfulPushReceipt(
+  git: RemoteGit, target: PushTarget, receipt: SuccessfulPushReceipt | undefined
+): Promise<boolean> {
+  if (!receipt || !target.tracking || receipt.key !== pushReceiptKey(target)
+    || receipt.oid !== target.oid || receipt.previousOid !== target.trackingOid) return false;
+  await recordSuccessfulPush(git, target);
+  return true;
 }
