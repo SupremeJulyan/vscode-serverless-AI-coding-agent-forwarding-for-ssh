@@ -235,6 +235,12 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "safs.git.branch",
+        "category": "SAFS Git",
+        "title": "分支",
+        "icon": "$(git-branch)"
+      },
+      {
         "command": "safs.git.switchBranch",
         "category": "SAFS Git",
         "title": "切换分支",
@@ -412,14 +418,9 @@
           "group": "navigation@1"
         },
         {
-          "command": "safs.git.switchBranch",
+          "command": "safs.git.branch",
           "when": "view == safs.gitHistory",
           "group": "navigation@2"
-        },
-        {
-          "command": "safs.git.createBranch",
-          "when": "view == safs.gitHistory",
-          "group": "navigation@3"
         },
         {
           "command": "safs.git.fetch",
@@ -543,12 +544,7 @@
           "group": "navigation@0"
         },
         {
-          "command": "safs.git.switchBranch",
-          "when": "scmProvider == safs-git",
-          "group": "navigation@1"
-        },
-        {
-          "command": "safs.git.createBranch",
+          "command": "safs.git.branch",
           "when": "scmProvider == safs-git",
           "group": "navigation@2"
         },

@@ -86,6 +86,21 @@ export class RemoteGitScm implements vscode.Disposable {
     };
     command('refresh', async () => this.refresh(true));
     command('openChange', async (resource: Resource) => this.openChange(resource));
+    command('branch', async (source?: vscode.SourceControl | vscode.Uri) => {
+      const selected = await vscode.window.showQuickPick([
+        {
+          label: '$(git-branch) 切换分支',
+          description: '切换到已有的本地或远程跟踪分支',
+          command: 'safs.git.switchBranch'
+        },
+        {
+          label: '$(git-branch-create) 创建分支',
+          description: '基于当前提交创建并切换到新分支',
+          command: 'safs.git.createBranch'
+        }
+      ], { placeHolder: '选择要执行的分支操作' });
+      if (selected) await vscode.commands.executeCommand(selected.command, source);
+    });
     command('switchBranch', async (source?: vscode.SourceControl | vscode.Uri) => {
       const repository = await this.select(source);
       if (!repository) return;
@@ -275,7 +290,7 @@ export class RemoteGitScm implements vscode.Disposable {
     repository.revision++;
     repository.scm.count = changes.length;
     repository.scm.statusBarCommands = [
-      { command: 'safs.git.switchBranch', title: `$(git-branch) ${syncState.branch}`, tooltip: '切换远端 Git 分支', arguments: [repository.scm] },
+      { command: 'safs.git.branch', title: `$(git-branch) ${syncState.branch}`, tooltip: '切换或创建远端 Git 分支', arguments: [repository.scm] },
       { command: 'safs.git.fetch', title: syncStateLabel(syncState), tooltip: syncStateTooltip(syncState), arguments: [repository.scm] }
     ];
     if (changed) this.historyEmitter.fire();

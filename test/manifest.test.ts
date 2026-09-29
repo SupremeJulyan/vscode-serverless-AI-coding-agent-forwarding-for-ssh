@@ -227,8 +227,7 @@ test('the history view title bar offers the same Git actions', async () => {
   assert.deepEqual(titles, [
     { command: 'safs.git.refreshHistory', when: 'view == safs.gitHistory', group: 'navigation@0' },
     { command: 'safs.git.commit', when: 'view == safs.gitHistory', group: 'navigation@1' },
-    { command: 'safs.git.switchBranch', when: 'view == safs.gitHistory', group: 'navigation@2' },
-    { command: 'safs.git.createBranch', when: 'view == safs.gitHistory', group: 'navigation@3' },
+    { command: 'safs.git.branch', when: 'view == safs.gitHistory', group: 'navigation@2' },
     { command: 'safs.git.fetch', when: 'view == safs.gitHistory', group: 'remote' },
     { command: 'safs.git.pull', when: 'view == safs.gitHistory', group: 'remote' },
     { command: 'safs.git.push', when: 'view == safs.gitHistory', group: 'remote' }
@@ -243,6 +242,7 @@ test('git commands keep short titles and group under the SAFS Git category', asy
   // 面板按钮/菜单只显示 title，命令面板用 category 补前缀，所以标题里不再重复 "SAFS Git"。
   assert.deepEqual(git.map(item => [item.command, item.category, item.title]), [
     ['safs.git.refresh', 'SAFS Git', '刷新'],
+    ['safs.git.branch', 'SAFS Git', '分支'],
     ['safs.git.switchBranch', 'SAFS Git', '切换分支'],
     ['safs.git.createBranch', 'SAFS Git', '创建分支'],
     ['safs.git.stage', 'SAFS Git', '暂存'],

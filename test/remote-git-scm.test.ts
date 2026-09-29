@@ -87,7 +87,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     const a = sources[0];
     const b = sources[1];
     assert.match(a.statusBarCommands[1].title, /已提交待推送 ↑2.*待拉取 ↓3/);
-    assert.equal(a.statusBarCommands[0].command, 'safs.git.switchBranch');
+    assert.equal(a.statusBarCommands[0].command, 'safs.git.branch');
     const index = a.groups.find((group: any) => group.id === 'index');
     const working = a.groups.find((group: any) => group.id === 'working');
     assert.equal(index.resourceStates.length, 4);
@@ -114,6 +114,9 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     // 历史视图标题栏触发：没有 SourceControl 上下文，先选仓库（单选走 QuickPick）再问提交说明。
     await commands.get('safs.git.commit')!();
     assert.ok(executions.some(command => command.root === rootA.path && command.command.includes("'commit' '-m' 'view commit'")));
+    await commands.get('safs.git.branch')!(a);
+    assert.equal(opened.at(-1)?.[0], 'safs.git.switchBranch');
+    assert.equal(opened.at(-1)?.[1], a);
     const switchStart = executions.length;
     await commands.get('safs.git.switchBranch')!(a);
     assert.ok(executions.slice(switchStart).some(command =>
