@@ -99,3 +99,26 @@ test('failures and truncated output are rejected', async () => {
   await assert.rejects(new RemoteGit(async () => ({ exitCode: 128, stdout: '', stderr: 'SSH failed' })).status(), /SSH failed/);
   assert.match(gitCommand(['add', '--', "a'b"]), /--literal-pathspecs/);
 });
+
+test('unstage avoids a separate HEAD probe in an ordinary repository', async t => {
+  const { cwd } = await fixture(t);
+  await writeFile(path.join(cwd, 'tracked.txt'), 'initial\n');
+  await exec('git', ['add', 'tracked.txt'], { cwd });
+  await exec('git', ['commit', '-m', 'initial'], { cwd });
+  await writeFile(path.join(cwd, 'tracked.txt'), 'changed\n');
+  await exec('git', ['add', 'tracked.txt'], { cwd });
+  const commands: string[] = [];
+  const runner: GitRunner = async command => {
+    commands.push(command);
+    try {
+      const result = await exec('/bin/sh', ['-c', command], { cwd });
+      return { ...result, exitCode: 0 };
+    } catch (error) {
+      const result = error as { code: number; stdout: string; stderr: string };
+      return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr };
+    }
+  };
+  await new RemoteGit(runner).unstage([{ index: 'M', working: ' ', path: 'tracked.txt' }]);
+  assert.equal(commands.length, 1);
+  assert.match(commands[0], /'reset' 'HEAD'/);
+});

@@ -95,6 +95,14 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     assert.equal(index.resourceStates.length, 4);
     assert.equal(working.resourceStates.length, 1);
     assert.equal(a.groups.find((group: any) => group.id === 'conflicts').resourceStates.length, 1);
+    const automaticRefreshStart = executions.length;
+    await scm.refresh();
+    assert.ok(executions.slice(automaticRefreshStart).some(command => command.command.includes("'status'")));
+    assert.ok(executions.slice(automaticRefreshStart).every(command =>
+      !command.command.includes("'symbolic-ref'") && !command.command.includes("'rev-list'")));
+    const manualRefreshStart = executions.length;
+    await commands.get('safs.git.refresh')!();
+    assert.ok(executions.slice(manualRefreshStart).some(command => command.command.includes("'symbolic-ref'")));
     await commands.get('safs.git.openChange')!(working.resourceStates[0]);
     const diff = opened.at(-1)!;
     assert.equal(diff[0], 'vscode.diff');

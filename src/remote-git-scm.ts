@@ -47,7 +47,6 @@ export class RemoteGitScm implements vscode.Disposable {
   private discovering = false;
   private readonly failures = new Map<string, { message: string; retryAt: number }>();
   private disposed = false;
-  private readonly timer: ReturnType<typeof setInterval>;
 
   /** 供历史视图复用同一批仓库实例（同一个 RemoteGit，避免重复发现）。 */
   repositoriesInUse(): { uri: vscode.Uri; name: string; git: RemoteGit; syncState?: GitSyncState }[] {
@@ -220,13 +219,8 @@ export class RemoteGitScm implements vscode.Disposable {
       });
     });
     this.subscriptions.push(
-      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.refresh()),
-      vscode.workspace.onDidSaveTextDocument(document => {
-        if (document.uri.scheme === 'safs') void this.refresh();
-      }),
-      vscode.window.onDidChangeWindowState(state => { if (state.focused) void this.refresh(); })
+      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.refresh())
     );
-    this.timer = setInterval(() => { if (vscode.window.state.focused) void this.refresh(); }, 15000);
     void this.refresh();
   }
 
@@ -285,7 +279,10 @@ export class RemoteGitScm implements vscode.Disposable {
             this.repositories.set(key, repository);
             changed = true;
           }
-          await this.enqueue(repository, () => this.update(repository!));
+          // Existing repositories refresh their sync state only for an explicit
+          // user refresh. A newly discovered repository still performs a full
+          // update because it has no sync state yet.
+          await this.enqueue(repository, () => this.update(repository!, interactive));
           this.failures.delete(key);
         } catch (error) {
           const message = `${folder.name}: ${error instanceof Error ? error.message : String(error)}`;
@@ -364,7 +361,6 @@ export class RemoteGitScm implements vscode.Disposable {
   }
   dispose(): void {
     this.disposed = true;
-    clearInterval(this.timer);
     this.subscriptions.forEach(subscription => subscription.dispose());
     this.repositories.forEach(repository => this.close(repository));
     this.repositories.clear();

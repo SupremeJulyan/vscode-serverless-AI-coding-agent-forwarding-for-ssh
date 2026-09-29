@@ -65,11 +65,19 @@ export class RemoteGit {
   async unstage(changes: GitChange[]): Promise<void> {
     const paths = [...new Set(changes.flatMap(c => c.originalPath ? [c.path, c.originalPath] : [c.path]))];
     if (!paths.length) return;
-    let head: string | undefined;
-    try { head = await this.probe(['rev-parse', '--verify', '--quiet', 'HEAD']); }
-    catch { throw new Error('Cannot determine Git HEAD'); }
+    // Nearly every repository has HEAD. Try the normal operation immediately so
+    // cancelling staging costs one remote round trip instead of probing first.
+    try {
+      await this.run(['reset', 'HEAD', '--', ...paths]);
+      return;
+    } catch (resetError) {
+      let head: string | undefined;
+      try { head = await this.probe(['rev-parse', '--verify', '--quiet', 'HEAD']); }
+      catch { throw resetError; }
+      if (head) throw resetError;
+    }
     // Before the first commit there is no HEAD to restore from. Remove only index entries.
-    await this.run(head ? ['reset', 'HEAD', '--', ...paths] : ['rm', '--cached', '-f', '--', ...paths]);
+    await this.run(['rm', '--cached', '-f', '--', ...paths]);
   }
   async discard(changes: GitChange[]): Promise<void> {
     const tracked = new Set<string>();
