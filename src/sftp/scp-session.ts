@@ -1,0 +1,987 @@
+import * as path from 'node:path';
+import { Readable, Writable } from 'node:stream';
+import { Client } from 'ssh2';
+import { shellQuote } from '../shell-quote';
+import {
+  SftpDirectoryEntry, SftpFileStat, SftpFileType, SftpSession, SftpWriteOptions
+} from './session';
+import { assertSafeRemoteEntryName } from './uri';
+
+/**
+ * Exec/SCP-backed session used when the server has no SFTP subsystem
+ * (e.g. NSG gateways running old OpenSSH without sftp-server). This reuses the
+ * authenticated ssh2 connection and speaks the legacy SCP protocol plus plain
+ * shell commands over exec channels.
+ *
+ * Implements the same SftpSession interface as the SFTP client so the
+ * filesystem provider and MCP tools keep working unchanged.
+ */
+
+interface ExecResult {
+  code: number;
+  stdout: Buffer;
+  stderr: Buffer;
+}
+
+function abortError(): Error {
+  const error = new Error('SFTP operation was cancelled');
+  error.name = 'AbortError';
+  return error;
+}
+
+function errno(code: number, message: string): Error & { code: number } {
+  const error = new Error(message) as Error & { code: number };
+  error.code = code;
+  return error;
+}
+
+function missingPathDetail(stderr: string): string {
+  return /no such file or directory|not found/i.test(stderr)
+    ? stderr.trim()
+    : stderr.trim() || '远程命令执行失败';
+}
+
+/** Build a remote `cd` command while preserving the config contract that `.`
+ * means the SSH login directory. Some gateways start non-interactive exec
+ * channels in `/`, unlike their SFTP subsystem; bare `cd` consistently asks
+ * the login shell to use HOME. Accept `~` as the same explicit shorthand. */
+export function remoteDirectoryChangeCommand(remotePath: string): string {
+  const normalized = path.posix.normalize(remotePath).replace(/\/+$/, '');
+  if (normalized === '.' || remotePath === '~') return 'cd';
+  return `cd -- ${shellQuote(remotePath)}`;
+}
+
+/**
+ * Some NSG gateways inject a fixed MOTD banner at the start of every SSH
+ * channel, e.g.:
+ *   \r \r … 一×17\n \|用户类型:包时间用户\n \|核数:128\n
+ *   \|到期时间:2029/07/02\n 一×17\r\n
+ * It is pure text, so shell output still works, but it corrupts binary
+ * protocols (SFTP version packets, SCP headers) by prefixing garbage.
+ * Detect it by its leading "\r \r" signature and strip up to the box-bottom
+ * line (a 一 run followed by CRLF) before parsing the real payload.
+ */
+const motdSignature = Buffer.from([0x0d, 0x20, 0x0d, 0x20]);
+const motdTerminator = Buffer.from([0xe4, 0xb8, 0x80, 0x0d, 0x0a]); // 一 + CRLF
+
+/**
+ * Incremental variant for streaming channels: feeds chunks, strips the MOTD
+ * prefix once its terminator is observed, then forwards the payload.
+ */
+class MotdStripper {
+  private pending = Buffer.alloc(0);
+  private done = false;
+  /** MOTD 探测上限：超过该长度仍未见到终止符则视为无 MOTD，把缓冲内容作为载荷放行，
+   * 避免对不以 MOTD 开头的（异常）数据流无限累积导致 O(n²) 拷贝。 */
+  private static readonly maxProbeLength = 256 * 1024;
+
+  push(chunk: Buffer): Buffer[] {
+    if (this.done) return [chunk];
+    this.pending = Buffer.concat([this.pending, chunk]);
+    if (this.pending.length < 4) return [];
+    if (!this.pending.subarray(0, 4).equals(motdSignature)) {
+      this.done = true;
+      const out = this.pending;
+      this.pending = Buffer.alloc(0);
+      return [out];
+    }
+    const idx = this.pending.indexOf(motdTerminator);
+    if (idx === -1) {
+      if (this.pending.length >= MotdStripper.maxProbeLength) {
+        this.done = true;
+        const out = this.pending;
+        this.pending = Buffer.alloc(0);
+        return [out];
+      }
+      return [];
+    }
+    this.done = true;
+    const out = this.pending.subarray(idx + motdTerminator.length);
+    this.pending = Buffer.alloc(0);
+    return [out];
+  }
+}
+
+/** Map a remote command's stderr to an SFTP-like status code for the provider. */
+function failureCode(stderr: string): number {
+  if (/no such file|not found|does not exist/i.test(stderr)) return 2;
+  if (/permission denied|denied|not permitted/i.test(stderr)) return 3;
+  return 5;
+}
+
+function typeFromFindLetter(letter: string): SftpFileType {
+  switch (letter) {
+    case 'f': return 'file';
+    case 'd': return 'directory';
+    case 'l': return 'symbolic-link';
+    default: return 'unknown';
+  }
+}
+
+function typeFromStatMode(rawMode: string): SftpFileType {
+  const mode = parseInt(rawMode, 16);
+  if (!Number.isFinite(mode)) return 'unknown';
+  switch (mode & 0xf000) {
+    case 0x8000: return 'file';
+    case 0x4000: return 'directory';
+    case 0xa000: return 'symbolic-link';
+    default: return 'unknown';
+  }
+}
+
+/** Parse GNU/BusyBox `stat -c '%f|%s|%a|%Y'` output. `%f` is the raw
+ * hexadecimal mode, so unlike `%F` it is not translated by the remote
+ * locale (for example, `directory` becoming `目录`). */
+export function parsePortableStatLine(line: string): SftpFileStat | undefined {
+  const parts = line.trim().split('|');
+  if (parts.length < 4) return undefined;
+  const type = typeFromStatMode(parts[0]);
+  const size = Number(parts[1]);
+  const permissions = parseInt(parts[2], 8);
+  const mtime = Number(parts[3]) * 1000;
+  if (type === 'unknown' || !Number.isFinite(size) || !Number.isFinite(permissions)) {
+    return undefined;
+  }
+  const normalizedMtime = Number.isFinite(mtime) ? mtime : Date.now();
+  return { type, size, permissions, mtime: normalizedMtime, ctime: normalizedMtime };
+}
+
+const modeRe = /^([dls-])([rwxstST-]{9})(?:[+.@])?(?:\s|$)/;
+
+function parseLsLongLine(line: string): SftpFileStat | undefined {
+  // long-iso ls line:  -rw-r--r-- 1 user group 1234 2006-04-17 14:53 name
+  const trimmed = line.trim();
+  const modeMatch = modeRe.exec(trimmed);
+  if (!modeMatch) return undefined;
+  const afterMode = trimmed.slice(modeMatch[0].length).trimStart();
+  const fields = afterMode.split(/\s+/);
+  // fields: [links, owner, group, size, date, time, name...]
+  if (fields.length < 7) return undefined;
+  const size = Number(fields[3]);
+  const mtime = Date.parse(`${fields[4]} ${fields[5]}`);
+  let type: SftpFileType = 'file';
+  if (modeMatch[1] === 'd') type = 'directory';
+  else if (modeMatch[1] === 'l') type = 'symbolic-link';
+  let permissions = 0;
+  const modeString = modeMatch[2];
+  for (let i = 0; i < 9; i++) {
+    if (modeString[i] !== '-') permissions |= 1 << (8 - i);
+  }
+  return { type, size: Number.isFinite(size) ? size : 0, mtime, ctime: mtime, permissions };
+}
+
+function parseLsLongEntry(line: string): SftpDirectoryEntry | undefined {
+  const stat = parseLsLongLine(line);
+  if (!stat) return undefined;
+  const trimmed = line.trim();
+  const modeMatch = modeRe.exec(trimmed)!;
+  const afterMode = trimmed.slice(modeMatch[0].length).trimStart();
+  const fields = afterMode.split(/\s+/);
+  // fields: [links, owner, group, size, date, time, name...]
+  const name = fields.slice(6).join(' ');
+  if (!name) return undefined;
+  return { ...stat, name };
+}
+
+/** SCP 传输停滞看门狗：通道开起但长时间无数据/无进度视为挂起（网关卡死/半开），
+ * 超时后销毁通道并断开连接（连接池下次操作重连自愈），避免永久占用并发额度。
+ * 大文件传输期间远端不返回数据，写入侧以 stdin drain 事件续命，不会误杀。 */
+const scpStallTimeoutMs = 60_000;
+/** 写入走 exec+base64 的内容上限：小文件用可靠且快的 exec 通道（部分网关上
+ * `scp -t` 收不到确认会永久挂起，如 gsx），大文件仍走 legacy SCP（二进制更高效）。 */
+const scpBase64WriteMaxBytes = 2 * 1024 * 1024;
+
+export class ScpSession implements SftpSession {
+  readonly transport = 'scp' as const;
+  private alive = true;
+  // NSG 网关上每条 exec 都要新建 shell（含计费/MOTD 注入，秒级），realpath 是
+  // 每次操作前 resolve() 的最高频冗余调用。短 TTL 缓存规范路径：同一路径在窗口
+  // 期内复用，不再重复 readlink -f；readDirectory 还会顺带把子项（符号链接除外）
+  // 的规范路径一并缓存，资源管理器随后对子项的 stat 不再产生任何 exec。
+  private static readonly realpathCacheTtlMs = 60_000;
+  private readonly realpathCache = new Map<string, { path: string; at: number }>();
+
+  private cachedRealpath(remotePath: string): string | undefined {
+    const entry = this.realpathCache.get(remotePath);
+    if (!entry) return undefined;
+    if (Date.now() - entry.at > ScpSession.realpathCacheTtlMs) {
+      this.realpathCache.delete(remotePath);
+      return undefined;
+    }
+    return entry.path;
+  }
+
+  private rememberRealpath(input: string, resolved: string): void {
+    this.realpathCache.set(input, { path: resolved, at: Date.now() });
+  }
+  // The gateway (old OpenSSH/NSG) rejects excess concurrent channels on one
+  // connection with "(SSH) Channel open failure: open failed". Serialize
+  // channel-opening operations so VS Code's parallel explorer/stat/watch
+  // calls stay under the server's per-connection limit.
+  private static readonly maxConcurrentChannels = 5;
+  private channelPermits = ScpSession.maxConcurrentChannels;
+  private readonly channelWaiters: Array<() => void> = [];
+
+  constructor(
+    readonly hostName: string,
+    private readonly client: Client,
+    private readonly releaseRelay?: () => Promise<void>
+  ) {
+    const disconnected = () => {
+      this.alive = false;
+    };
+    this.client.on('close', disconnected);
+    this.client.on('end', disconnected);
+    this.client.on('error', () => {
+      this.alive = false;
+    });
+  }
+
+  isAlive(): boolean {
+    return this.alive;
+  }
+
+  private async acquireChannel(): Promise<void> {
+    while (this.channelPermits <= 0) {
+      await new Promise<void>((resolve) => this.channelWaiters.push(resolve));
+    }
+    this.channelPermits--;
+  }
+
+  private releaseChannel(): void {
+    this.channelPermits++;
+    this.channelWaiters.shift()?.();
+  }
+
+  private async exec(
+    command: string, stdinData?: Uint8Array, signal?: AbortSignal
+  ): Promise<ExecResult> {
+    await this.acquireChannel();
+    try {
+      return await this.execUnbounded(command, stdinData, signal);
+    } finally {
+      this.releaseChannel();
+    }
+  }
+
+  private async execUnbounded(
+    command: string, stdinData?: Uint8Array, signal?: AbortSignal
+  ): Promise<ExecResult> {
+    // Transient server-side channel refusal: retry once after a short pause.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.execOnce(command, stdinData, signal);
+      } catch (error) {
+        const retryable = /Channel open failure|channel open failed/i.test(
+          error instanceof Error ? error.message : String(error)
+        );
+        if (!retryable || attempt >= 1) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+  }
+
+  /** 单条 exec 的超时：NSG 网关偶发命令永久挂起（半开连接/网络挂载卡死）。
+   * 若无超时，挂起的 exec 会永久占用并发 channel 额度，5 条挂起后所有操作
+   * 永久排队（表现为“一直加载中”）。超时后销毁 channel 并断开连接，让连接池
+   * 在下次操作时重连自愈。 */
+  private static readonly execTimeoutMs = 60_000;
+
+  private execOnce(
+    command: string, stdinData?: Uint8Array, signal?: AbortSignal
+  ): Promise<ExecResult> {
+    return new Promise<ExecResult>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+      let settled = false;
+      let streamRef: { destroy(): void; close(): void } | undefined;
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', aborted);
+      };
+      const rejectOnce = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const resolveOnce = (result: ExecResult) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(result);
+      };
+      const aborted = () => rejectOnce(abortError());
+      const timer = setTimeout(() => {
+        // 挂起：销毁 channel 并断开连接，释放并发额度；连接池下次操作时重连。
+        try {
+          streamRef?.destroy();
+        } catch { /* ignore */ }
+        try {
+          streamRef?.close();
+        } catch { /* ignore */ }
+        this.client.end();
+        rejectOnce(new Error(
+          `远程命令执行超时（${ScpSession.execTimeoutMs}ms）：${command.slice(0, 160)}`
+        ));
+      }, ScpSession.execTimeoutMs);
+      timer.unref?.();
+      signal?.addEventListener('abort', aborted, { once: true });
+      this.client.exec(command, (error, stream) => {
+        if (error) {
+          rejectOnce(error);
+          return;
+        }
+        streamRef = stream;
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        const motdStripper = new MotdStripper();
+        stream.on('data', (chunk: Buffer) => {
+          for (const part of motdStripper.push(chunk)) stdout.push(part);
+        });
+        stream.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+        stream.once('close', (code: number | undefined) => {
+          resolveOnce({
+            code: code ?? -1,
+            stdout: Buffer.concat(stdout),
+            stderr: Buffer.concat(stderr)
+          });
+        });
+        if (stdinData && stdinData.length) stream.stdin.write(Buffer.from(stdinData));
+        stream.stdin.end();
+      });
+    });
+  }
+
+  async realpath(remotePath: string, signal?: AbortSignal): Promise<string> {
+    const cached = this.cachedRealpath(remotePath);
+    if (cached) return cached;
+    const loginDirectory = remoteDirectoryChangeCommand(remotePath) === 'cd';
+    if (loginDirectory) {
+      const homeResult = await this.exec('cd && pwd -P', undefined, signal);
+      if (homeResult.code === 0) {
+        const resolved = homeResult.stdout.toString().trim();
+        if (resolved) {
+          this.rememberRealpath(remotePath, resolved);
+          return resolved;
+        }
+      }
+      const stderr = homeResult.stderr.toString();
+      throw errno(
+        failureCode(stderr),
+        `无法确定 SSH 登录目录: ${missingPathDetail(stderr)}`
+      );
+    }
+    // readlink -f canonicalizes files AND directories; the provider resolves
+    // every path (including files) before reading/stat-ing it. Note: old
+    // coreutils readlink -f still succeeds when only the final component is
+    // missing — subsequent stat then reports ENOENT, which matches SFTP.
+    const result = await this.exec(
+      `readlink -f -- ${shellQuote(remotePath)}`, undefined, signal
+    );
+    if (result.code === 0) {
+      const resolved = result.stdout.toString().trim();
+      if (resolved) {
+        this.rememberRealpath(remotePath, resolved);
+        return resolved;
+      }
+    }
+    // Non-GNU servers (BSD/macOS/Solaris) lack `readlink -f`: fall back to
+    // `cd`+`pwd -P` for directories, then to a plain normalized path for
+    // files that exist.
+    const cdResult = await this.exec(
+      `${remoteDirectoryChangeCommand(remotePath)} && pwd -P`, undefined, signal
+    );
+    if (cdResult.code === 0) {
+      const resolved = cdResult.stdout.toString().trim();
+      if (resolved) {
+        this.rememberRealpath(remotePath, resolved);
+        return resolved;
+      }
+    }
+    const exists = await this.exec(
+      `test -e -- ${shellQuote(remotePath)}`, undefined, signal
+    );
+    if (exists.code === 0) {
+      const resolved = path.posix.normalize(remotePath);
+      this.rememberRealpath(remotePath, resolved);
+      return resolved;
+    }
+    const stderr = result.stderr.toString() || cdResult.stderr.toString();
+    throw errno(failureCode(stderr), `realpath 失败: ${missingPathDetail(stderr)}`);
+  }
+
+  async statResolved(
+    remotePath: string, signal?: AbortSignal
+  ): Promise<{ path: string; stat: SftpFileStat }> {
+    const cached = this.cachedRealpath(remotePath);
+    if (cached) {
+      return { path: cached, stat: await this.stat(cached, signal) };
+    }
+    // 挂载验证等场景：realpath + stat 压成一条 exec（cd 成功即目录，pwd -P 出规范
+    // 路径，stat 同路径）。非目录/缺失路径 cd 失败，走下方原有两步回退（报错语义
+    // 与 stat() 一致）。
+    const result = await this.exec(
+      `${remoteDirectoryChangeCommand(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && LC_ALL=C stat -c '%f|%s|%a|%Y' -- "$(pwd -P)"`,
+      undefined,
+      signal
+    );
+    if (result.code === 0) {
+      const lines = result.stdout.toString().split('\n');
+      const parent = lines[0]?.startsWith('P\t') ? lines[0].slice(2).trim() : undefined;
+      const statLine = lines.slice(1).find((line) => line.trim().length > 0);
+      if (parent && statLine) {
+        const stat = parsePortableStatLine(statLine);
+        if (stat) {
+          this.rememberRealpath(remotePath, parent);
+          return { path: parent, stat };
+        }
+      }
+    }
+    // 非目录/非 GNU stat/解析失败：退化为原有两步（realpath + stat）。
+    const path = await this.realpath(remotePath, signal);
+    return { path, stat: await this.stat(path, signal) };
+  }
+
+  async stat(remotePath: string, signal?: AbortSignal): Promise<SftpFileStat> {
+    const result = await this.exec(
+      `LC_ALL=C stat -c '%f|%s|%a|%Y' -- ${shellQuote(remotePath)}`, undefined, signal
+    );
+    if (result.code === 0) {
+      const parsed = parsePortableStatLine(result.stdout.toString());
+      if (parsed) return parsed;
+    }
+    // Fallback: ls -ld --time-style=long-iso
+    const ls = await this.exec(
+      `LC_ALL=C ls -ld --time-style=long-iso -- ${shellQuote(remotePath)}`, undefined, signal
+    );
+    if (ls.code !== 0) {
+      const stderr = ls.stderr.toString();
+      throw errno(failureCode(stderr), `stat 失败: ${missingPathDetail(stderr)}`);
+    }
+    const parsed = parseLsLongLine(ls.stdout.toString());
+    if (!parsed) throw new Error(`无法解析远程 stat 输出: ${ls.stdout.toString().trim()}`);
+    return parsed;
+  }
+
+  async readDirectory(
+    remotePath: string, signal?: AbortSignal
+  ): Promise<SftpDirectoryEntry[]> {
+    // 把 realpath + 列举压成一条 exec：cd 到目标目录后 pwd -P 输出规范路径
+    // （P 行），再 find/ls 列举当前目录（网关上每条 exec 秒级，命令数减半
+    // 收益显著）。空目录也能正确返回 []（旧实现会多跑一次 ls 回退）。
+    const result = await this.exec(
+      `${remoteDirectoryChangeCommand(remotePath)} && printf 'P\\t%s\\n' "$(pwd -P)" && { LC_ALL=C find . -maxdepth 1 -mindepth 1 -printf '%f|%y|%s|%m|%T@\\n' 2>/dev/null || { echo L; LC_ALL=C ls -la --time-style=long-iso -- .; }; }`,
+      undefined,
+      signal
+    );
+    if (result.code !== 0) {
+      const stderr = result.stderr.toString();
+      throw errno(failureCode(stderr), `readDirectory 失败: ${missingPathDetail(stderr)}`);
+    }
+    const lines = result.stdout.toString().split('\n');
+    const parent = lines[0]?.startsWith('P\t') ? lines[0].slice(2).trim() : undefined;
+    const entries: SftpDirectoryEntry[] = [];
+    let lsMode = false;
+    for (const line of lines.slice(1)) {
+      if (!line) continue;
+      if (line === 'L') {
+        lsMode = true;
+        continue;
+      }
+      if (lsMode) {
+        const parsed = parseLsLongEntry(line);
+        if (!parsed || parsed.name === '.' || parsed.name === '..') continue;
+        assertSafeRemoteEntryName(parsed.name);
+        entries.push(parsed);
+        continue;
+      }
+      const parts = line.split('|');
+      if (parts.length < 5) continue;
+      const mtime = Math.floor(parseFloat(parts[4]) * 1000);
+      const name = parts[0];
+      assertSafeRemoteEntryName(name);
+      entries.push({
+        name,
+        type: typeFromFindLetter(parts[1]),
+        size: Number(parts[2]),
+        permissions: parseInt(parts[3], 8),
+        mtime: Number.isFinite(mtime) ? mtime : Date.now(),
+        ctime: Number.isFinite(mtime) ? mtime : Date.now()
+      });
+    }
+    if (parent) {
+      // 缓存父目录规范路径；子项（符号链接除外，其真实路径需按需解析以防越界）
+      // 由父目录 + 条目名构成，同样规范，一并缓存，随后的 stat 不再产生 exec。
+      this.rememberRealpath(remotePath, parent);
+      for (const entry of entries) {
+        if (entry.type === 'symbolic-link') continue;
+        this.rememberRealpath(
+          path.posix.join(remotePath, entry.name),
+          path.posix.join(parent, entry.name)
+        );
+      }
+    }
+    return entries;
+  }
+
+  async readDirectoryResolved(
+    remotePath: string, signal?: AbortSignal
+  ): Promise<{ path: string; entries: SftpDirectoryEntry[] }> {
+    // readDirectory 的合并命令已返回并缓存父目录规范路径（P 行），直接复用；
+    // 防御：缓存缺失（异常路径）时补一次 realpath。
+    const entries = await this.readDirectory(remotePath, signal);
+    const cached = this.cachedRealpath(remotePath);
+    const path = cached ?? await this.realpath(remotePath, signal);
+    return { path, entries };
+  }
+
+  async readFile(remotePath: string, signal?: AbortSignal): Promise<Uint8Array> {
+    // exec + base64：与写入/列举同一条可靠通道（部分网关上 `scp -f` 进程启动与
+    // 协议往返很慢，实测编辑器打开文件卡数秒）；大下载走 readFileStream（scpRead
+    // 流式），base64 缺失时回退 legacy SCP。
+    const result = await this.exec(`base64 < ${shellQuote(remotePath)}`, undefined, signal);
+    if (result.code === 0) {
+      // 空文件：base64 输出为空 → 返回空 buffer（不视为失败）。
+      const encoded = result.stdout.toString('utf8').replace(/\s+/g, '');
+      return Buffer.from(encoded, 'base64');
+    }
+    const stderr = result.stderr.toString();
+    if (/command not found|base64:.*not found/i.test(stderr)) {
+      return this.scpRead(remotePath, signal);
+    }
+    throw new Error(`读取失败: ${missingPathDetail(stderr)}`);
+  }
+
+  // SCP 协议无法按范围读取：退化为整读后切片（仅 SFTP 子系统不可用的回退路径）。
+  async readFileRange(
+    remotePath: string, offset: number, length: number, signal?: AbortSignal
+  ): Promise<Uint8Array> {
+    return (await this.readFile(remotePath, signal)).subarray(offset, offset + length);
+  }
+
+  // SCP 协议无流式读取：整读后包装为可读流（仅 SFTP 子系统不可用的回退路径）。
+  // start 只做防御性校验：`scp -f` 不能从中间开始取，续传在这条通道上无法成立，
+  // 调用方必须先看 transport 再决定（见 resume-plan 的 canRange）。
+  async readFileStream(
+    remotePath: string, signal?: AbortSignal, start = 0
+  ): Promise<NodeJS.ReadableStream> {
+    if (start > 0) throw new Error('SCP 回退通道不支持按偏移读取，无法断点续传');
+    const data = await this.readFile(remotePath, signal);
+    return Readable.from([Buffer.from(data)]);
+  }
+
+  async writeFile(
+    remotePath: string,
+    content: Uint8Array,
+    options: SftpWriteOptions,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (options.create && !options.overwrite) {
+      if (await this.pathExists(remotePath, signal)) {
+        throw errno(4, `文件已存在: ${remotePath}`);
+      }
+    } else if (!options.create) {
+      if (!(await this.pathExists(remotePath, signal))) {
+        throw errno(2, `文件不存在: ${remotePath}`);
+      }
+    }
+    // 显式 mode（临时文件落盘）：直接使用，跳过存在性/权限探测（少一条 exec）；
+    // 否则覆盖写时探测原权限以保留。
+    let mode = 0o644;
+    if (options.mode !== undefined) {
+      mode = options.mode;
+    } else if (options.overwrite) {
+      try {
+        const existing = await this.stat(remotePath, signal);
+        if (existing.permissions !== undefined) mode = existing.permissions;
+      } catch {
+        // new file: default mode
+      }
+    }
+    // 小文件走 exec + base64（与列举/stat 同一条可靠通道——部分网关上 `scp -t`
+    // 收不到确认会永久挂起）；大文件走 legacy SCP（二进制更高效，带停滞看门狗）。
+    if (content.length <= scpBase64WriteMaxBytes) {
+      await this.writeViaExec(remotePath, content, mode, options.mode !== undefined, signal);
+    } else {
+      await this.scpWrite(
+        path.posix.dirname(remotePath),
+        path.posix.basename(remotePath),
+        Buffer.from(content),
+        mode,
+        signal
+      );
+    }
+  }
+
+  /** exec + base64 写入：内容经 base64 编码走 stdin，远端 `base64 -d` 落盘。
+   * 显式 mode 时用 `umask 0 && … && chmod` 保证最终权限（不受远端 umask 影响）；
+   * base64 不可用（极少数非 GNU 环境）时回退 legacy SCP。 */
+  private async writeViaExec(
+    remotePath: string,
+    content: Uint8Array,
+    mode: number,
+    explicitMode: boolean,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const command = explicitMode
+      ? `umask 0 && base64 -d > ${shellQuote(remotePath)} && chmod ${mode.toString(8)} -- ${shellQuote(remotePath)}`
+      : `base64 -d > ${shellQuote(remotePath)}`;
+    const result = await this.exec(command, Buffer.from(Buffer.from(content).toString('base64')), signal);
+    if (result.code !== 0) {
+      const stderr = result.stderr.toString();
+      if (/command not found|base64:.*not found/i.test(stderr)) {
+        await this.scpWrite(
+          path.posix.dirname(remotePath),
+          path.posix.basename(remotePath),
+          Buffer.from(content),
+          mode,
+          signal
+        );
+        return;
+      }
+      throw new Error(`写入失败: ${missingPathDetail(stderr)}`);
+    }
+  }
+
+  // SCP 协议无流式写入：收集分块，finish 时调 writeFile 整写（仅 SFTP 子系统
+  // 不可用的回退路径，内存代价与 writeFile 相同）。
+  writeFileStream(
+    remotePath: string,
+    options: SftpWriteOptions,
+    signal?: AbortSignal
+  ): Promise<NodeJS.WritableStream> {
+    // 显式拒绝而不是静默忽略 startOffset：忽略会让「续传」变成从 0 整写，
+    // 表面成功、实际把残片覆盖掉，是最糟的失败方式。
+    if ((options.startOffset ?? 0) > 0) {
+      return Promise.reject(new Error('SCP 回退通道不支持定位写，无法断点续传'));
+    }
+    const chunks: Buffer[] = [];
+    return Promise.resolve(new Writable({
+      write(chunk: Buffer, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+      final: (callback) => {
+        void this.writeFile(remotePath, Buffer.concat(chunks), options, signal)
+          .then(() => callback(), (error) => callback(error));
+      }
+    }));
+  }
+
+  async chmod(remotePath: string, mode: number, signal?: AbortSignal): Promise<void> {
+    const result = await this.exec(
+      `chmod ${mode.toString(8)} -- ${shellQuote(remotePath)}`, undefined, signal
+    );
+    if (result.code !== 0) {
+      throw new Error(`chmod 失败: ${missingPathDetail(result.stderr.toString())}`);
+    }
+  }
+
+  async createDirectory(remotePath: string, signal?: AbortSignal): Promise<void> {
+    const result = await this.exec(
+      `mkdir -p -- ${shellQuote(remotePath)}`, undefined, signal
+    );
+    if (result.code !== 0) {
+      throw new Error(`mkdir 失败: ${missingPathDetail(result.stderr.toString())}`);
+    }
+  }
+
+  async deleteFile(remotePath: string, signal?: AbortSignal): Promise<void> {
+    const result = await this.exec(
+      `rm -f -- ${shellQuote(remotePath)}`, undefined, signal
+    );
+    if (result.code !== 0) {
+      throw new Error(`rm 失败: ${missingPathDetail(result.stderr.toString())}`);
+    }
+  }
+
+  async deleteDirectory(remotePath: string, signal?: AbortSignal): Promise<void> {
+    const result = await this.exec(
+      `rmdir -- ${shellQuote(remotePath)}`, undefined, signal
+    );
+    if (result.code !== 0) {
+      throw new Error(`rmdir 失败: ${missingPathDetail(result.stderr.toString())}`);
+    }
+  }
+
+  async rename(
+    sourcePath: string,
+    targetPath: string,
+    overwrite: boolean,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (overwrite) {
+      // Remove the existing target first (SFTP semantics); a plain `mv -f`
+      // would move into a directory if the target happens to be one.
+      const exists = await this.pathExists(targetPath, signal);
+      if (exists) {
+        const targetStat = await this.stat(targetPath, signal);
+        const remove = targetStat.type === 'directory'
+          ? `rmdir -- ${shellQuote(targetPath)}`
+          : `rm -f -- ${shellQuote(targetPath)}`;
+        const removed = await this.exec(remove, undefined, signal);
+        if (removed.code !== 0 && !/no such file/i.test(removed.stderr.toString())) {
+          throw new Error(`无法替换目标文件: ${missingPathDetail(removed.stderr.toString())}`);
+        }
+      }
+    }
+    const result = await this.exec(
+      `mv -- ${shellQuote(sourcePath)} ${shellQuote(targetPath)}`, undefined, signal
+    );
+    if (result.code !== 0) {
+      throw new Error(`mv 失败: ${missingPathDetail(result.stderr.toString())}`);
+    }
+  }
+
+  async replaceFile(
+    sourcePath: string, targetPath: string, mode?: number, signal?: AbortSignal
+  ): Promise<void> {
+    // chmod（保留权限）+ mv -f 合并为一条 exec（调用方保证目标是文件或不存在，
+    // mv -f 直接覆盖文件；目录目标由调用方走 rename）。
+    const command = mode !== undefined
+      ? `chmod ${mode.toString(8)} -- ${shellQuote(sourcePath)} && mv -f -- ${shellQuote(sourcePath)} ${shellQuote(targetPath)}`
+      : `mv -f -- ${shellQuote(sourcePath)} ${shellQuote(targetPath)}`;
+    const result = await this.exec(command, undefined, signal);
+    if (result.code !== 0) {
+      throw new Error(`替换文件失败: ${missingPathDetail(result.stderr.toString())}`);
+    }
+  }
+
+  async close(): Promise<void> {
+    this.alive = false;
+    this.client.end();
+    await this.releaseRelay?.();
+  }
+
+  private async pathExists(remotePath: string, signal?: AbortSignal): Promise<boolean> {
+    try {
+      await this.stat(remotePath, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Legacy SCP download: `scp -f <path>`, parse the C<mode> <size> <name> header. */
+  private async scpRead(remotePath: string, signal?: AbortSignal): Promise<Uint8Array> {
+    await this.acquireChannel();
+    try {
+      return await this.scpReadUnbounded(remotePath, signal);
+    } finally {
+      this.releaseChannel();
+    }
+  }
+
+  private scpReadUnbounded(remotePath: string, signal?: AbortSignal): Promise<Uint8Array> {
+    return new Promise<Uint8Array>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+      let settled = false;
+      let streamRef: { destroy(): void; close(): void } | undefined;
+      let lastActivity = Date.now();
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastActivity > scpStallTimeoutMs) {
+          try {
+            streamRef?.destroy();
+          } catch { /* ignore */ }
+          try {
+            streamRef?.close();
+          } catch { /* ignore */ }
+          this.client.end();
+          fail(new Error(`SCP 读取超时（${scpStallTimeoutMs}ms 无数据）`));
+        }
+      }, 10_000);
+      watchdog.unref?.();
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(watchdog);
+        signal?.removeEventListener('abort', aborted);
+        reject(error);
+      };
+      const aborted = () => fail(abortError());
+      signal?.addEventListener('abort', aborted, { once: true });
+      this.client.exec(`scp -f -- ${shellQuote(remotePath)}`, (error, stream) => {
+        if (error) {
+          fail(error);
+          return;
+        }
+        streamRef = stream;
+        const stderrChunks: Buffer[] = [];
+        stream.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+        const fileChunks: Buffer[] = [];
+        let buffer = Buffer.alloc(0);
+        let state: 'header' | 'data' | 'term' = 'header';
+        let expected = 0;
+        const motdStripper = new MotdStripper();
+        stream.on('data', (chunk: Buffer) => {
+          lastActivity = Date.now();
+          for (const part of motdStripper.push(chunk)) {
+            buffer = Buffer.concat([buffer, part]);
+          }
+          if (state === 'header') {
+            const newline = buffer.indexOf(0x0a);
+            if (newline === -1) return;
+            const line = buffer.subarray(0, newline).toString('latin1');
+            buffer = buffer.subarray(newline + 1);
+            const match = /^C(\d{4}) (\d+) (.*)$/.exec(line);
+            if (!match) {
+              fail(new Error(`SCP 响应无效: ${line.slice(0, 200)}`));
+              return;
+            }
+            expected = Number(match[2]);
+            state = 'data';
+            // Legacy SCP protocol: the sender waits for an OK byte after the
+            // C header before streaming the file data.
+            stream.stdin.write(Buffer.from([0]));
+          }
+          if (state === 'data') {
+            if (buffer.length >= expected) {
+              fileChunks.push(buffer.subarray(0, expected));
+              buffer = buffer.subarray(expected);
+              state = 'term';
+            } else {
+              fileChunks.push(buffer);
+              buffer = Buffer.alloc(0);
+            }
+          }
+          if (state === 'term') {
+            if (buffer.length >= 1) {
+              if (buffer[0] !== 0) {
+                fail(new Error('SCP 文件传输结束符无效'));
+                return;
+              }
+              stream.stdin.write(Buffer.from([0]));
+              stream.stdin.end();
+              if (!settled) {
+                settled = true;
+                clearInterval(watchdog);
+                signal?.removeEventListener('abort', aborted);
+                resolve(Buffer.concat(fileChunks));
+              }
+            }
+          }
+        });
+        stream.once('close', () => {
+          if (!settled) {
+            clearInterval(watchdog);
+            const detail = Buffer.concat(stderrChunks).toString().trim();
+            fail(new Error(detail ? `SCP 读取失败: ${detail}` : 'SCP 读取失败：连接提前关闭'));
+          }
+        });
+        // Receiver asks the sender to start with an OK byte.
+        stream.stdin.write(Buffer.from([0]));
+      });
+    });
+  }
+
+  /** Legacy SCP upload: `scp -t <dir>`, send `C<mode> <size> <name>` + data. */
+  private async scpWrite(
+    targetDir: string, baseName: string, content: Buffer, mode: number, signal?: AbortSignal
+  ): Promise<void> {
+    await this.acquireChannel();
+    try {
+      return await this.scpWriteUnbounded(targetDir, baseName, content, mode, signal);
+    } finally {
+      this.releaseChannel();
+    }
+  }
+
+  private scpWriteUnbounded(
+    targetDir: string, baseName: string, content: Buffer, mode: number, signal?: AbortSignal
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+      let settled = false;
+      let streamRef: { destroy(): void; close(): void } | undefined;
+      let lastActivity = Date.now();
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastActivity > scpStallTimeoutMs) {
+          try {
+            streamRef?.destroy();
+          } catch { /* ignore */ }
+          try {
+            streamRef?.close();
+          } catch { /* ignore */ }
+          this.client.end();
+          fail(new Error(`SCP 写入超时（${scpStallTimeoutMs}ms 无进度）`));
+        }
+      }, 10_000);
+      watchdog.unref?.();
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(watchdog);
+        signal?.removeEventListener('abort', aborted);
+        reject(error);
+      };
+      const aborted = () => fail(abortError());
+      signal?.addEventListener('abort', aborted, { once: true });
+      this.client.exec(`scp -t -- ${shellQuote(targetDir)}`, (error, stream) => {
+        if (error) {
+          fail(error);
+          return;
+        }
+        streamRef = stream;
+        const stderrChunks: Buffer[] = [];
+        stream.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+        let buffer = Buffer.alloc(0);
+        let acknowledged = false;
+        const motdStripper = new MotdStripper();
+        // 大文件落盘期间远端不返回数据：以 stdin drain（本地发送进度）续命。
+        stream.stdin.on('drain', () => {
+          lastActivity = Date.now();
+        });
+        stream.on('data', (chunk: Buffer) => {
+          lastActivity = Date.now();
+          for (const part of motdStripper.push(chunk)) {
+            buffer = Buffer.concat([buffer, part]);
+          }
+          if (!acknowledged && buffer.length >= 1) {
+            if (buffer[0] !== 0) {
+              const detail = Buffer.concat(stderrChunks).toString().trim();
+              fail(new Error(detail ? `SCP 目标未就绪: ${detail}` : 'SCP 目标未就绪'));
+              return;
+            }
+            buffer = buffer.subarray(1);
+            acknowledged = true;
+            const modeString = mode.toString(8).padStart(4, '0');
+            const header = `C${modeString} ${content.length} ${baseName}\n`;
+            const payload = Buffer.concat([
+              Buffer.from(header, 'latin1'), content, Buffer.from([0])
+            ]);
+            stream.stdin.write(payload);
+            stream.stdin.end();
+          }
+          if (acknowledged && buffer.length >= 1) {
+            if (buffer[0] !== 0) {
+              fail(new Error('SCP 写入确认失败'));
+              return;
+            }
+            if (!settled) {
+              settled = true;
+              clearInterval(watchdog);
+              signal?.removeEventListener('abort', aborted);
+              resolve();
+            }
+          }
+        });
+        stream.once('close', () => {
+          if (!settled) {
+            clearInterval(watchdog);
+            const detail = Buffer.concat(stderrChunks).toString().trim();
+            fail(new Error(detail ? `SCP 写入失败: ${detail}` : 'SCP 写入失败：连接提前关闭'));
+          }
+        });
+      });
+    });
+  }
+}

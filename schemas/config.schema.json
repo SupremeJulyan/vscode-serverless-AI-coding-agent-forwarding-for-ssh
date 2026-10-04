@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SAFS Configuration",
+  "description": "SSH hosts and remote folders used by SAFS.",
+  "type": "object",
+  "required": ["hosts"],
+  "properties": {
+    "encrypt_passwords": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否由配套 bridge 加密保存密码，建议启用。"
+    },
+    "hosts": {
+      "type": "array",
+      "description": "可连接的 SSH 主机。",
+      "items": { "$ref": "#/definitions/host" },
+      "defaultSnippets": [
+        {
+          "label": "添加 SSH 主机",
+          "body": [{
+            "name": "${1:10.0.0.2(alice)}",
+            "ip": "${2:10.0.0.2}",
+            "user": "${3:alice}",
+            "port": 22,
+            "vpn": true,
+            "private_key_path": "${4:~/.ssh/id_ed25519}"
+          }]
+        }
+      ]
+    },
+    "mounts": {
+      "type": "array",
+      "deprecated": true,
+      "description": "已废弃：由 Add SSH Config 自动生成，无需手动维护。新配置文件中无需包含此字段。",
+      "items": { "$ref": "#/definitions/mount" }
+    },
+    "host_aliases": {
+      "type": "object",
+      "description": "远程目录视图中按 IP 分组节点的显示名称。",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "host": {
+      "type": "object",
+      "required": ["ip"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "主机内部名称（也是挂载名与 safs:// 的 authority）；留空会用 IP。SAFS 启动时按「别名(账号)」自动生成/迁移，手填的名字会被改写。" },
+        "ip": { "type": "string", "minLength": 1, "description": "服务器 IP 地址或域名。" },
+        "user": { "type": "string", "description": "SSH 登录用户名；可先留空，稍后从 SAFS 分层视图补充。" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 22, "description": "SSH 端口。" },
+        "vpn": { "type": "boolean", "default": false, "description": "是否通过 VPN 可见的网络连接。" },
+        "private_key_path": { "type": "string", "description": "SSH 私钥路径，例如 ~/.ssh/id_ed25519。" },
+        "password": { "type": "string", "description": "SSH 密码；使用私钥时无需填写，避免提交到版本库。" }
+      },
+      "additionalProperties": false
+    },
+    "mount": {
+      "type": "object",
+      "required": ["name", "host", "remote_path"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "挂载名；通常由 hosts 派生（保存时会省略 mounts 数组）。" },
+        "host": { "type": "string", "minLength": 1, "description": "对应 hosts 中的 name。" },
+        "remote_path": { "type": "string", "minLength": 1, "default": ".", "description": "SFTP 远程目录；`.` 表示 SSH 登录目录。" },
+        "local_path": {
+          "type": "string",
+          "deprecated": true,
+          "description": "旧版 SSHFS 本地路径；SFTP 版本会忽略此字段。"
+        },
+        "local_paths": {
+          "type": "object",
+          "deprecated": true,
+          "description": "旧版分平台 SSHFS 路径；SFTP 版本会忽略此字段。"
+        },
+        "remote_terminal": {
+          "type": "string",
+          "enum": ["open"],
+          "enumDescriptions": ["打开目录后连接终端。"],
+          "default": "open",
+          "description": "远程终端的打开方式。"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

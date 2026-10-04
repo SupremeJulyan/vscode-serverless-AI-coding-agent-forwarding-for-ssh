@@ -1,0 +1,17 @@
+.vscode/**
+src/**
+test/**
+resources/agent-mcp/**
+tsconfig.json
+esbuild.js
+node_modules/**
+bin/**
+release-assets/**
+*.vsix
+*.png
+*.gif
+images/safs-interface.png
+!images/icon.png
+build/**
+native-cli/**
+scripts/*.test.js

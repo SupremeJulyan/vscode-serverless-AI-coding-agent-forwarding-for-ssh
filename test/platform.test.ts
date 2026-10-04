@@ -1,0 +1,232 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, readFileSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import test from 'node:test';
+import { HostConfig } from '../src/config';
+import { createPlatformAdapter, detectPlatform } from '../src/platform';
+
+// Stub WSL bundle path so platform.ts resolves ssh-bridge without a VS Code
+// extension context. Uses dynamic import to avoid compile-time vscode dep.
+let bundlePath: string;
+test.before(async () => {
+  const { setWslBundlePath } = await import('../src/wsl-bridge');
+  bundlePath = mkdtempSync(path.join(os.tmpdir(), 'serverless-test-wsl-'));
+  setWslBundlePath(path.join(bundlePath, 'resources', 'wsl'));
+});
+
+const host: HostConfig = {
+  name: 'dev',
+  ip: '10.0.0.2',
+  user: 'alice',
+  port: 2222,
+  private_key_path: '~/.ssh/id_ed25519'
+};
+
+test('detects WSL separately from native Linux', () => {
+  assert.equal(detectPlatform('linux', '6.1-microsoft-standard-WSL2'), 'wsl');
+  assert.equal(detectPlatform('linux', '6.8.0-generic'), 'linux');
+});
+
+test('native SSH opens a login shell in the remote SFTP directory', () => {
+  const plan = createPlatformAdapter('linux').terminal(host, "/srv/O'Brien", {
+    reuseSshConnection: true
+  });
+  assert.equal(plan.command, 'ssh');
+  assert.equal(plan.cwd, undefined);
+  assert.equal(plan.args.some((argument) => argument.endsWith('/.ssh/id_ed25519')), true);
+  assert.equal(plan.args.includes('ControlMaster=auto'), true);
+  assert.match(plan.args.at(-1) ?? '', /cd --/);
+  assert.match(plan.args.at(-1) ?? '', /O'"'"'Brien/);
+});
+
+test('native remote execution supports OpenSSH connection reuse', () => {
+  const plan = createPlatformAdapter('macos').exec(host, '/srv/project', 'npm test', {
+    reuseSshConnection: true
+  });
+  assert.equal(plan.args.includes('ControlMaster=auto'), true);
+  assert.match(plan.args.at(-1) ?? '', /npm test/);
+});
+
+test('remote execution prints and tracks an output marker before the requested command', () => {
+  const marker = '__SAFS_COMMAND_OUTPUT_test__';
+  for (const kind of ['linux', 'macos', 'windows', 'wsl'] as const) {
+    const plan = createPlatformAdapter(kind).exec(host, '/srv/project', 'printf result', {
+      outputMarker: marker
+    });
+    assert.equal(plan.stdoutMarker, marker);
+    assert.match(plan.args.at(-1) ?? '', /__SAFS_COMMAND_OUTPUT_test__/);
+    assert.match(plan.args.at(-1) ?? '', /printf result/);
+  }
+});
+
+test('native SSH pins the probed destination and known_hosts identity', () => {
+  const plan = createPlatformAdapter('linux').exec(host, '/srv/project', 'pwd');
+  assert.ok(plan.args.includes(`HostName=${host.ip}`));
+  assert.ok(plan.args.includes('HostKeyAlias=[10.0.0.2]:2222'));
+  assert.ok(plan.args.includes('CanonicalizeHostname=no'));
+  assert.ok(plan.args.includes('CheckHostIP=no'));
+
+  const ipv6 = createPlatformAdapter('linux').terminal({
+    ...host, ip: '2001:db8::1', port: 22
+  });
+  assert.ok(ipv6.args.includes('HostName=2001:db8::1'));
+  assert.ok(ipv6.args.includes('HostKeyAlias=2001:db8::1'));
+});
+
+test('WSL uses bundled ssh-bridge for terminals and command execution', () => {
+  const adapter = createPlatformAdapter('wsl');
+  const terminal = adapter.terminal(host, '/srv/project');
+  const execution = adapter.exec(host, '/srv/project', 'git status');
+  assert.equal(terminal.command, path.join(bundlePath, 'resources', 'wsl', 'ssh-bridge'));
+  assert.equal(terminal.cwd, undefined);
+  assert.equal(execution.command, path.join(bundlePath, 'resources', 'wsl', 'ssh-bridge'));
+  assert.equal(terminal.args.includes('--tty'), true);
+  assert.equal(terminal.env?.WSL_VPN_SSH_CONNECTION_REUSE, '1');
+  assert.match(execution.args.at(-1) ?? '', /git status/);
+});
+
+test('WSL bridge pins direct and relayed SSH identities', () => {
+  const source = readFileSync(
+    path.resolve(__dirname, '..', 'resources', 'wsl', 'ssh-bridge'), 'utf8'
+  );
+  assert.match(source, /-o "HostName=\$target_host"/);
+  assert.match(source, /-o HostName=127\.0\.0\.1/);
+  assert.match(source, /-o "HostKeyAlias=\$host_key_alias"/);
+  assert.match(source, /-o CanonicalizeHostname=no/);
+  assert.match(source, /-o CheckHostIP=no/);
+});
+
+test('WSL enables connection reuse for terminals and background commands', () => {
+  const adapter = createPlatformAdapter('wsl');
+  const terminal = adapter.terminal(host, '/srv/project', { reuseSshConnection: true });
+  const execution = adapter.exec(host, '/srv/project', 'pwd', { reuseSshConnection: true });
+  assert.equal(terminal.env?.WSL_VPN_SSH_CONNECTION_REUSE, '1');
+  assert.equal(execution.env?.WSL_VPN_SSH_CONNECTION_REUSE, '1');
+});
+
+test('connection reuse can be disabled for native and WSL terminals', () => {
+  const native = createPlatformAdapter('windows').terminal(host, '/srv/project', {
+    reuseSshConnection: false
+  });
+  const wsl = createPlatformAdapter('wsl').terminal(host, '/srv/project', {
+    reuseSshConnection: false
+  });
+  assert.equal(native.args.includes('ControlMaster=auto'), false);
+  assert.equal(wsl.env?.WSL_VPN_SSH_CONNECTION_REUSE, '0');
+});
+
+test('WSL passes the selected config path to terminal and command bridges', () => {
+  const adapter = createPlatformAdapter('wsl');
+  const options = { bridgeConfigPath: '/home/alice/.safs/config.json' };
+  assert.equal(
+    adapter.terminal(host, '/srv/project', options).env?.WSL_VPN_SSH_CONFIG,
+    options.bridgeConfigPath
+  );
+  assert.equal(
+    adapter.exec(host, '/srv/project', 'pwd', options).env?.WSL_VPN_SSH_CONFIG,
+    options.bridgeConfigPath
+  );
+});
+
+test('WSL resolves the VPN relay pool helper from the extension bundle', async () => {
+  const { vpnRelayPoolPath } = await import('../src/wsl-bridge');
+  assert.equal(
+    vpnRelayPoolPath(),
+    path.join(bundlePath, 'resources', 'wsl', 'vpn-relay-pool.sh')
+  );
+});
+
+test('WSL passes the master password to ssh-bridge terminal environment only', () => {
+  const plan = createPlatformAdapter('wsl').terminal(host, '/srv/project', {
+    bridgeMasterPassword: 'master secret'
+  });
+  assert.equal(plan.env?.WSL_VPN_MASTER_PASSWORD, 'master secret');
+  assert.equal(plan.args.includes('master secret'), false);
+});
+
+test('WSL never passes the decrypted SSH password through the bridge environment', () => {
+  const plan = createPlatformAdapter('wsl').terminal(host, '/srv/project');
+  assert.equal(plan.env?.SSH_BRIDGE_PASSWORD, undefined);
+});
+
+test('host key policy maps to StrictHostKeyChecking for native and WSL paths', () => {
+  const native = createPlatformAdapter('linux').exec(host, '/srv/project', 'pwd', {
+    hostKeyPolicy: 'reject'
+  });
+  assert.ok(native.args.includes('StrictHostKeyChecking=yes'));
+  assert.ok(
+    createPlatformAdapter('linux').exec(host, '/srv/project', 'pwd', {
+      hostKeyPolicy: 'accept'
+    }).args.includes('StrictHostKeyChecking=no')
+  );
+  assert.ok(
+    createPlatformAdapter('linux').exec(host, '/srv/project', 'pwd', {
+      hostKeyPolicy: 'prompt'
+    }).args.includes('StrictHostKeyChecking=yes')
+  );
+  assert.equal(
+    createPlatformAdapter('wsl').terminal(host, '/srv/project', {
+      hostKeyPolicy: 'reject'
+    }).env?.WSL_VPN_STRICT_HOST_KEY,
+    'yes'
+  );
+  assert.equal(
+    createPlatformAdapter('wsl').terminal(host, '/srv/project', {
+      hostKeyPolicy: 'accept'
+    }).env?.WSL_VPN_STRICT_HOST_KEY,
+    'no'
+  );
+  assert.equal(
+    createPlatformAdapter('wsl').terminal(host, '/srv/project', {
+      hostKeyPolicy: 'prompt'
+    }).env?.WSL_VPN_STRICT_HOST_KEY,
+    'yes'
+  );
+});
+
+test('accept points known_hosts at the null device; prompt uses the extension file with strict checking', () => {
+  // accept: 完全静默——no + 空设备，每次连接都视为新主机（不触发密钥变化分支），
+  // LogLevel=ERROR 压掉 “Permanently added …” 噪音（真实错误仍显示）。
+  const accept = createPlatformAdapter('linux').exec(host, '/srv/project', 'pwd', {
+    hostKeyPolicy: 'accept'
+  });
+  const windows = createPlatformAdapter('windows').terminal(host, '/srv/project', {
+    hostKeyPolicy: 'accept'
+  });
+  assert.ok(accept.args.includes('StrictHostKeyChecking=no'));
+  assert.ok(accept.args.includes('UserKnownHostsFile=/dev/null'));
+  assert.ok(accept.args.includes('GlobalKnownHostsFile=/dev/null'));
+  assert.ok(accept.args.includes('LogLevel=ERROR'));
+  assert.ok(windows.args.includes('UserKnownHostsFile=NUL'));
+  assert.ok(windows.args.includes('GlobalKnownHostsFile=NUL'));
+
+  // prompt: 扩展独立 known_hosts 文件 + OpenSSH 原生校验兜底。
+  const knownHosts = '/home/alice/.safs/known_hosts';
+  const prompt = createPlatformAdapter('macos').terminal(host, '/srv/project', {
+    hostKeyPolicy: 'prompt',
+    userKnownHostsFile: knownHosts
+  });
+  assert.ok(prompt.args.includes('StrictHostKeyChecking=yes'));
+  assert.ok(prompt.args.includes(`UserKnownHostsFile=${knownHosts}`));
+  assert.ok(prompt.args.includes('GlobalKnownHostsFile=/dev/null'));
+  assert.equal(prompt.args.includes('LogLevel=ERROR'), false);
+  // WSL：通过环境变量传递独立文件。
+  const wsl = createPlatformAdapter('wsl').terminal(host, '/srv/project', {
+    hostKeyPolicy: 'prompt',
+    userKnownHostsFile: knownHosts
+  });
+  assert.equal(wsl.env?.WSL_VPN_KNOWN_HOSTS_FILE, knownHosts);
+
+  // reject: 严格校验，保留用户真实的 known_hosts 与默认日志。
+  const reject = createPlatformAdapter('linux').exec(host, '/srv/project', 'pwd', {
+    hostKeyPolicy: 'reject'
+  });
+  assert.equal(
+    reject.args.some((argument) => argument.startsWith('UserKnownHostsFile=')), false
+  );
+  assert.equal(
+    reject.args.some((argument) => argument.startsWith('GlobalKnownHostsFile=')), false
+  );
+  assert.equal(reject.args.includes('LogLevel=ERROR'), false);
+});

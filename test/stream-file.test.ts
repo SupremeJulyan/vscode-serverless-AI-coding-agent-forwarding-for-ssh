@@ -1,0 +1,152 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import * as path from 'node:path';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import * as os from 'node:os';
+import { PassThrough, Readable } from 'node:stream';
+import { pipeStreams, writeStreamToFile } from '../src/stream-file';
+
+test('streams a source into a file and reports deltas that sum to the total', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'out.bin');
+  const chunks = [
+    Buffer.alloc(3 * 1024 * 1024, 0x61),
+    Buffer.alloc(2 * 1024 * 1024, 0x62)
+  ];
+  const deltas: number[] = [];
+  await writeStreamToFile(Readable.from(chunks), target, {
+    onDelta: (delta) => deltas.push(delta)
+  });
+  const content = await readFile(target);
+  assert.equal(content.length, 5 * 1024 * 1024);
+  assert.equal(content[0], 0x61);
+  assert.equal(content[3 * 1024 * 1024], 0x62);
+  assert.equal(deltas.reduce((sum, delta) => sum + delta, 0), 5 * 1024 * 1024);
+});
+
+test('abort rejects and removes the partial file', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'partial.bin');
+  const controller = new AbortController();
+  const source = new Readable({
+    read() {
+      this.push(Buffer.alloc(1024 * 1024, 1));
+      setTimeout(() => {
+        if (this.destroyed) return;
+        this.push(Buffer.alloc(1024 * 1024, 2));
+        this.push(null);
+      }, 50);
+    }
+  });
+  const promise = writeStreamToFile(source, target, { signal: controller.signal });
+  setTimeout(() => controller.abort(), 10);
+  await assert.rejects(promise, /传输已取消/);
+  await assert.rejects(stat(target), { code: 'ENOENT' });
+});
+
+test('aborting while the write stream is still opening leaves no zero-byte file', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'early.bin');
+  const controller = new AbortController();
+  const source = Readable.from((async function* chunks() {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    yield Buffer.alloc(1024, 1);
+  })());
+  const promise = writeStreamToFile(source, target, { signal: controller.signal });
+  // 立刻取消：此刻 createWriteStream 的异步 open 还在飞行中，如果删除不等它落盘，
+  // 文件会在删除之后才被建出来，留下一个 0 字节半成品。
+  controller.abort();
+  await assert.rejects(promise, /传输已取消/);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await assert.rejects(stat(target), { code: 'ENOENT' });
+});
+
+test('creates parent directories before writing', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'nested', 'deep', 'file.txt');
+  await writeStreamToFile(Readable.from([Buffer.from('hello')]), target);
+  assert.equal(await readFile(target, 'utf8'), 'hello');
+});
+
+test('resuming appends to the partial file instead of truncating it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'resume.bin');
+  await writeFile(target, 'head-');
+  await writeStreamToFile(Readable.from([Buffer.from('tail')]), target, {
+    resume: { offset: 5 }
+  });
+  assert.equal(await readFile(target, 'utf8'), 'head-tail');
+});
+
+test('aborting a resumed write keeps the partial file for the next attempt', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));
+  const target = path.join(directory, 'resume-abort.bin');
+  await writeFile(target, 'kept');
+  const controller = new AbortController();
+  const source = new Readable({
+    read() {
+      this.push(Buffer.alloc(1024, 1));
+      setTimeout(() => {
+        if (this.destroyed) return;
+        this.push(Buffer.alloc(1024, 2));
+        this.push(null);
+      }, 50);
+    }
+  });
+  const promise = writeStreamToFile(source, target, {
+    signal: controller.signal, resume: { offset: 4 }
+  });
+  setTimeout(() => controller.abort(), 10);
+  await assert.rejects(promise, /传输已取消/);
+  // 与全量失败相反：续传失败必须保留残片，它就是下一次的起点。
+  assert.equal((await stat(target)).size >= 4, true);
+});
+
+test('pipeStreams moves data between streams with delta reports', async () => {
+  const chunks = [
+    Buffer.alloc(3 * 1024 * 1024, 1),
+    Buffer.alloc(2 * 1024 * 1024, 2)
+  ];
+  const target = new PassThrough();
+  const received: Buffer[] = [];
+  target.on('data', (chunk: Buffer) => received.push(chunk));
+  const deltas: number[] = [];
+  await pipeStreams(Readable.from(chunks), target, {
+    onDelta: (delta) => deltas.push(delta)
+  });
+  const total = Buffer.concat(received);
+  assert.equal(total.length, 5 * 1024 * 1024);
+  assert.equal(total[0], 1);
+  assert.equal(total[3 * 1024 * 1024], 2);
+  assert.equal(deltas.reduce((sum, delta) => sum + delta, 0), 5 * 1024 * 1024);
+});
+
+test('pipeStreams abort destroys both ends and rejects', async () => {
+  const controller = new AbortController();
+  const target = new PassThrough();
+  const source = new Readable({
+    read() {
+      this.push(Buffer.alloc(1024 * 1024, 1));
+      setTimeout(() => {
+        if (this.destroyed) return;
+        this.push(Buffer.alloc(1024 * 1024, 2));
+        this.push(null);
+      }, 50);
+    }
+  });
+  const promise = pipeStreams(source, target, { signal: controller.signal });
+  setTimeout(() => controller.abort(), 10);
+  await assert.rejects(promise, /传输已取消/);
+  assert.equal(source.destroyed, true);
+  assert.equal(target.destroyed, true);
+});
+
+test('small transfers still report deltas (first emit + finish flush)', async () => {
+  const deltas: number[] = [];
+  const target = new PassThrough();
+  target.resume();
+  await pipeStreams(Readable.from([Buffer.from('tiny')]), target, {
+    onDelta: (delta) => deltas.push(delta)
+  });
+  assert.equal(deltas.reduce((sum, delta) => sum + delta, 0), 4);
+});

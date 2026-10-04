@@ -1,0 +1,990 @@
+{
+  "name": "safs-serverless-agent-forwarding",
+  "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
+  "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
+  "icon": "images/icon.png",
+  "version": "2.0.3",
+  "publisher": "julyan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes.git"
+  },
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ssh",
+    "sftp",
+    "remote",
+    "agent",
+    "mcp",
+    "wsl",
+    "serverless"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "SSH commands and remote file writes require a trusted workspace."
+    }
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onFileSystem:safs",
+    "onStartupFinished",
+    "onView:safs.mounts",
+    "onView:safs.agentActivity",
+    "onCommand:safs.openFolder",
+    "onCommand:safs.switchRemoteDirectory",
+    "onCommand:safs.openTerminal",
+    "onCommand:safs.close",
+    "onCommand:safs.status",
+    "onCommand:safs.openConfig",
+    "onCommand:safs.addRemoteDirectory",
+    "onCommand:safs.cloneGitRepository",
+    "onCommand:safs.addSshConfig",
+    "onCommand:safs.addHostCredentials",
+    "onCommand:safs.renameHost",
+    "onCommand:safs.copyStreamableHttpUrl",
+    "onCommand:safs.installCli",
+    "onCommand:safs.installAgentForwarding",
+    "onCommand:safs.uninstallAgentForwarding",
+    "onCommand:safs.openHistoryItem",
+    "onCommand:safs.enableHistorySync",
+    "onCommand:safs.disableHistorySync",
+    "onCommand:safs.openTerminalFromHistory",
+    "onCommand:safs.deleteHistoryItem",
+    "onCommand:safs.syncToLocal",
+    "onCommand:safs.syncToRemote",
+    "onCommand:safs.visualSync",
+    "onCommand:safs.deleteHostGroup"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "safs.openFolder",
+        "title": "SAFS: 打开远程目录",
+        "icon": "$(remote-explorer)"
+      },
+      {
+        "command": "safs.switchRemoteDirectory",
+        "title": "SAFS: 切换远程目录",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "safs.openTerminal",
+        "title": "SAFS: 打开远程终端",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "safs.close",
+        "title": "SAFS: 断开 SFTP 连接"
+      },
+      {
+        "command": "safs.status",
+        "title": "显示状态"
+      },
+      {
+        "command": "safs.openConfig",
+        "title": "打开配置"
+      },
+      {
+        "command": "safs.addSshConfig",
+        "title": "SAFS: 添加 SSH 配置",
+        "icon": "$(add)"
+      },
+      {
+        "command": "safs.addRemoteDirectory",
+        "title": "添加远程目录",
+        "icon": "$(add)"
+      },
+      {
+        "command": "safs.cloneGitRepository",
+        "title": "克隆 Git 仓库",
+        "icon": "$(repo-clone)"
+      },
+      {
+        "command": "safs.addHostCredentials",
+        "title": "添加主机登录配置",
+        "icon": "$(add)"
+      },
+      {
+        "command": "safs.renameHost",
+        "title": "重命名",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "safs.copyStreamableHttpUrl",
+        "title": "SAFS: 复制 Streamable HTTP URL"
+      },
+      {
+        "command": "safs.testLocalProxy",
+        "title": "SAFS: 测试本机代理连接"
+      },
+      {
+        "command": "safs.installCli",
+        "title": "SAFS: 安装或更新全局 CLI"
+      },
+      {
+        "command": "safs.installAgentForwarding",
+        "title": "SAFS: 为我的Agent安装转发功能"
+      },
+      {
+        "command": "safs.uninstallAgentForwarding",
+        "title": "SAFS: 为我的Agent卸载转发功能"
+      },
+      {
+        "command": "safs.refreshExplorer",
+        "title": "刷新远程目录",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "safs.openFolderItem",
+        "title": "打开远程目录",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "safs.openTerminalItem",
+        "title": "打开远程终端",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "safs.closeItem",
+        "title": "断开连接",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "safs.enableAiForwardItem",
+        "title": "启用 Agent 转发",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "safs.disableAiForwardItem",
+        "title": "关闭 Agent 转发",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "safs.deleteHostGroup",
+        "title": "删除主机的全部账号",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "safs.deleteConfigItem",
+        "title": "删除配置",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "safs.syncToLocal",
+        "title": "SAFS：同步到本地",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "safs.syncToRemote",
+        "title": "SAFS：同步到远程",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "safs.visualDownload",
+        "title": "SAFS：可视化下载",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "safs.visualSync",
+        "title": "SAFS：可视化同步",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "safs.visualUpload",
+        "title": "SAFS：可视化上传",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "safs.enableHistorySync",
+        "title": "启动同步",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "safs.disableHistorySync",
+        "title": "关闭本地同步",
+        "icon": "$(sync-ignored)"
+      },
+      {
+        "command": "safs.openHistoryItem",
+        "title": "打开历史目录",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "safs.openTerminalFromHistory",
+        "title": "从历史打开终端",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "safs.deleteHistoryItem",
+        "title": "删除历史记录",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "safs.mounts.focus",
+        "title": "SAFS: 聚焦远程目录"
+      },
+      {
+        "command": "safs.git.refresh",
+        "category": "SAFS Git",
+        "title": "刷新",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "safs.git.branch",
+        "category": "SAFS Git",
+        "title": "分支",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "safs.git.switchBranch",
+        "category": "SAFS Git",
+        "title": "切换分支",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "safs.git.createBranch",
+        "category": "SAFS Git",
+        "title": "创建分支",
+        "icon": "$(git-branch-create)"
+      },
+      {
+        "command": "safs.git.stage",
+        "category": "SAFS Git",
+        "title": "暂存",
+        "icon": "$(add)"
+      },
+      {
+        "command": "safs.git.unstage",
+        "category": "SAFS Git",
+        "title": "取消暂存",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "safs.git.discard",
+        "category": "SAFS Git",
+        "title": "还原更改",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "safs.git.commit",
+        "category": "SAFS Git",
+        "title": "提交",
+        "icon": "$(check)"
+      },
+      {
+        "command": "safs.git.fetch",
+        "category": "SAFS Git",
+        "title": "提取",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "safs.git.pull",
+        "category": "SAFS Git",
+        "title": "拉取（仅快进）",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "safs.git.push",
+        "category": "SAFS Git",
+        "title": "推送",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "safs.git.refreshHistory",
+        "category": "SAFS Git",
+        "title": "刷新历史",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "safs.git.copyCommitId",
+        "category": "SAFS Git",
+        "title": "复制提交 ID",
+        "icon": "$(copy)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "safs",
+          "title": "SAFS",
+          "icon": "resources/remote-ssh.svg"
+        }
+      ]
+    },
+    "views": {
+      "safs": [
+        {
+          "id": "safs.mounts",
+          "name": "远程目录",
+          "icon": "resources/remote-ssh.svg"
+        },
+        {
+          "id": "safs.agentActivity",
+          "name": "Agent 活动",
+          "type": "webview",
+          "icon": "resources/agent-activity.svg"
+        }
+      ],
+      "scm": [
+        {
+          "id": "safs.gitHistory",
+          "name": "SAFS Git View",
+          "contextualTitle": "SAFS Git View"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "safs.gitHistory",
+        "contents": "尚未打开远程 Git 仓库。\n在「远程目录」中打开 Git 仓库根目录后，这里会列出该仓库的提交历史。\n[添加远程 Git 目录](command:safs.addRemoteDirectory)\n[克隆 Git 仓库](command:safs.cloneGitRepository)"
+      },
+      {
+        "view": "safs.mounts",
+        "contents": "尚未配置远程目录。\n[添加远程目录](command:safs.addRemoteDirectory)\n[打开配置](command:safs.openConfig)",
+        "when": "safs.hasNoMounts"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "safs.openFolder"
+        },
+        {
+          "command": "safs.switchRemoteDirectory"
+        },
+        {
+          "command": "safs.openTerminal"
+        },
+        {
+          "command": "safs.close"
+        },
+        {
+          "command": "safs.status"
+        },
+        {
+          "command": "safs.openConfig"
+        },
+        {
+          "command": "safs.addSshConfig"
+        },
+        {
+          "command": "safs.syncToLocal",
+          "when": "resourceScheme == safs"
+        },
+        {
+          "command": "safs.visualDownload",
+          "when": "resourceScheme == safs"
+        },
+        {
+          "command": "safs.visualUpload"
+        },
+        {
+          "command": "safs.git.stage",
+          "when": "false"
+        },
+        {
+          "command": "safs.git.unstage",
+          "when": "false"
+        },
+        {
+          "command": "safs.git.discard",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "safs.addRemoteDirectory",
+          "when": "view == safs.mounts",
+          "group": "navigation@1"
+        },
+        {
+          "command": "safs.refreshExplorer",
+          "when": "view == safs.mounts",
+          "group": "navigation@2"
+        },
+        {
+          "command": "safs.openConfig",
+          "when": "view == safs.mounts",
+          "group": "safs@1"
+        },
+        {
+          "command": "safs.status",
+          "when": "view == safs.mounts",
+          "group": "safs@2"
+        },
+        {
+          "command": "safs.git.refreshHistory",
+          "when": "view == safs.gitHistory",
+          "group": "navigation@0"
+        },
+        {
+          "command": "safs.git.commit",
+          "when": "view == safs.gitHistory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "safs.git.branch",
+          "when": "view == safs.gitHistory",
+          "group": "navigation@2"
+        },
+        {
+          "command": "safs.git.fetch",
+          "when": "view == safs.gitHistory",
+          "group": "remote"
+        },
+        {
+          "command": "safs.git.pull",
+          "when": "view == safs.gitHistory",
+          "group": "remote"
+        },
+        {
+          "command": "safs.git.push",
+          "when": "view == safs.gitHistory",
+          "group": "remote"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "safs.git.copyCommitId",
+          "when": "view == safs.gitHistory && viewItem == safsGitCommit",
+          "group": "safs@1"
+        },
+        {
+          "command": "safs.addHostCredentials",
+          "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
+          "group": "inline@1"
+        },
+        {
+          "command": "safs.renameHost",
+          "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
+          "group": "inline@5"
+        },
+        {
+          "command": "safs.deleteHostGroup",
+          "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
+          "group": "inline@6"
+        },
+        {
+          "command": "safs.openConfig",
+          "when": "view == safs.mounts && viewItem =~ /safs\\./",
+          "group": "safs@1"
+        },
+        {
+          "command": "safs.enableAiForwardItem",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.connection.*aiDisabled/",
+          "group": "inline@1"
+        },
+        {
+          "command": "safs.disableAiForwardItem",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.connection.*aiEnabled/",
+          "group": "inline@1"
+        },
+        {
+          "command": "safs.openFolderItem",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.connection/",
+          "group": "inline@2"
+        },
+        {
+          "command": "safs.openTerminalItem",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.connection/",
+          "group": "inline@3"
+        },
+        {
+          "command": "safs.deleteConfigItem",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.connection/",
+          "group": "inline@4"
+        },
+        {
+          "command": "safs.enableHistorySync",
+          "when": "view == safs.mounts && viewItem == safs.history.syncDisabled",
+          "group": "inline@0"
+        },
+        {
+          "command": "safs.disableHistorySync",
+          "when": "view == safs.mounts && viewItem == safs.history.syncEnabled",
+          "group": "inline@0"
+        },
+        {
+          "command": "safs.openHistoryItem",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.history/",
+          "group": "inline@1"
+        },
+        {
+          "command": "safs.openTerminalFromHistory",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.history/",
+          "group": "inline@2"
+        },
+        {
+          "command": "safs.deleteHistoryItem",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.history/",
+          "group": "inline@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "safs.syncToLocal",
+          "when": "resourceScheme == safs",
+          "group": "safs@1"
+        },
+        {
+          "command": "safs.visualDownload",
+          "when": "resourceScheme == safs",
+          "group": "safs@2"
+        },
+        {
+          "command": "safs.visualUpload",
+          "when": "resourceScheme == file",
+          "group": "safs@1"
+        },
+        {
+          "command": "safs.visualSync",
+          "when": "resourceScheme == file && explorerResourceIsFolder",
+          "group": "safs@0"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "safs.git.refresh",
+          "when": "scmProvider == safs-git",
+          "group": "navigation@0"
+        },
+        {
+          "command": "safs.git.branch",
+          "when": "scmProvider == safs-git",
+          "group": "navigation@2"
+        },
+        {
+          "command": "safs.git.commit",
+          "when": "scmProvider == safs-git",
+          "group": "navigation@1"
+        },
+        {
+          "command": "safs.git.fetch",
+          "when": "scmProvider == safs-git",
+          "group": "remote"
+        },
+        {
+          "command": "safs.git.pull",
+          "when": "scmProvider == safs-git",
+          "group": "remote"
+        },
+        {
+          "command": "safs.git.push",
+          "when": "scmProvider == safs-git",
+          "group": "remote"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "safs.git.stage",
+          "when": "scmProvider == safs-git && scmResourceGroup != index",
+          "group": "inline"
+        },
+        {
+          "command": "safs.git.unstage",
+          "when": "scmProvider == safs-git && scmResourceGroup == index",
+          "group": "inline"
+        },
+        {
+          "command": "safs.git.discard",
+          "when": "scmProvider == safs-git && scmResourceGroup == working",
+          "group": "inline"
+        }
+      ]
+    },
+    "languageModelTools": [
+      {
+        "name": "safs_runRemoteCommand",
+        "displayName": "Run Remote SSH Command",
+        "toolReferenceName": "safsRun",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(terminal)",
+        "userDescription": "Run a command in the matching remote SSH directory.",
+        "modelDescription": "Runs a command on a configured SSH host. Remote files are not local; use the dedicated remote list, read, write, and search tools for file operations.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Shell command to execute remotely."
+            },
+            "mountName": {
+              "type": "string",
+              "description": "Configured remote folder name."
+            },
+            "remoteCwd": {
+              "type": "string",
+              "description": "Optional remote working directory, constrained to the configured remote root."
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      },
+      {
+        "name": "safs_listRemoteFiles",
+        "displayName": "List Remote Files",
+        "toolReferenceName": "safsList",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Lists a directory directly over SFTP.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "mountName": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "safs_writeRemoteFile",
+        "displayName": "Write Remote File",
+        "toolReferenceName": "safsWrite",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Creates or replaces a UTF-8 file directly over SFTP.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "mountName": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      },
+      {
+        "name": "safs_searchRemoteFiles",
+        "displayName": "Search Remote Files",
+        "toolReferenceName": "safsSearch",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Searches contents or file basenames on a configured remote SSH host. mode=files returns files whose contents match; mode=names matches basename globs.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "mountName": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "content",
+                "files",
+                "count",
+                "names"
+              ]
+            },
+            "fixedStrings": {
+              "type": "boolean"
+            },
+            "ignoreCase": {
+              "type": "boolean"
+            },
+            "contextLines": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 20
+            },
+            "excludeDirs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 40
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          "**/.safs/config.json"
+        ],
+        "url": "./schemas/config.schema.json"
+      }
+    ],
+    "configuration": {
+      "title": "SAFS",
+      "properties": {
+        "safs.sshClientIdent": {
+          "type": "string",
+          "default": "OpenSSH_9.6",
+          "markdownDescription": "SSH 客户端标识字符串（`SSH-2.0-` 之后的部分）。部分 NSG/网关按客户端指纹白名单放行，默认的 `ssh2js` 标识可能被拒绝（表现为 `Unable to start subsystem: sftp` / `Unable to request a pseudo-terminal`）。默认伪装为 `OpenSSH_9.6`；如仍被拒可尝试 `PuTTY_Release_0.78` 等常见客户端标识。"
+        },
+        "safs.reuseSshConnection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reuse OpenSSH connections between remote terminals and command executions."
+        },
+        "safs.hostKeyChangedAction": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "reject",
+            "accept"
+          ],
+          "default": "prompt",
+          "markdownDescription": "SSH 主机密钥的处理方式（负载均衡 VIP 每次可能连接到不同后端、各后端密钥不同）：`prompt`（默认）首次连接与每次遇到新主机密钥（后端轮换/重装）都弹窗确认（突出显示目标主机 IP:端口、旧/新密钥指纹），接受后记录，已确认的密钥不再询问；`accept` 完全静默接受并记录新密钥；`reject` 密钥变化直接拒绝连接。该设置作用于所有传输路径：内置 ssh2 通道（Windows 终端、SFTP 文件系统与命令执行）的主机密钥校验，以及系统 ssh 路径（WSL/Linux/macOS 终端与命令执行，accept→静默、prompt→连接前探测指纹并弹窗、reject→StrictHostKeyChecking=yes 严格校验）。"
+        },
+        "safs.sftp.cacheTtl": {
+          "type": "number",
+          "minimum": 0,
+          "default": 30,
+          "description": "SFTP metadata and directory cache lifetime in seconds."
+        },
+        "safs.sftp.watchInterval": {
+          "type": "number",
+          "minimum": 1,
+          "default": 5,
+          "description": "Remote file polling interval in seconds."
+        },
+        "safs.sftp.idleConnectionTtl": {
+          "type": "number",
+          "minimum": 0,
+          "default": 600,
+          "description": "Idle SFTP connection lifetime in seconds before the pool recycles it (0 disables recycling)."
+        },
+        "safs.agentMcpPort": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 0,
+          "description": "Dynamic loopback-only MCP backend port for each remote VS Code window. Use 0 (recommended) to avoid multi-window collisions."
+        },
+        "safs.agentHttpRouterPort": {
+          "type": "number",
+          "minimum": 1024,
+          "maximum": 65535,
+          "default": 9848,
+          "scope": "machine",
+          "description": "Stable loopback-only Streamable HTTP MCP router port registered with Agents. All VS Code windows must use the same value."
+        },
+        "safs.agentMcpTimeoutMs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 120000,
+          "description": "Unified timeout for Agent MCP forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
+        },
+        "safs.git.operationTimeoutMs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 600000,
+          "scope": "machine",
+          "description": "Timeout for SAFS Git push, pull, and fetch relay operations (milliseconds). 0 disables the timeout."
+        },
+        "safs.agentInterface": {
+          "type": "string",
+          "enum": [
+            "mcp",
+            "cli"
+          ],
+          "enumDescriptions": [
+            "MCP: exposes the selected MCP tool profile and removes the mutually exclusive global CLI and SAFS Agent Skills.",
+            "CLI (default): installs the global SAFS CLI and Agent Skill, then copies a prompt for unregistering the mutually exclusive MCP entry."
+          ],
+          "default": "cli",
+          "scope": "machine",
+          "description": "Mutually exclusive Agent entry point. mcp removes the global CLI and SAFS Agent Skills; cli downloads the matching versioned CLI for the current platform on demand, installs its Skill, then copies an MCP unregister prompt. Reload VS Code windows and restart Agents after changing it."
+        },
+        "safs.agentMcpToolProfile": {
+          "type": "string",
+          "enum": [
+            "full",
+            "core"
+          ],
+          "default": "full",
+          "scope": "machine",
+          "description": "Tool profile used only in mcp mode. core exposes workspace selection, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. Use the same setting in all windows and restart the Agent after changing it."
+        },
+        "safs.agentMcpMaxOutputBytes": {
+          "type": "number",
+          "minimum": 4096,
+          "maximum": 1048576,
+          "default": 8192,
+          "description": "Command/search preview byte budget (MCP previews cap at 65536). MCP retains up to 16 MiB per execution for remote_output continuation, within a 32 MiB window cache for up to 10 minutes. retentionTruncated marks incomplete capture."
+        },
+        "safs.highRiskCommandPatterns": {
+          "type": "array",
+          "default": [
+            "(?<![\\w./-])mkfs(?:\\.\\w+)?(?:\\s|$)",
+            "(?<![\\w./-])(?:fdisk|sfdisk|parted|wipefs|shred)\\b",
+            "dd\\s+(?:(?!\\bof=/dev/(?:null|zero|urandom)\\b).)*\\bof=/dev/(?!\\b(?:null|zero|urandom)\\b)",
+            "(?<![\\w./-])(?:shutdown|reboot|halt|poweroff)\\b",
+            "systemctl\\s+(?:poweroff|reboot|halt)\\b",
+            "(?<![\\w./-])(?:init|telinit)\\s+[06]\\b",
+            "echo\\s+o\\s+>\\s*/proc/sysrq-trigger",
+            "kill\\s+-(?:9|KILL)\\s+1(?:\\s|$)",
+            "(?<![\\w./-])pkill\\s+-(?:9|KILL)\\s+init\\b",
+            ":\\(\\)\\{\\s*:\\|:&\\s*\\}\\s*;",
+            "sysctl\\s+-w\\b",
+            "(?:echo|printf)\\s+[^>|;]*>[^\\n]*/proc/sys/",
+            "(?<![\\w./-])iptables\\s+-(?:F|X)\\b",
+            "iptables\\s+--flush\\b",
+            "(?<![\\w./-])ufw\\s+disable\\b",
+            "nft\\s+flush\\s+(?:ruleset|chain|table)",
+            "systemctl\\s+(?:stop|disable)\\s+(?:firewalld|ufw|nftables)\\b",
+            "(?<![\\w./-])zpool\\s+destroy\\b",
+            "(?<![\\w./-])zfs\\s+destroy\\b",
+            "(?<![\\w./-])mdadm\\s+--(?:stop|zero-superblock)\\b",
+            "cryptsetup\\s+luks(?:Format|Erase)\\b",
+            "(?<![\\w./-])(?:pvremove|vgremove|lvremove)\\b",
+            "(?<![\\w./-])sgdisk\\s+-Z\\b",
+            "(?<![\\w./-])blkdiscard\\b",
+            "mount\\s+[^|;]*(?:remount\\b[^|;]*rw\\b|rw\\b[^|;]*remount\\b)",
+            "(?<![\\w./-])grub2?-install\\b",
+            "(?<![\\w./-])efibootmgr\\b",
+            "\\b(?:curl|wget)\\b.*\\|\\s*(?:sudo\\s+)?(?:sh|bash|zsh|dash|fish|python3?|perl)\\b",
+            "(?<![\\w./-])diskpart\\b",
+            "format\\s+[a-z]:",
+            "(?<![\\w./-])sudo\\b",
+            "(?<![\\w./-])su\\b",
+            "(?<![\\w./-])sudoedit\\b",
+            "(?<![\\w./-])(?:doas|pkexec|gksu|gksudo|kdesu|runas)\\b",
+            "chmod\\s+(?:[ugoa]*\\+s\\b|[246][0-7]{3}\\b)",
+            "\\b(?:setuid|setgid)\\b",
+            "(?<![\\w./-])(?:visudo|sudoers)\\b",
+            "(?<![\\w./-])(?:passwd|useradd|usermod|userdel|groupadd|groupmod|groupdel)\\b",
+            "(?<![\\w./-])chpasswd\\b",
+            "gpasswd\\s+-a\\b",
+            "adduser\\s+\\S+\\s+(?:sudo|wheel)\\b",
+            "usermod\\s+-aG\\s+(?:sudo|wheel)\\b",
+            "(?<![\\w./-])net\\s+(?:user|localgroup)\\b",
+            "chattr\\s+[-+][^ ]*i\\b",
+            "(?:^|[|;&\\s]|\\b)(?:\\d*:?\\s*)?>+\\s*/(?:etc|boot)/",
+            "(?:^|[|;&\\s]|\\b)(?:\\d*:?\\s*)?>+\\s*/dev/(?:sd[a-z]\\d*|vd[a-z]\\d*|nvme\\d+[a-z0-9]*|mapper/|disk/|md\\d+[a-z0-9]*|mmcblk\\d+[a-z0-9]*|mem|kmem|port)\\b",
+            "(?:^|[|;&\\s]|\\b)tee\\b[^|;&]*(?:/etc/|/boot/|/dev/(?:sd[a-z]\\d*|vd[a-z]\\d*|nvme\\d+[a-z0-9]*|mapper/|disk/|md\\d+[a-z0-9]*|mmcblk\\d+[a-z0-9]*|mem|kmem|port)\\b)",
+            "(?:^|[|;&\\s]|\\b)truncate\\b[^|;&]*(?:/etc/|/boot/|/dev/(?:sd[a-z]\\d*|vd[a-z]\\d*|nvme\\d+[a-z0-9]*|mapper/|disk/|md\\d+[a-z0-9]*|mmcblk\\d+[a-z0-9]*|mem|kmem|port)\\b)",
+            "(?<![\\w./-])(?:fsck|e2fsck|tune2fs)\\b"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Regular expressions matched against remote commands requested by Agents. Matching commands are handled by safs.highRiskCommandAction without interactive prompts. Set to [] to disable interception. Matching ignores quoted strings so search terms are not false positives."
+        },
+        "safs.highRiskCommandAction": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "allow"
+          ],
+          "default": "deny",
+          "description": "How to handle remote commands matching safs.highRiskCommandPatterns: \"deny\" rejects them without running; \"allow\" runs them. No interactive prompt is shown. Legacy \"confirm\" values are treated as \"deny\"."
+        },
+        "safs.terminalFollowsActiveFile": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "切换/打开远程文件时，实时把远程终端 `cd` 到文件所在目录（默认 `false`）。无论该设置如何，**打开远程终端**和**重开远程窗口**都会跟随当前打开的远程文件目录。"
+        },
+        "safs.terminalAutoReconnect": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "远程终端进程结束后自动重连（默认 `true`）。稳定运行超过 `60` 秒的终端结束时会重开同一目录；普通错误在重连后再次退出即停止，握手丢失、连接重置或超时等瞬时网络错误最多退避重试 `3` 次。手动在 VS Code 中关闭终端或窗口不会触发重连。"
+        },
+        "safs.git.localPath": {
+          "type": "string",
+          "default": "git",
+          "scope": "machine",
+          "description": "本地（VS Code 扩展宿主环境）Git 可执行文件路径，用于中转推送、拉取与提取。默认从 PATH 查找 git。"
+        },
+        "safs.git.pushUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "本地中转推送的目标 HTTPS/SSH 地址。留空使用远端仓库的 push URL；可用于替换仅远端可识别的 SSH 主机别名。凭据请配置在本地 Git 中。"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "key": "tab",
+        "command": "safs.completeRemoteDirectory",
+        "when": "safs.directoryPickerVisible"
+      },
+      {
+        "key": "ctrl+alt+r",
+        "win": "ctrl+alt+r",
+        "linux": "ctrl+alt+o",
+        "mac": "cmd+ctrl+r",
+        "command": "safs.openFolder"
+      },
+      {
+        "key": "ctrl+alt+t",
+        "win": "ctrl+alt+t",
+        "linux": "ctrl+alt+x",
+        "mac": "cmd+ctrl+t",
+        "command": "safs.openTerminal"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:uninstall": "node ./scripts/uninstall.js",
+    "build:native-cli": "node build/build-native-cli.js",
+    "test:native-cli": "cargo test --locked --manifest-path native-cli/Cargo.toml",
+    "verify:native-cli": "node build/verify-native-cli.js",
+    "benchmark:mcp": "tsx build/mcp-efficiency.ts",
+    "check-types": "tsx build/sync-high-risk-defaults.ts --check && tsc --noEmit",
+    "sync-manifest-defaults": "tsx build/sync-high-risk-defaults.ts",
+    "compile": "npm run check-types && node esbuild.js",
+    "package": "npm run check-types && node esbuild.js --production",
+    "vscode:prepublish": "npm run package",
+    "test": "npm run check-types && tsx --test --require ./test/vscode-register.cjs test/*.test.ts",
+    "vsix": "npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/blob/main --baseImagesUrl https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "@types/ssh2": "^1.15.5",
+    "@types/vscode": "^1.93.0",
+    "@vscode/vsce": "^3.6.2",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "express": "^5.2.1",
+    "ssh2": "^1.17.0",
+    "zod": "^4.4.3"
+  }
+}

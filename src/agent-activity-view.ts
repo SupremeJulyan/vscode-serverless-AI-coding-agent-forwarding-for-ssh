@@ -1,0 +1,427 @@
+import { randomBytes } from 'node:crypto';
+import * as vscode from 'vscode';
+import { AgentActivityStore } from './agent-activity';
+
+export const agentActivityViewId = 'safs.agentActivity';
+
+export interface AgentTerminalTargetState {
+  enabled: boolean;
+  mode?: 'workspace' | 'terminal';
+  label?: string;
+}
+
+export interface AgentActivityViewActions {
+  terminalTarget(): AgentTerminalTargetState;
+  refreshTerminalTarget(): Promise<void>;
+  switchWorkspace(): Promise<void>;
+}
+
+export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+  private view: vscode.WebviewView | undefined;
+  private readonly changeSubscription: { dispose(): void };
+
+  constructor(
+    private readonly store: AgentActivityStore,
+    private readonly actions?: AgentActivityViewActions
+  ) {
+    this.changeSubscription = store.onDidChange((events) => {
+      void this.view?.webview.postMessage({ type: 'state', events });
+    });
+  }
+
+  resolveWebviewView(view: vscode.WebviewView): void {
+    this.view = view;
+    view.webview.options = { enableScripts: true };
+    view.webview.html = activityViewHtml(view.webview);
+    view.onDidDispose(() => {
+      if (this.view === view) this.view = undefined;
+    });
+    view.webview.onDidReceiveMessage(async (message: unknown) => {
+      if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+      const type = (message as { type?: unknown }).type;
+      if (type === 'ready') {
+        await view.webview.postMessage({
+          type: 'state', events: this.store.snapshot(), initial: true
+        });
+        await this.updateTerminalTarget();
+      } else if (type === 'clear') {
+        const selected = await vscode.window.showWarningMessage(
+          '确定清空当前窗口的 Agent 活动记录吗？',
+          { modal: true },
+          '清空'
+        );
+        if (selected === '清空') await this.store.clear();
+      } else if (type === 'refreshTerminalTarget') {
+        await this.actions?.refreshTerminalTarget();
+      } else if (type === 'switchWorkspace') {
+        await this.actions?.switchWorkspace();
+      }
+    });
+  }
+
+  async updateTerminalTarget(): Promise<void> {
+    await this.view?.webview.postMessage({
+      type: 'terminalTarget',
+      ...(this.actions?.terminalTarget() ?? { enabled: false })
+    });
+  }
+
+  dispose(): void {
+    this.changeSubscription.dispose();
+    this.view = undefined;
+  }
+}
+
+export function activityViewHtml(webview: vscode.Webview): string {
+  const nonce = randomBytes(18).toString('base64');
+  return /* html */ `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+  <style nonce="${nonce}">
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0; padding: 10px; color: var(--vscode-foreground);
+      background: var(--vscode-sideBar-background); font: 12px/1.45 var(--vscode-font-family);
+    }
+    button, select {
+      color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground);
+      border: 1px solid var(--vscode-widget-border, transparent); border-radius: 4px;
+      font: inherit; min-height: 26px;
+    }
+    button { cursor: pointer; padding: 3px 8px; }
+    button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+    button:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px;
+    }
+    .status {
+      position: relative; overflow: hidden; display: grid; grid-template-columns: 38px 1fr;
+      gap: 9px; align-items: center; min-height: 64px; padding: 10px;
+      border: 1px solid var(--vscode-widget-border); border-radius: 8px;
+      background: var(--vscode-editor-background); margin-bottom: 8px;
+    }
+    .orb {
+      width: 36px; height: 36px; display: grid; place-items: center; position: relative;
+      border: 1px solid var(--vscode-widget-border); border-radius: 11px;
+      color: var(--vscode-descriptionForeground);
+      background: linear-gradient(145deg, var(--vscode-editorWidget-background, var(--vscode-editor-background)), var(--vscode-sideBar-background));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 3px 8px rgba(0,0,0,.16);
+    }
+    .orb svg { width: 25px; height: 25px; overflow: visible; }
+    .orb-frame, .orb-wave { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+    .orb-frame { stroke-width: 1.15; opacity: .72; }
+    .orb-wave { stroke-width: 1.55; }
+    .orb-dot { fill: currentColor; }
+    .status.running .orb { color: var(--vscode-progressBar-background); border-color: currentColor; }
+    .status.running .orb::after {
+      content: ''; position: absolute; inset: -4px; border: 2px solid var(--vscode-progressBar-background);
+      border-radius: 14px; animation: pulse 1.1s ease-out infinite;
+    }
+    .status.running .orb-wave { stroke-dasharray: 4 2; animation: wave 1s linear infinite; }
+    .status.success .orb { color: var(--vscode-testing-iconPassed, #2ea043); border-color: currentColor; }
+    .status.error .orb { color: var(--vscode-testing-iconFailed, #f85149); border-color: currentColor; }
+    .status.success .orb::after, .status.error .orb::after {
+      position: absolute; right: -4px; bottom: -4px; display: grid; place-items: center;
+      width: 15px; height: 15px; border: 2px solid var(--vscode-editor-background);
+      border-radius: 50%; color: #fff; font: 700 10px/1 var(--vscode-font-family);
+    }
+    .status.success .orb::after { content: '✓'; background: var(--vscode-testing-iconPassed, #2ea043); }
+    .status.error .orb::after { content: '!'; background: var(--vscode-testing-iconFailed, #f85149); }
+    .status-title { font-weight: 600; }
+    .status-detail { color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    @keyframes pulse { from { transform: scale(.8); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
+    @keyframes wave { to { stroke-dashoffset: -6; } }
+    .controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 5px; margin-bottom: 8px; }
+    .agent-mode {
+      display: grid; gap: 6px;
+      margin-bottom: 8px; padding: 7px 8px; border: 1px solid var(--vscode-widget-border);
+      border-radius: 6px; background: var(--vscode-editor-background);
+    }
+    .mode-switch { display: flex; align-items: center; gap: 12px; }
+    .mode-label {
+      color: var(--vscode-descriptionForeground); white-space: nowrap;
+    }
+    .mode-label.active { font-weight: 700; }
+    .agent-mode-detail {
+      color: var(--vscode-descriptionForeground); min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    select { min-width: 0; padding: 2px 4px; }
+    .empty-state {
+      padding: 18px 8px; text-align: center; color: var(--vscode-descriptionForeground);
+      border: 1px dashed var(--vscode-widget-border); border-radius: 7px;
+    }
+    .timeline { display: grid; gap: 6px; }
+    .event, .group {
+      border-left: 3px solid var(--vscode-descriptionForeground); border-radius: 5px;
+      background: var(--vscode-editor-background); padding: 7px 8px;
+    }
+    .event.running { border-left-color: var(--vscode-progressBar-background); }
+    .event.success { border-left-color: var(--vscode-testing-iconPassed, #2ea043); }
+    .event.error, .event.interrupted { border-left-color: var(--vscode-testing-iconFailed, #f85149); }
+    .event-head { display: flex; gap: 6px; align-items: baseline; }
+    .event-title { font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .source { color: var(--vscode-badge-foreground); background: var(--vscode-badge-background); border-radius: 8px; padding: 0 5px; font-size: 10px; }
+    .meta, .target { color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+    .target { margin-top: 2px; }
+    details { margin-top: 4px; }
+    summary { color: var(--vscode-textLink-foreground); cursor: pointer; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 7px; margin: 5px 0 0; }
+    dt { color: var(--vscode-descriptionForeground); }
+    dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .group { border-left-color: var(--vscode-charts-blue, #3794ff); }
+    .group-items { display: grid; gap: 5px; margin-top: 5px; }
+    .group-item { padding-top: 5px; border-top: 1px solid var(--vscode-widget-border); }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; }
+    }
+  </style>
+</head>
+<body>
+  <section id="status" class="status idle" aria-live="polite">
+    <div id="orb" class="orb" role="img" aria-label="空闲">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path class="orb-frame" d="M5.5 4.5h13a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2Z M3.8 8h16.4"/>
+        <circle class="orb-dot" cx="6.3" cy="6.25" r=".65"/>
+        <circle class="orb-dot" cx="8.65" cy="6.25" r=".65" opacity=".75"/>
+        <circle class="orb-dot" cx="11" cy="6.25" r=".65" opacity=".5"/>
+        <path class="orb-wave" d="M6.2 14h2.15l1.45-2.8 2.55 5 1.7-3.15h3.7"/>
+      </svg>
+    </div>
+    <div><div id="statusTitle" class="status-title">等待 Agent 操作</div><div id="statusDetail" class="status-detail">当前远程窗口</div></div>
+  </section>
+  <section id="agentMode" class="agent-mode" hidden>
+    <div class="mode-switch" role="group" aria-label="Agent 工具模式">
+      <span id="workspaceModeLabel" class="mode-label" hidden>工作区模式</span>
+      <span id="terminalModeLabel" class="mode-label" hidden>终端模式</span>
+      <button id="refreshTerminalTarget" type="button" hidden>刷新工作区</button>
+      <button id="switchWorkspace" type="button" title="在当前窗口选择并打开远程目录">切换工作区</button>
+    </div>
+    <div id="agentModeDetail" class="agent-mode-detail">使用当前远程工作区</div>
+  </section>
+  <div class="controls">
+    <select id="category" aria-label="按操作类型筛选">
+      <option value="all">全部类型</option><option value="read">读取/搜索</option>
+      <option value="write">修改</option><option value="command">命令</option><option value="transfer">传输</option>
+    </select>
+    <select id="eventStatus" aria-label="按执行状态筛选">
+      <option value="all">全部状态</option><option value="running">执行中</option>
+      <option value="success">成功</option><option value="error">失败/中断</option>
+    </select>
+    <button id="clear" type="button" title="清空当前窗口记录">清空</button>
+  </div>
+  <main id="timeline" class="timeline"></main>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const timeline = document.getElementById('timeline');
+    const statusCard = document.getElementById('status');
+    const statusTitle = document.getElementById('statusTitle');
+    const statusDetail = document.getElementById('statusDetail');
+    const orb = document.getElementById('orb');
+    const categoryFilter = document.getElementById('category');
+    const statusFilter = document.getElementById('eventStatus');
+    const workspaceModeLabel = document.getElementById('workspaceModeLabel');
+    const terminalModeLabel = document.getElementById('terminalModeLabel');
+    const refreshTerminalTarget = document.getElementById('refreshTerminalTarget');
+    const switchWorkspace = document.getElementById('switchWorkspace');
+    const agentMode = document.getElementById('agentMode');
+    const agentModeDetail = document.getElementById('agentModeDetail');
+    let events = [];
+    let statusTimer;
+    const seenStatus = new Map();
+    const labels = {
+      current_remote_file: '查看当前文件', remote_list: '列出目录', remote_read: '读取文件',
+      remote_read_many: '批量读取', remote_output: '续读命令输出', remote_search: '搜索远程代码',
+      remote_edit: '编辑文件', remote_write: '写入文件', remote_create: '创建文件/目录', remote_delete: '删除路径',
+      remote_chmod: '修改权限', remote_move: '移动路径', remote_upload: '上传文件',
+      remote_download: '下载文件', run_remote_command: '执行远程命令'
+    };
+    const summaryLabels = {
+      path: '路径', paths: '路径', sourcePath: '来源', targetPath: '目标', remoteDirectory: '远程目录',
+      remotePath: '远程路径', localPath: '本地路径', localPaths: '本地路径', remoteCwd: '工作目录',
+      query: '查询', command: '命令', editCount: '编辑项', contentBytes: '写入字节', requestCount: '请求数',
+      recursive: '递归', overwrite: '覆盖', mode: '模式', exitCode: '退出码', bytes: '字节',
+      completed: '已完成', discovered: '已发现', truncated: '结果截断', retentionTruncated: '保留截断',
+      resultStatus: '结果'
+    };
+    function textElement(tag, className, value) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      element.textContent = value;
+      return element;
+    }
+    function label(event) { return labels[event.toolName] || event.toolName; }
+    function target(event) {
+      const value = event.summary || {};
+      const targetValue = value.path || value.targetPath || value.remotePath || value.remoteDirectory
+        || value.remoteCwd || value.query || value.command
+        || (Array.isArray(value.paths) ? value.paths[0] : '') || event.workspaceRoot;
+      return typeof targetValue === 'string' ? targetValue : '';
+    }
+    function statusText(value) {
+      if (value === 'running') return '执行中';
+      if (value === 'success') return '成功';
+      if (value === 'interrupted') return '已中断';
+      return '失败';
+    }
+    function formatDuration(event) {
+      if (typeof event.durationMs !== 'number') return '';
+      return event.durationMs < 1000 ? event.durationMs + ' ms' : (event.durationMs / 1000).toFixed(1) + ' s';
+    }
+    function formatTime(value) {
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+    }
+    function detailList(event) {
+      const details = document.createElement('details');
+      details.appendChild(textElement('summary', '', '查看详情'));
+      const list = document.createElement('dl');
+      const values = Object.assign({}, event.summary || {});
+      if (event.error) values.error = event.error;
+      Object.entries(values).forEach(function(entry) {
+        const key = entry[0], value = entry[1];
+        if (value === undefined) return;
+        list.appendChild(textElement('dt', '', summaryLabels[key] || (key === 'error' ? '错误' : key)));
+        list.appendChild(textElement('dd', '', Array.isArray(value) ? value.join('\\n') : String(value)));
+      });
+      details.appendChild(list);
+      return details;
+    }
+    function eventCard(event, compact) {
+      const card = document.createElement('article');
+      card.className = 'event ' + event.status + (compact ? ' group-item' : '');
+      const head = textElement('div', 'event-head', '');
+      head.appendChild(textElement('span', 'event-title', label(event)));
+      head.appendChild(textElement('span', 'source', event.source.toUpperCase()));
+      card.appendChild(head);
+      const destination = target(event);
+      if (destination) card.appendChild(textElement('div', 'target', destination));
+      const meta = [event.agentName, statusText(event.status), formatDuration(event), formatTime(event.startedAt)].filter(Boolean).join(' · ');
+      card.appendChild(textElement('div', 'meta', meta));
+      if (Object.keys(event.summary || {}).length || event.error) card.appendChild(detailList(event));
+      return card;
+    }
+    function filtered() {
+      const category = categoryFilter.value;
+      const state = statusFilter.value;
+      return events.filter(function(event) {
+        if (category !== 'all' && event.category !== category) return false;
+        if (state === 'error') return event.status === 'error' || event.status === 'interrupted';
+        return state === 'all' || event.status === state;
+      });
+    }
+    function groups(values) {
+      const result = [];
+      values.slice().sort(function(a, b) { return Date.parse(a.startedAt) - Date.parse(b.startedAt); }).forEach(function(event) {
+        const previous = result[result.length - 1];
+        const items = previous && previous.items;
+        const last = items && items[items.length - 1];
+        if (event.category === 'read' && event.status === 'success'
+            && last && last.category === 'read' && last.status === 'success'
+            && last.agentName === event.agentName && last.toolName === event.toolName
+            && Date.parse(event.startedAt) - Date.parse(last.startedAt) <= 2000) {
+          items.push(event);
+        } else {
+          result.push({ items: [event] });
+        }
+      });
+      return result.reverse();
+    }
+    function render() {
+      timeline.replaceChildren();
+      const values = filtered();
+      if (!values.length) {
+        timeline.appendChild(textElement('div', 'empty-state', events.length ? '当前筛选条件下没有活动' : '暂无 Agent 远程操作。启用转发后，MCP 和 CLI 操作会显示在这里。'));
+        return;
+      }
+      groups(values).forEach(function(group) {
+        if (group.items.length === 1) {
+          timeline.appendChild(eventCard(group.items[0], false));
+          return;
+        }
+        const wrapper = document.createElement('details');
+        wrapper.className = 'group';
+        const first = group.items[0];
+        wrapper.appendChild(textElement('summary', '', first.agentName + ' · ' + label(first) + ' × ' + group.items.length));
+        const list = textElement('div', 'group-items', '');
+        group.items.slice().reverse().forEach(function(event) { list.appendChild(eventCard(event, true)); });
+        wrapper.appendChild(list);
+        timeline.appendChild(wrapper);
+      });
+    }
+    function setStatus(kind, title, detail) {
+      clearTimeout(statusTimer);
+      statusCard.className = 'status ' + kind;
+      statusTitle.textContent = title;
+      statusDetail.textContent = detail || '当前远程窗口';
+      orb.setAttribute('aria-label', kind === 'running' ? '执行中' : kind === 'success' ? '成功' : kind === 'error' ? '失败' : '空闲');
+      if (kind === 'success' || kind === 'error') {
+        statusTimer = setTimeout(function() { setStatus('idle', '等待 Agent 操作', '当前远程窗口'); }, 2000);
+      }
+    }
+    function acceptState(message) {
+      const incoming = Array.isArray(message.events) ? message.events : [];
+      let completedEvent;
+      if (!message.initial) {
+        incoming.forEach(function(event) {
+          const previous = seenStatus.get(event.id);
+          if (previous !== event.status) {
+            if (event.status !== 'running' && previous === 'running') {
+              if (!completedEvent || Date.parse(event.completedAt || '') >= Date.parse(completedEvent.completedAt || '')) {
+                completedEvent = event;
+              }
+            }
+          }
+        });
+      }
+      seenStatus.clear();
+      incoming.forEach(function(event) { seenStatus.set(event.id, event.status); });
+      events = incoming;
+      const running = events.slice().reverse().find(function(event) { return event.status === 'running'; });
+      if (running) {
+        setStatus('running', running.agentName + ' 正在' + label(running), target(running));
+      } else if (completedEvent) {
+        setStatus(completedEvent.status === 'success' ? 'success' : 'error',
+          label(completedEvent) + statusText(completedEvent.status), target(completedEvent));
+      } else if (!events.length) {
+        setStatus('idle', '等待 Agent 操作', '当前远程窗口');
+      }
+      render();
+    }
+    window.addEventListener('message', function(event) {
+      if (!event.data) return;
+      if (event.data.type === 'state') acceptState(event.data);
+      if (event.data.type === 'terminalTarget') {
+        const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'
+          ? event.data.mode
+          : event.data.enabled === true ? 'terminal' : undefined;
+        const enabled = mode === 'terminal';
+        agentMode.hidden = !mode;
+        workspaceModeLabel.hidden = mode !== 'workspace';
+        terminalModeLabel.hidden = mode !== 'terminal';
+        refreshTerminalTarget.hidden = mode !== 'terminal';
+        workspaceModeLabel.classList.toggle('active', mode === 'workspace');
+        terminalModeLabel.classList.toggle('active', enabled);
+        agentModeDetail.textContent = mode === 'terminal'
+          ? '当前终端：' + (event.data.label || 'SAFS 终端')
+          : '使用当前远程工作区';
+      }
+    });
+    categoryFilter.addEventListener('change', render);
+    statusFilter.addEventListener('change', render);
+    document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
+    refreshTerminalTarget.addEventListener('click', function() {
+      vscode.postMessage({ type: 'refreshTerminalTarget' });
+    });
+    switchWorkspace.addEventListener('click', function() {
+      vscode.postMessage({ type: 'switchWorkspace' });
+    });
+    vscode.postMessage({ type: 'ready' });
+  </script>
+</body>
+</html>`;
+}

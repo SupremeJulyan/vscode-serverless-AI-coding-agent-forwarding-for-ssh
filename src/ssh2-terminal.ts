@@ -1,0 +1,521 @@
+import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { StringDecoder } from 'node:string_decoder';
+import { Client, ClientChannel, ConnectConfig } from 'ssh2';
+import * as vscode from 'vscode';
+import { expandHome, HostConfig } from './config';
+import { hostVerifierFor } from './host-key';
+import { keyboardInteractivePasswordReplies } from './authentication';
+import { defaultSshClientIdent, serverHostKeyAlgorithms } from './ssh-algorithms';
+import {
+  loadRemoteShellIntegrationScripts, normalizeRemoteShellPath,
+  RemoteCwdOscTracker, remoteIntegratedLoginCommand, remoteShellProbeCommand
+} from './remote-shell-integration';
+import {
+  ssh2RemoteCommand
+} from './ssh-command';
+import { CommandOutputMarkerStripper } from './command-output-marker';
+import {
+  TerminalCommandOutputCapture, terminalForwardingCommand
+} from './terminal-command-forwarding';
+
+async function connectConfig(
+  host: HostConfig, password?: string
+): Promise<ConnectConfig> {
+  return {
+    host: host.ip,
+    port: host.port ?? 22,
+    username: host.user,
+    ...(password ? { password, tryKeyboard: true } : {}),
+    ...(host.private_key_path
+      ? { privateKey: await readFile(expandHome(host.private_key_path)) }
+      : {}),
+    ident: vscode.workspace.getConfiguration('safs')
+      .get<string>('sshClientIdent', defaultSshClientIdent),
+    readyTimeout: 20_000,
+    keepaliveInterval: 15_000,
+    keepaliveCountMax: 3,
+    algorithms: { serverHostKey: serverHostKeyAlgorithms },
+    hostVerifier: hostVerifierFor(host)
+  };
+}
+
+export interface Ssh2CommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+}
+
+/**
+ * 可复用的 ssh2 执行连接（Windows 远程命令路径）：一条 TCP+SSH 连接服务多次
+ * exec，避免每条命令重新握手；keepalive 保活；连接死亡后下次调用自动重建。
+ */
+class Ssh2ExecSession {
+  readonly client = new Client();
+  readonly ready: Promise<void>;
+  private _dead = false;
+  private readyReject: ((error: Error) => void) | undefined;
+
+  constructor(
+    config: ConnectConfig,
+    private readonly password?: string
+  ) {
+    this.client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
+      const replies = this.password
+        ? keyboardInteractivePasswordReplies(prompts, this.password)
+        : undefined;
+      finish(replies ?? []);
+    });
+    // 连接级错误/关闭是持久事件：标记会话失效；ready 之前到来的错误 reject 等待者。
+    this.client.on('error', (error: Error) => {
+      this._dead = true;
+      this.readyReject?.(error);
+      this.readyReject = undefined;
+    });
+    this.client.on('close', () => {
+      this._dead = true;
+    });
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.readyReject = reject;
+      this.client.once('ready', () => {
+        this.readyReject = undefined;
+        resolve();
+      });
+    });
+    this.client.connect(config);
+  }
+
+  get dead(): boolean {
+    return this._dead;
+  }
+
+  end(): void {
+    this._dead = true;
+    // 连接未就绪时被结束：让并发等待 ready 的调用方立即收到错误，避免挂起。
+    this.readyReject?.(new Error('SSH 执行连接已结束'));
+    this.readyReject = undefined;
+    this.client.end();
+  }
+}
+
+const execSessions = new Map<string, Ssh2ExecSession>();
+const creatingExecSessions = new Map<string, Promise<Ssh2ExecSession>>();
+
+function execSessionKey(host: HostConfig): string {
+  return `${host.ip}:${host.port ?? 22}:${host.user}`;
+}
+
+async function getExecSession(
+  host: HostConfig, password?: string
+): Promise<Ssh2ExecSession> {
+  const key = execSessionKey(host);
+  const existing = execSessions.get(key);
+  if (existing && !existing.dead) return existing;
+  const creating = creatingExecSessions.get(key);
+  if (creating) {
+    const session = await creating;
+    if (!session.dead) return session;
+  }
+  const promise = (async () => {
+    const session = new Ssh2ExecSession(
+      await connectConfig(host, password), password
+    );
+    execSessions.set(key, session);
+    return session;
+  })();
+  creatingExecSessions.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    creatingExecSessions.delete(key);
+  }
+}
+
+/** 停用时释放全部可复用执行连接。 */
+export function closeSsh2ExecSessions(): void {
+  for (const session of execSessions.values()) session.end();
+  execSessions.clear();
+  creatingExecSessions.clear();
+}
+
+export async function executeSsh2Command(
+  host: HostConfig, password: string | undefined,
+  remoteCwd: string, command: string, signal?: AbortSignal, maxOutputBytes = 1024 * 1024,
+  outputMarker?: string
+): Promise<Ssh2CommandResult> {
+  const session = await getExecSession(host, password);
+  await session.ready;
+  return new Promise<Ssh2CommandResult>((resolve, reject) => {
+    let settled = false;
+    let stream: ClientChannel | undefined;
+    const finishError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      session.client.removeListener('error', onClientError);
+      reject(error);
+    };
+    const onClientError = (error: Error) => finishError(error);
+    const abort = () => {
+      if (settled) return;
+      if (stream) {
+        // 只关闭当前通道，不影响池中其它并发调用。
+        stream.close();
+      } else {
+        // 连接尚未就绪/未开始执行：结束该会话，下次调用重建。
+        session.end();
+        execSessions.delete(execSessionKey(host));
+      }
+      finishError(new Error('Remote command was cancelled'));
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+    session.client.on('error', onClientError);
+    session.client.exec(ssh2RemoteCommand(remoteCwd, command, outputMarker), (error, execStream) => {
+      if (error) {
+        finishError(error);
+        return;
+      }
+      stream = execStream;
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      const stdoutStripper = outputMarker
+        ? new CommandOutputMarkerStripper(outputMarker)
+        : undefined;
+      let capturedBytes = 0;
+      let truncated = false;
+      const capture = (target: Buffer[], chunk: Buffer) => {
+        const remaining = maxOutputBytes - capturedBytes;
+        if (remaining > 0) {
+          target.push(chunk.subarray(0, remaining));
+          capturedBytes += Math.min(chunk.length, remaining);
+        }
+        if (chunk.length > remaining) truncated = true;
+      };
+      execStream.on('data', (chunk: Buffer) => {
+        for (const part of stdoutStripper ? stdoutStripper.push(chunk) : [chunk]) {
+          capture(stdout, part);
+        }
+      });
+      execStream.stderr.on('data', (chunk: Buffer) => capture(stderr, chunk));
+      execStream.once('close', (code: number | undefined) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener('abort', abort);
+        session.client.removeListener('error', onClientError);
+        for (const part of stdoutStripper?.finish() ?? []) capture(stdout, part);
+        resolve({
+          exitCode: code ?? 1,
+          stdout: Buffer.concat(stdout).toString(),
+          stderr: Buffer.concat(stderr).toString(),
+          truncated
+        });
+      });
+    });
+  });
+}
+
+export class Ssh2Terminal implements vscode.Pseudoterminal {
+  private readonly writeEmitter = new vscode.EventEmitter<string>();
+  readonly onDidWrite = this.writeEmitter.event;
+  private readonly closeEmitter = new vscode.EventEmitter<number | undefined>();
+  readonly onDidClose = this.closeEmitter.event;
+  private readonly client = new Client();
+  private stream?: ClientChannel;
+  private dimensions: vscode.TerminalDimensions = { columns: 80, rows: 24 };
+  private password?: string;
+  private closed = false;
+  /** 远端已通过 SSH 协议上报 shell 进程退出（exit-status/exit-signal），
+   *  即用户输入 exit / 远端主动结束会话；连接中断不会触发 exit 事件。 */
+  private exitStatusReceived = false;
+  private readonly cwdTracker = new RemoteCwdOscTracker();
+  private readonly outputDecoder = new StringDecoder('utf8');
+  private readonly stderrDecoder = new StringDecoder('utf8');
+  /** 保留有限的 shell stderr，供退出时区分目录权限错误与网络断线。 */
+  private shellStderr = '';
+  /** PTY 模式下 stderr 可能合并进 stdout，保留输出尾部用于错误分类。 */
+  private shellOutputTail = '';
+  private readonly integrationSessionId = randomBytes(12).toString('hex');
+  /** 待 shell 通道就绪后补发的输入（live-sync 的 cd 可能早于连接完成）。 */
+  private pendingInput = '';
+  private shellOpenTimer?: NodeJS.Timeout;
+  private forwardedCommand?: {
+    capture: TerminalCommandOutputCapture;
+    resolve(result: Ssh2CommandResult): void;
+    reject(error: Error): void;
+    signal?: AbortSignal;
+    abort(): void;
+  };
+
+  constructor(
+    private readonly host: HostConfig,
+    password: string,
+    private readonly remoteCwd?: string,
+    private readonly onFailed?: (error: Error) => void,
+    private readonly log?: (message: string) => void,
+    private readonly onCwd?: (remoteCwd: string) => void,
+    private readonly connectionHint?: string
+  ) {
+    this.password = password;
+  }
+
+  open(initialDimensions?: vscode.TerminalDimensions): void {
+    if (initialDimensions) this.dimensions = initialDimensions;
+    const hint = this.connectionHint ? `（${this.connectionHint}）` : '';
+    this.writeEmitter.fire(`SAFS: 正在连接 ${this.host.name}…${hint}\r\n`);
+    const config: ConnectConfig = {
+      host: this.host.ip,
+      port: this.host.port ?? 22,
+      username: this.host.user,
+      password: this.password,
+      tryKeyboard: true,
+      ident: vscode.workspace.getConfiguration('safs')
+        .get<string>('sshClientIdent', defaultSshClientIdent),
+      readyTimeout: 20_000,
+      keepaliveInterval: 15_000,
+      keepaliveCountMax: 3,
+      algorithms: { serverHostKey: serverHostKeyAlgorithms },
+      hostVerifier: hostVerifierFor(this.host, this.log)
+    };
+    this.client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
+      const replies = this.password
+        ? keyboardInteractivePasswordReplies(prompts, this.password)
+        : undefined;
+      finish(replies ?? []);
+    });
+    this.client.once('ready', () => {
+      this.password = undefined;
+      void this.openRemoteShell();
+    });
+    this.client.once('error', (error) => this.fail(error));
+    this.client.connect(config);
+  }
+
+  private async openRemoteShell(): Promise<void> {
+    const shellPath = await this.probeRemoteShell();
+    let scripts;
+    try {
+      scripts = await loadRemoteShellIntegrationScripts();
+    } catch (error) {
+      this.log?.(`会话级 Shell Integration 加载失败，使用普通登录 Shell：${
+        error instanceof Error ? error.message : String(error)
+      }`);
+    }
+    if (this.closed) return;
+    const loginCommand = remoteIntegratedLoginCommand(
+      shellPath, this.remoteCwd, scripts, this.integrationSessionId
+    );
+    this.client.exec(loginCommand, {
+      pty: {
+        term: 'xterm-256color',
+        cols: this.dimensions.columns,
+        rows: this.dimensions.rows
+      }
+    }, (error, stream) => {
+      if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
+      this.shellOpenTimer = undefined;
+      if (error) {
+        this.fail(error);
+        return;
+      }
+      this.stream = stream;
+      stream.on('data', (chunk: Buffer) => {
+        this.handleOutput(this.outputDecoder.write(chunk));
+      });
+      stream.stderr.on('data', (chunk: Buffer) => {
+        const data = this.stderrDecoder.write(chunk);
+        if (data) {
+          this.shellStderr = `${this.shellStderr}${data}`.slice(-8192);
+          const forwarded = this.forwardedCommand;
+          this.captureForwardedCommandOutput(data);
+          const visible = forwarded ? forwarded.capture.visibleOutput(data) : data;
+          if (visible) this.writeEmitter.fire(visible);
+        }
+      });
+      // ssh2 仅在服务器返回 exit-status / exit-signal（正常/主动结束会话）时
+      // 触发 exit 事件；连接被远端切断/掉线时不会触发，而是直接 close 且无退出码。
+      stream.once('exit', () => {
+        this.exitStatusReceived = true;
+      });
+      stream.once('close', (code: number | null | undefined) => {
+        if (typeof code === 'number') this.exitStatusReceived = true;
+        this.handleOutput(this.outputDecoder.end());
+        const stderr = this.stderrDecoder.end();
+        if (stderr) {
+          this.shellStderr = `${this.shellStderr}${stderr}`.slice(-8192);
+          this.writeEmitter.fire(stderr);
+        }
+        if (typeof code === 'number' && code !== 0) {
+          const detail = `${this.shellStderr}\n${this.shellOutputTail}`.trim();
+          if (detail) this.onFailed?.(new Error(detail));
+        }
+        this.finish(typeof code === 'number' ? code : undefined);
+      });
+      // 补发连接建立期间排队（live-sync）的输入，避免 cd 被丢弃。
+      if (this.pendingInput) {
+        stream.write(this.pendingInput);
+        this.pendingInput = '';
+      }
+    });
+    // readyTimeout 只覆盖 SSH 握手。网关若在认证后静默丢弃 channel-open，
+    // 必须在此结束伪终端并显示原因，不能一直停在“正在连接”。
+    this.shellOpenTimer = setTimeout(() => {
+      this.shellOpenTimer = undefined;
+      this.fail(new Error('SSH 已认证，但服务器未响应终端通道请求（15000ms 超时）'));
+    }, 15_000);
+    this.shellOpenTimer.unref?.();
+  }
+
+  private handleOutput(data: string): void {
+    if (!data) return;
+    this.shellOutputTail = `${this.shellOutputTail}${data}`.slice(-8192);
+    const forwarded = this.forwardedCommand;
+    this.captureForwardedCommandOutput(data);
+    const visible = forwarded ? forwarded.capture.visibleOutput(data) : data;
+    for (const remoteCwd of this.cwdTracker.push(data)) this.onCwd?.(remoteCwd);
+    if (visible) this.writeEmitter.fire(visible);
+  }
+
+  /** Execute through this visible PTY, preserving sudo/su identity and the live environment. */
+  executeForwardedCommand(
+    command: string, remoteCwd: string | undefined, signal?: AbortSignal,
+    maxOutputBytes = 1024 * 1024, reportCwd = true
+  ): Promise<Ssh2CommandResult> {
+    if (this.closed || !this.stream) {
+      return Promise.reject(new Error('所选 SAFS 终端尚未连接或已经关闭'));
+    }
+    if (this.forwardedCommand) {
+      return Promise.reject(new Error('所选 SAFS 终端正在执行另一条 Agent 命令'));
+    }
+    if (signal?.aborted) {
+      return Promise.reject(new Error('Remote terminal command was cancelled'));
+    }
+    const executionId = randomBytes(12).toString('hex');
+    const plan = terminalForwardingCommand(command, remoteCwd, executionId, reportCwd);
+    return new Promise<Ssh2CommandResult>((resolve, reject) => {
+      const abort = () => {
+        this.stream?.write('\x03');
+        this.finishForwardedCommand(undefined, new Error('Remote terminal command was cancelled'));
+      };
+      this.forwardedCommand = {
+        capture: new TerminalCommandOutputCapture(
+          plan.startMarker, plan.endMarkerPrefix, maxOutputBytes
+        ),
+        resolve,
+        reject,
+        signal,
+        abort
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      this.stream?.write(`\r\n${plan.commandLine}\r`);
+    });
+  }
+
+  private captureForwardedCommandOutput(data: string): void {
+    const forwarded = this.forwardedCommand;
+    if (!forwarded) return;
+    try {
+      const result = forwarded.capture.push(data);
+      if (result) this.finishForwardedCommand(result);
+    } catch (error) {
+      this.finishForwardedCommand(
+        undefined, error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  }
+
+  private finishForwardedCommand(result?: Ssh2CommandResult, error?: Error): void {
+    const forwarded = this.forwardedCommand;
+    if (!forwarded) return;
+    this.forwardedCommand = undefined;
+    forwarded.signal?.removeEventListener('abort', forwarded.abort);
+    if (error) forwarded.reject(error);
+    else if (result) forwarded.resolve(result);
+  }
+
+  private probeRemoteShell(): Promise<string | undefined> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let output = '';
+      let stream: ClientChannel | undefined;
+      const finish = (value?: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(normalizeRemoteShellPath(value ?? output));
+      };
+      const timer = setTimeout(() => {
+        stream?.close();
+        finish();
+      }, 3000);
+      this.client.exec(remoteShellProbeCommand(), (error, channel) => {
+        if (error) {
+          finish();
+          return;
+        }
+        stream = channel;
+        channel.on('data', (chunk: Buffer) => {
+          if (output.length <= 4096) output += chunk.toString();
+        });
+        channel.once('close', () => finish(output));
+      });
+    });
+  }
+
+  handleInput(data: string): void {
+    this.stream?.write(data);
+  }
+
+  /**
+   * 写入远程终端；shell 通道尚未建立时先入队，建立后补发。
+   * 供 live-sync（终端跟随打开文件）在 SSH 连接完成前安全调用。
+   */
+  sendInput(data: string): void {
+    if (this.stream) {
+      this.stream.write(data);
+    } else {
+      this.pendingInput += data;
+    }
+  }
+
+  setDimensions(dimensions: vscode.TerminalDimensions): void {
+    this.dimensions = dimensions;
+    this.stream?.setWindow(dimensions.rows, dimensions.columns, 0, 0);
+  }
+
+  close(): void {
+    if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
+    this.shellOpenTimer = undefined;
+    this.password = undefined;
+    this.stream?.close();
+    this.client.end();
+  }
+
+  private fail(error: Error): void {
+    this.onFailed?.(error);
+    this.writeEmitter.fire(`\r\nSAFS: ${error.message}\r\n`);
+    this.finish(1);
+  }
+
+  /** 远端是否以 SSH exit-status/exit-signal 正常结束会话（输入 exit 等主动退出）。 */
+  get cleanExit(): boolean {
+    return this.exitStatusReceived;
+  }
+
+  private finish(code: number | undefined): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.finishForwardedCommand(
+      undefined, new Error('Remote terminal closed before the Agent command completed')
+    );
+    if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
+    this.shellOpenTimer = undefined;
+    this.password = undefined;
+    this.client.end();
+    this.closeEmitter.fire(code);
+  }
+}

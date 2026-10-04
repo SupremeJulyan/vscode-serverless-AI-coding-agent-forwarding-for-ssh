@@ -1,0 +1,183 @@
+import { mkdir, rename, rm } from 'node:fs/promises';
+import * as path from 'node:path';
+import { validateLocalDownloadTarget } from './local-transfer-path';
+import {
+  cleanupDownloadPart, commitDownloadPart, prepareDownloadResume, type DownloadResume
+} from './resume-store';
+import { SftpSession } from './sftp/session';
+import { assertSafeRemoteEntryName } from './sftp/uri';
+import { writeStreamToFile } from './stream-file';
+
+export interface RemoteDirectoryDownloadProgress {
+  phase: 'scanning' | 'downloading';
+  currentFile?: string;
+  discoveredFiles: number;
+  discoveredDirectories: number;
+  completedFiles: number;
+  transferredBytes: number;
+}
+
+export interface RemoteDirectoryDownloadResult {
+  files: number;
+  directories: number;
+  transferredBytes: number;
+}
+
+/**
+ * Discover and download a remote directory in one pass with bounded concurrency.
+ * Completed files remain on cancellation/failure; writeStreamToFile removes only
+ * the incomplete file. Symbolic links are deliberately not followed.
+ */
+export async function downloadRemoteDirectoryTree(options: {
+  session: SftpSession;
+  remoteRoot: string;
+  localRoot: string;
+  concurrency: number;
+  signal?: AbortSignal;
+  secureLocalRoot?: string;
+  onProgress?: (progress: RemoteDirectoryDownloadProgress) => void;
+  /** 追加日志（续传起点、远端已变化等）；失败不影响传输。 */
+  log?: (message: string) => void;
+}): Promise<RemoteDirectoryDownloadResult> {
+  const concurrency = Number.isFinite(options.concurrency)
+    ? Math.max(1, Math.floor(options.concurrency))
+    : 1;
+  const controller = new AbortController();
+  let externallyAborted = options.signal?.aborted === true;
+  const externalAbort = () => {
+    externallyAborted = true;
+    controller.abort();
+  };
+  if (options.signal?.aborted) controller.abort();
+  else options.signal?.addEventListener('abort', externalAbort, { once: true });
+
+  let discoveredFiles = 0;
+  let discoveredDirectories = 0;
+  let completedFiles = 0;
+  let transferredBytes = 0;
+  let firstError: unknown;
+  const active = new Set<Promise<void>>();
+
+  const report = (
+    phase: RemoteDirectoryDownloadProgress['phase'], currentFile?: string
+  ): void => options.onProgress?.({
+    phase, currentFile, discoveredFiles, discoveredDirectories,
+    completedFiles, transferredBytes
+  });
+  const localTarget = async (relative: string): Promise<string> => {
+    const target = relative
+      ? path.join(options.localRoot, ...relative.split('/'))
+      : options.localRoot;
+    return options.secureLocalRoot
+      ? validateLocalDownloadTarget(options.secureLocalRoot, target)
+      : target;
+  };
+  const recordFailure = (error: unknown): void => {
+    // An external cancellation/timeout is classified by the caller. Only retain
+    // an independent transfer failure so the original useful error is surfaced.
+    if (options.signal?.aborted || firstError !== undefined) return;
+    firstError = error;
+    controller.abort();
+  };
+  const waitForCapacity = async (): Promise<void> => {
+    if (active.size >= concurrency) await Promise.race(active);
+    if (firstError !== undefined) throw firstError;
+    if (externallyAborted || controller.signal.aborted) throw new Error('目录下载已取消');
+  };
+  const scheduleFile = async (remoteFile: string, relative: string): Promise<void> => {
+    await waitForCapacity();
+    discoveredFiles += 1;
+    report('scanning', relative);
+    let task!: Promise<void>;
+    task = (async () => {
+      const target = await localTarget(relative);
+      // 续传判定：远端在这两次尝试之间被改过，残片名就对不上，自动全量重来。
+      const info = await options.session.stat(remoteFile, controller.signal);
+      const resume: DownloadResume = await prepareDownloadResume({
+        remoteName: remoteFile,
+        remote: { size: info.size, mtimeMs: info.mtime },
+        localTarget: target,
+        canRange: options.session.transport !== 'scp',
+        log: options.log
+      });
+      const source = await options.session.readFileStream(
+        remoteFile, controller.signal, resume.offset > 0 ? resume.offset : undefined
+      );
+      try {
+        await writeStreamToFile(source, resume.partPath, {
+          signal: controller.signal,
+          preservePartialOnError: true,
+          onDelta: (delta) => {
+            transferredBytes += delta;
+            resume.transferred = (resume.transferred ?? 0) + delta;
+            report('downloading', relative);
+          },
+          ...(resume.offset > 0 ? { resume: { offset: resume.offset } } : {})
+        });
+      } catch (error) {
+        // 失败/取消：大残片留下当续传起点，小残片删掉（避免目录里堆垃圾）。
+        await cleanupDownloadPart({
+          partPath: resume.partPath,
+          transferred: (resume.transferred ?? 0) + resume.offset,
+          remove: (part) => rm(part, { force: true }),
+          log: options.log
+        });
+        throw error;
+      }
+      // 先落最终位置再计入完成：rename 失败不算完成。
+      await commitDownloadPart({
+        partPath: resume.partPath,
+        target,
+        renamePart: rename,
+        permissions: info.permissions,
+        log: options.log
+      });
+      completedFiles += 1;
+      report('downloading', relative);
+    })().catch(recordFailure).finally(() => active.delete(task));
+    active.add(task);
+  };
+  const walk = async (remoteDirectory: string, relativeDirectory: string): Promise<void> => {
+    if (externallyAborted || options.signal?.aborted || controller.signal.aborted) {
+      throw new Error('目录下载已取消');
+    }
+    await mkdir(await localTarget(relativeDirectory), { recursive: true });
+    const entries = await options.session.readDirectory(remoteDirectory, controller.signal);
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (controller.signal.aborted) throw new Error('目录下载已取消');
+      assertSafeRemoteEntryName(entry.name);
+      if (entry.type === 'symbolic-link') continue;
+      const relative = relativeDirectory
+        ? path.posix.join(relativeDirectory, entry.name)
+        : entry.name;
+      const remote = path.posix.join(remoteDirectory, entry.name);
+      if (entry.type === 'directory') {
+        discoveredDirectories += 1;
+        report('scanning', relative);
+        await walk(remote, relative);
+      } else {
+        await scheduleFile(remote, relative);
+      }
+    }
+  };
+
+  try {
+    report('scanning');
+    try {
+      await walk(options.remoteRoot, '');
+    } catch (error) {
+      recordFailure(error);
+    }
+    await Promise.all(active);
+    if (firstError !== undefined) throw firstError;
+    if (controller.signal.aborted) throw new Error('目录下载已取消');
+    return {
+      files: completedFiles,
+      directories: discoveredDirectories,
+      transferredBytes
+    };
+  } finally {
+    options.signal?.removeEventListener('abort', externalAbort);
+  }
+}
