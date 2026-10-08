@@ -2,6 +2,8 @@
 
 ## 2.0.4
 
+- 移除 GitHub Release 自动发布与版本标签触发，保留 CI 构建、测试和产物上传。
+
 - CLI 安装改为插件内置的 Node.js 脚本，要求本地 Node.js 18+；自动迁移旧二进制，保留全局命令与 Skill 安装，不再下载平台二进制。
 
 - CLI 转发活动隐藏 Agent 名称，包括旧记录中的 Unknown Agent；保留 CLI 来源和操作状态。
