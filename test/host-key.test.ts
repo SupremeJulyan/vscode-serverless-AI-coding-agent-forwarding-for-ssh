@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, statSync } from 'node:fs';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import fsPromises, { readFile, readdir, writeFile } from 'node:fs/promises';
 import { symlinkOrSkip } from './symlink-helper';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -124,6 +124,29 @@ test('concurrent known_hosts updates preserve every writer and leave no lock art
   for (const key of keys) assert.ok(content.includes(key.blob));
   assert.equal(content.trim().split(/\r?\n/).length, keys.length);
   assert.deepEqual((await readdir(dir)).sort(), ['known_hosts']);
+});
+
+test('Windows lock creation retries transient access-denied errors without losing entries', async t => {
+  const { file, dir } = tempKnownHosts();
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const originalMkdir = fsPromises.mkdir;
+  let attempts = 0;
+  t.mock.method(fsPromises, 'mkdir', async (...args: Parameters<typeof originalMkdir>) => {
+    if (args[0] === `${file}.lock` && ++attempts <= 2) {
+      throw Object.assign(new Error('directory pending deletion'), { code: attempts === 1 ? 'EPERM' : 'EACCES' });
+    }
+    return originalMkdir(...args);
+  });
+  Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
+  try {
+    await appendKnownHostsFile(file, [{ host: hostEntryName(hostAt(22)), type: 'ssh-ed25519', blob: blobA }]);
+    assert.equal(attempts, 3);
+    assert.match(await readFile(file, 'utf8'), /ssh-ed25519/);
+    assert.deepEqual(await readdir(dir), ['known_hosts']);
+  } finally {
+    Object.defineProperty(process, 'platform', originalPlatform);
+    t.mock.restoreAll();
+  }
 });
 
 test('atomic known_hosts writes replace a symlink without modifying its target', async (t) => {

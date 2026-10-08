@@ -75,7 +75,8 @@ async function removeStaleKnownHostsLock(lockPath: string): Promise<boolean> {
     await rmdir(lockPath);
     return true;
   } catch (error) {
-    if (isFileError(error, 'ENOENT') || isFileError(error, 'ENOTEMPTY')) return false;
+    if (isFileError(error, 'ENOENT') || isFileError(error, 'ENOTEMPTY')
+      || (process.platform === 'win32' && (isFileError(error, 'EPERM') || isFileError(error, 'EACCES')))) return false;
     throw error;
   }
 }
@@ -101,9 +102,15 @@ async function withKnownHostsLock<T>(filePath: string, action: () => Promise<T>)
         await unlink(ownerPath).catch(() => undefined);
         await rmdir(lockPath).catch(() => undefined);
       }
-      if (!isFileError(error, 'EEXIST')) throw error;
-      if (await removeStaleKnownHostsLock(lockPath)) continue;
+      // Windows can report access denied while another writer's deleted lock
+      // directory is still pending removal. Retry creation within the same bound,
+      // never interpret this error as ownership of the lock.
+      const transientWindowsLock = !created && process.platform === 'win32'
+        && (isFileError(error, 'EPERM') || isFileError(error, 'EACCES'));
+      if (!isFileError(error, 'EEXIST') && !transientWindowsLock) throw error;
+      if (!transientWindowsLock && await removeStaleKnownHostsLock(lockPath)) continue;
       if (Date.now() >= deadline) {
+        if (transientWindowsLock) throw error;
         throw new Error(`等待主机密钥文件锁超时：${filePath}`);
       }
       await new Promise((resolve) => setTimeout(resolve, 20 + Math.floor(Math.random() * 30)));
