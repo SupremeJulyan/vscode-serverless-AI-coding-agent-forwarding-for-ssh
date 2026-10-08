@@ -59,8 +59,9 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 ### 3. 让 Agent 操作远程工作区
 
-默认使用 **CLI 模式**：请先在本地安装 **Node.js 18 或以上版本**，并确保终端能运行 `node --version`。安装插件后，会从插件包中自动安装或更新全局 `safs` CLI 与用户级 Skill，无需另行下载平台二进制，也无需安装 Rust。在终端输入 `safs --version` 检查是否安装成功；如需修复，运行 `SAFS：安装或更新全局CLI`。 未检测到 Node.js 18+ 时，弹窗可打开 Node.js 官网安装，或切换为无需 Node.js 的 MCP 模式。
-重启vscode，确保环境变量刷新，在 Agent 中输入 `/safs-cli`，使用技能，之后agent会列出所有远程工作区，选择一个进行操作即可。
+默认使用 **CLI 模式**，需要本地 **Node.js 18+**。插件自动安装全局 `safs` 命令和 Skill；缺少 Node.js 时，弹窗提供[安装链接](https://nodejs.org/zh-cn)或切换 MCP 模式。
+
+重启 VS Code，在终端运行 `safs --version` 检查安装，然后在 Agent 中输入 `/safs-cli`，选择远程工作区。如需修复安装，运行 `SAFS：安装或更新全局 CLI`。
 
 如需 **MCP 模式**，先将 `safs.agentInterface` 设置为 `mcp`：
 (1) 在 SAFS 视图中点击连接父节点旁的 **启用 Agent 转发**。也可以主动运行 `SAFS: 为我的Agent安装转发功能` 进行修复。

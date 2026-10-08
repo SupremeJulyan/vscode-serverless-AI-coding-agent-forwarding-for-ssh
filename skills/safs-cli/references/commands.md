@@ -2,7 +2,17 @@
 
 Use a `workspaceId` returned by `safs workspaces` as `ID` below.
 
-The router identifies the Agent from the connection URL when available.
+## Installation
+
+The CLI requires local Node.js 18+ and a running SAFS extension in CLI mode.
+
+```bash
+safs --version
+safs install --skills       # current project
+safs install --skills -g    # user-level Skill
+```
+
+The extension installs and updates the global CLI. Use `SAFS: Install or Update Global CLI` in VS Code to repair it.
 
 ## Workspace
 
