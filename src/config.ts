@@ -96,6 +96,34 @@ export function parseConfig(value: unknown): BridgeConfig {
     throw new Error('Config must contain a hosts array');
   }
 
+  if (object.hosts.some(item => item && typeof item === 'object' && 'accounts' in item)) {
+    const flatHosts: Record<string, unknown>[] = [];
+    const mounts: MountConfig[] = [];
+    const aliases = { ...(parseHostAliases(object.host_aliases) ?? {}) };
+    for (const [index, item] of object.hosts.entries()) {
+      if (!item || typeof item !== 'object' || !Array.isArray(item.accounts)) {
+        throw new Error(`hosts[${index}] must contain an accounts array`);
+      }
+      const ip = requireString(item.ip, `hosts[${index}].ip`);
+      const label = requireString(item.name, `hosts[${index}].name`);
+      if (label !== ip) aliases[ip] = label;
+      const accounts = item.accounts.length ? item.accounts : [{ name: ip, user: '' }];
+      for (const account of accounts) {
+        if (!account || typeof account !== 'object' || Array.isArray(account)) throw new Error('Invalid account');
+        const user = typeof account.user === 'string' ? account.user : '';
+        const name = typeof account.name === 'string' && account.name ? account.name : `${label}(${user})`;
+        flatHosts.push({ ...account, name, ip, user });
+        const connections = account.connections ?? [{ name, remote_path: '.' }];
+        if (!Array.isArray(connections)) throw new Error('Invalid account connections');
+        for (const connection of connections) mounts.push({
+          name: requireString(connection.name, 'connection.name'), host: name,
+          remote_path: requireString(connection.remote_path, 'connection.remote_path'), remote_terminal: 'open'
+        });
+      }
+    }
+    return parseConfig({ ...object, hosts: flatHosts, mounts, host_aliases: aliases });
+  }
+
   const generatedNames = new Map<string, number>();
   const hosts = object.hosts.map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
@@ -174,7 +202,17 @@ function parseHostAliases(value: unknown): Record<string, string> | undefined {
 
 export async function loadConfig(configPath: string): Promise<BridgeConfig> {
   const content = await fs.readFile(expandHome(configPath), 'utf8');
-  return parseConfig(JSON.parse(content) as unknown);
+  const raw = JSON.parse(content) as Record<string, unknown>;
+  const config = parseConfig(raw);
+  if (Array.isArray(raw.hosts) && raw.hosts.some(host => !host || typeof host !== 'object' || !('accounts' in host))) {
+    const backup = `${expandHome(configPath)}.legacy.bak`;
+    await fs.copyFile(expandHome(configPath), backup, 1).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    });
+    await fs.chmod(backup, 0o600);
+    await saveConfig(configPath, config);
+  }
+  return config;
 }
 
 export async function ensureConfigFile(configPath: string): Promise<string> {
@@ -199,7 +237,22 @@ export async function saveConfig(configPath: string, config: BridgeConfig): Prom
     `.config-${process.pid}-${Date.now()}.json`
   );
   try {
-    const { mounts: _omitted, ...saved } = config;
+    const groups = new Map<string, { name: string; ip: string; accounts: Record<string, unknown>[] }>();
+    for (const host of config.hosts) {
+      let group = groups.get(host.ip);
+      if (!group) {
+        group = { name: config.host_aliases?.[host.ip] ?? host.ip, ip: host.ip, accounts: [] };
+        groups.set(host.ip, group);
+      }
+      const { ip: _ip, ...account } = host;
+      const connections = config.mounts.filter(mount => mount.host === host.name);
+      group.accounts.push({
+        ...account,
+        ...(connections.length === 1 && connections[0].name === host.name && connections[0].remote_path === '.'
+          ? {} : { connections: connections.map(({ name, remote_path }) => ({ name, remote_path })) })
+      });
+    }
+    const saved = { encrypt_passwords: config.encrypt_passwords !== false, hosts: [...groups.values()] };
     await fs.writeFile(temporaryPath, `${JSON.stringify(saved, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     await fs.rename(temporaryPath, resolvedPath);
   } finally {

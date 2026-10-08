@@ -94,3 +94,33 @@ test('ignores records whose updatedAt is in the future', async () => {
     ['fresh']
   );
 });
+
+test('stopping publication drains pending writes and blocks future heartbeats', async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'safs-discovery-stop-'));
+  const directory = agentDiscoveryDirectory(home);
+  const publisher = new AgentWorkspacePublisher('closing-window', directory);
+  const record = {
+    focused: true, execution: 'remote' as const,
+    workspaceUri: 'safs://project/srv/project', mountName: 'project',
+    workspaceRoot: '/srv/project', host: 'dev', mcpUrl: 'http://127.0.0.1:9848/mcp'
+  };
+  await Promise.all([publisher.publish(record), publisher.stop(), publisher.publish(record)]);
+  assert.deepEqual(discoverAgentWorkspaces([directory]), []);
+  await assert.rejects(readFile(path.join(directory, 'closing-window.json')), { code: 'ENOENT' });
+});
+
+test('ignores a fresh record owned by a terminated process', async () => {
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, ['-e', '']);
+  const pid = child.pid!;
+  await new Promise<void>(resolve => child.once('close', () => resolve()));
+  const home = await mkdtemp(path.join(os.tmpdir(), 'safs-discovery-dead-'));
+  const directory = agentDiscoveryDirectory(home);
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, 'dead.json'), JSON.stringify({
+    version: 1, instanceId: 'dead', processId: pid, focused: true, execution: 'remote',
+    workspaceUri: 'safs://project/srv/project', mountName: 'project', workspaceRoot: '/srv/project',
+    host: 'dev', mcpUrl: 'http://127.0.0.1:9848/mcp', updatedAt: new Date().toISOString()
+  }));
+  assert.deepEqual(discoverAgentWorkspaces([directory]), []);
+});

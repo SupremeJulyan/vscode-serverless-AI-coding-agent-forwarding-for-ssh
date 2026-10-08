@@ -18,6 +18,8 @@ export interface AgentWorkspaceRecord {
   /** This window currently exposes only command execution in its selected visible terminal. */
   terminalCommandOnly?: true;
   host: string;
+  hostName?: string;
+  user?: string;
   mcpUrl: string;
   updatedAt: string;
 }
@@ -71,6 +73,11 @@ export function readAgentWorkspaceRecord(
       || Math.abs(now - updatedAtMs) > maxRecordAgeMs) {
       return undefined;
     }
+    if (!Number.isInteger(value.processId) || value.processId! <= 0) return undefined;
+    try { process.kill(value.processId!, 0); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return undefined;
+    }
     return { ...value, updatedAtMs, discoveryFile: filePath } as DiscoveredAgentWorkspace;
   } catch {
     return undefined;
@@ -98,6 +105,8 @@ export function discoverAgentWorkspaces(
 
 export class AgentWorkspacePublisher {
   private readonly filePath: string;
+  private stopped = false;
+  private pending: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly instanceId: string,
@@ -106,22 +115,36 @@ export class AgentWorkspacePublisher {
     this.filePath = path.join(directory, `${instanceId}.json`);
   }
 
-  async publish(record: Omit<AgentWorkspaceRecord, 'version' | 'instanceId' | 'processId' | 'updatedAt'>): Promise<void> {
-    await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const value: AgentWorkspaceRecord = {
-      version: 1,
-      instanceId: this.instanceId,
-      processId: process.pid,
-      ...record,
-      updatedAt: new Date().toISOString()
-    };
-    await writeFile(this.filePath, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600
+  publish(record: Omit<AgentWorkspaceRecord, 'version' | 'instanceId' | 'processId' | 'updatedAt'>): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    const next = this.pending.then(async () => {
+      if (this.stopped) return;
+      await mkdir(this.directory, { recursive: true, mode: 0o700 });
+      const value: AgentWorkspaceRecord = {
+        version: 1,
+        instanceId: this.instanceId,
+        processId: process.pid,
+        ...record,
+        updatedAt: new Date().toISOString()
+      };
+      await writeFile(this.filePath, `${JSON.stringify(value, null, 2)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600
+      });
     });
+    this.pending = next.catch(() => {});
+    return next;
   }
 
-  async remove(): Promise<void> {
-    await rm(this.filePath, { force: true });
+  remove(): Promise<void> {
+    const next = this.pending.then(() => rm(this.filePath, { force: true }));
+    this.pending = next.catch(() => {});
+    return next;
+  }
+
+  /** Closing a window permanently prevents in-flight heartbeats from republishing it. */
+  stop(): Promise<void> {
+    this.stopped = true;
+    return this.remove();
   }
 }

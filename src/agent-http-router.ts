@@ -140,7 +140,9 @@ export class AgentHttpRouter {
   private publicWorkspace(workspace: DiscoveredAgentWorkspace): Record<string, unknown> {
     return {
       workspaceRoot: workspace.workspaceRoot,
-      host: workspace.host,
+      host: workspace.hostName ?? workspace.host,
+      ...(workspace.user !== undefined ? { user: workspace.user } : {}),
+      ...(workspace.hostName ? { label: [workspace.hostName, workspace.user, workspace.workspaceRoot].filter(Boolean).join(' → ') } : {}),
       mode: workspace.terminalCommandOnly ? 'terminal' : 'workspace',
       ...(workspace.terminalCommandOnly ? { terminalCommandOnly: true } : {})
     };

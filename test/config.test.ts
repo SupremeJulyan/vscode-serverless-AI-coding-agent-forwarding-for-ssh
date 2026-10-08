@@ -30,13 +30,15 @@ test('saves a configuration that can be loaded as JSON', async () => {
 
   await saveConfig(configPath, config);
   const saved = JSON.parse(await readFile(configPath, 'utf8'));
-  assert.deepEqual(saved, { encrypt_passwords: true, hosts: config.hosts });
+  assert.equal(saved.hosts[0].ip, '10.0.0.2');
+  assert.equal(saved.hosts[0].accounts[0].user, 'alice');
+  assert.equal(saved.hosts[0].accounts[0].directories, undefined);
   assert.equal(saved.mounts, undefined);
   const reloaded = parseConfig(saved);
   assert.equal(reloaded.mounts.length, 1);
-  assert.equal(reloaded.mounts[0].name, 'dev');
+  assert.equal(reloaded.mounts[0].name, 'project');
   assert.equal(reloaded.mounts[0].host, 'dev');
-  assert.equal(reloaded.mounts[0].remote_path, '.');
+  assert.equal(reloaded.mounts[0].remote_path, '/srv/project');
 });
 
 test('ignores legacy local mount paths when parsing SFTP folders', () => {
@@ -152,4 +154,35 @@ test('creates a minimal config template without overwriting an existing config',
   await writeFile(configPath, '{"hosts":["keep-me"]}\n');
   await ensureConfigFile(configPath);
   assert.equal(await readFile(configPath, 'utf8'), '{"hosts":["keep-me"]}\n');
+});
+
+test('hierarchical config groups accounts and preserves credentials, paths and connection identifiers', async () => {
+  const config = parseConfig({ hosts: [{ name: '构建机', ip: '10.0.0.1', accounts: [
+    { name: 'legacy-alice', user: 'alice', password: 'encrypted-value', directories: ['/srv/a', '/srv/b'] },
+    { name: 'legacy-bob', user: 'bob', port: 2222, private_key_path: '~/.ssh/key', directories: ['/srv/c'] }
+  ] }] });
+  assert.deepEqual(config.host_aliases, { '10.0.0.1': '构建机' });
+  assert.equal(config.hosts[0].password, 'encrypted-value');
+  assert.equal('directories' in config.hosts[0], false);
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-hierarchical-'));
+  const configPath = path.join(directory, 'config.json');
+  await saveConfig(configPath, config);
+  const saved = JSON.parse(await readFile(configPath, 'utf8'));
+  assert.equal(saved.hosts.length, 1);
+  assert.equal(saved.hosts[0].accounts.length, 2);
+  assert.equal(saved.hosts[0].accounts[0].directories, undefined);
+  assert.deepEqual(parseConfig(saved), config);
+});
+
+test('loading legacy config migrates it automatically and keeps a backup', async () => {
+  const { loadConfig } = await import('../src/config');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-migrate-'));
+  const configPath = path.join(directory, 'config.json');
+  const legacy = JSON.stringify({ hosts: [{ name: 'old', ip: '10.0.0.1', user: 'alice', password: 'secret' }],
+    mounts: [{ name: 'repo', host: 'old', remote_path: '/srv/repo' }] });
+  await writeFile(configPath, legacy);
+  const config = await loadConfig(configPath);
+  assert.equal(await readFile(`${configPath}.legacy.bak`, 'utf8'), legacy);
+  assert.equal(JSON.parse(await readFile(configPath, 'utf8')).hosts[0].accounts[0].name, 'old');
+  assert.deepEqual((await loadConfig(configPath)).mounts, config.mounts);
 });

@@ -4309,9 +4309,7 @@ const MAX_HISTORY_ENTRIES = 10;
 async function getDirectoryHistory(
   context: vscode.ExtensionContext
 ): Promise<Record<string, string[]>> {
-  return context.globalState.get<Record<string, string[]>>(
-    directoryHistoryKey, {}
-  );
+  return context.globalState.get<Record<string, string[]>>(directoryHistoryKey, {});
 }
 
 async function recordDirectoryHistory(
@@ -4326,9 +4324,7 @@ async function recordDirectoryHistory(
     entries.splice(idx, 1);
   }
   entries.unshift(remotePath);
-  if (entries.length > MAX_HISTORY_ENTRIES) {
-    entries.length = MAX_HISTORY_ENTRIES;
-  }
+  if (entries.length > MAX_HISTORY_ENTRIES) entries.length = MAX_HISTORY_ENTRIES;
   history[mountName] = entries;
   await context.globalState.update(directoryHistoryKey, history);
 }
@@ -4605,8 +4601,7 @@ async function normalizeHierarchicalConfigNames(
   for (const [oldName, newName] of renamed) {
     const oldEntries = history[oldName];
     if (!oldEntries) continue;
-    history[newName] = [...new Set([...(history[newName] ?? []), ...oldEntries])]
-      .slice(0, MAX_HISTORY_ENTRIES);
+    history[newName] = [...new Set([...(history[newName] ?? []), ...oldEntries])].slice(0, MAX_HISTORY_ENTRIES);
     delete history[oldName];
     historyChanged = true;
   }
@@ -5406,6 +5401,8 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     mountName: mount.name,
     workspaceRoot: workspacePath,
     host: mount.host,
+    hostName: config.host_aliases?.[resolveMount(config, mount).hostConfig.ip] ?? resolveMount(config, mount).hostConfig.ip,
+    user: resolveMount(config, mount).hostConfig.user,
     mcpUrl: mcp.url,
     ...(terminalCommandOnly ? { terminalCommandOnly: true } : {})
   });
@@ -5459,7 +5456,7 @@ function startAgentWorkspacePublishing(context: vscode.ExtensionContext): void {
       dispose: () => {
         if (agentWorkspaceHeartbeat) clearInterval(agentWorkspaceHeartbeat);
         agentWorkspaceHeartbeat = undefined;
-        void agentWorkspacePublisher.remove().catch((error) =>
+        void agentWorkspacePublisher.stop().catch((error) =>
           logAsyncFailure('Agent discovery 清理失败', error)
         );
       }
@@ -5602,8 +5599,26 @@ async function configureAgentInterface(
     );
     return {};
   }
-  const executable = await installGlobalCli(context, cliRouterUrl(router.url));
-  await installGlobalCliSkill(executable);
+  let executable: string;
+  try {
+    executable = await installGlobalCli(context, cliRouterUrl(router.url));
+    await installGlobalCliSkill(executable);
+  } catch (error) {
+    const detail = redactSensitiveText(error instanceof Error ? error.message : String(error));
+    const action = await vscode.window.showErrorMessage(
+      'SAFS CLI 安装或更新失败',
+      { modal: true, detail: `${detail}\n请检查网络是否能够访问 GitHub。也可以切换 MCP 模式，跳过 CLI 下载。` },
+      '检查 GitHub 网络', '切换 MCP 模式'
+    );
+    if (action === '检查 GitHub 网络') {
+      await vscode.env.openExternal(vscode.Uri.parse('https://github.com'));
+    }
+    if (action === '切换 MCP 模式') {
+      await settings().update('agentInterface', 'mcp', vscode.ConfigurationTarget.Global);
+      return {};
+    }
+    throw error;
+  }
   bridgeOutput?.appendLine(`[Agent CLI] 已安装用户级 safs 命令；接口=${agentInterface()}。`);
   return { cliExecutable: executable };
 }
@@ -6179,7 +6194,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     startAgentHttpRouterLeadership(context);
     const executable = (await configureAgentInterface(context)).cliExecutable;
-    if (!executable) throw new Error('SAFS CLI 尚未安装');
+    if (!executable) {
+      if (agentInterface() === 'mcp') return;
+      throw new Error('SAFS CLI 尚未安装');
+    }
     bridgeOutput?.info(`[Agent CLI] 用户主动安装或更新完成：${executable}`);
     await installAgentForwardingIntegration(context, executable);
   });
@@ -6483,11 +6501,12 @@ export async function deactivate(): Promise<void> {
   agentTrace('Deactivate', '扩展停用，清理发现记录、MCP 和连接池');
   agentCommandTerminal = undefined;
   agentCommandTerminalCwd = undefined;
+  const discoveryCleanup = agentWorkspacePublisher.stop();
   await agentActivityStore?.flush();
   agentActivityStore?.dispose();
   if (agentWorkspaceHeartbeat) clearInterval(agentWorkspaceHeartbeat);
   if (agentHttpRouterHeartbeat) clearInterval(agentHttpRouterHeartbeat);
-  await agentWorkspacePublisher.remove();
+  await discoveryCleanup;
   await mcp?.stop();
   await httpRouterStart?.catch(() => undefined);
   await httpRouter?.stop();
