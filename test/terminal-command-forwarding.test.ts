@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import test from 'node:test';
 import {
   TerminalCommandOutputCapture, terminalForwardingCommand
@@ -48,7 +49,7 @@ test('can probe the live terminal directory without forcing a cwd', {
     plan.startMarker, plan.endMarkerPrefix, 1024
   );
   assert.deepEqual(capture.push(processResult.stdout), {
-    exitCode: 0, stdout: '/tmp\n', stderr: '', truncated: false
+    exitCode: 0, stdout: `${realpathSync('/tmp')}\n`, stderr: '', truncated: false
   });
 });
 
@@ -64,7 +65,7 @@ test('reportCwd emits the OSC 633 cwd sequence before the BEGIN marker', {
   const processResult = spawnSync('/bin/bash', ['-c', plan.commandLine], {
     cwd: '/tmp', encoding: 'utf8'
   });
-  assert.match(processResult.stdout, /\u001b\]633;P;Cwd=\/tmp\u0007/);
+  assert.ok(processResult.stdout.includes(`\u001b]633;P;Cwd=${realpathSync('/tmp')}\u0007`));
   const capture = new TerminalCommandOutputCapture(
     plan.startMarker, plan.endMarkerPrefix, 1024
   );
