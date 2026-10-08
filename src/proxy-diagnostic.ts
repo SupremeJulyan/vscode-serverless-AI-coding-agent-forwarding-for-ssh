@@ -12,7 +12,11 @@ export interface LoopbackProbe {
 }
 
 /** Probe an ephemeral loopback-only endpoint; never return curl diagnostics or proxy credentials. */
-export async function testLoopbackProxy(environment: NodeJS.ProcessEnv = process.env): Promise<LoopbackProbe[]> {
+export async function testLoopbackProxy(
+  environment: NodeJS.ProcessEnv = process.env, timeoutMs = 6500
+): Promise<LoopbackProbe[]> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 2000) throw new Error('Invalid proxy diagnostic timeout');
+  const maxTimeSeconds = String((timeoutMs - 1500) / 1000);
   // curl deliberately ignores uppercase HTTP_PROXY. Model Agent clients that honor it too.
   const env = { ...environment, http_proxy: environment.http_proxy || environment.HTTP_PROXY };
   return Promise.all(['localhost', '127.0.0.1', '::1'].map(async (host): Promise<LoopbackProbe> => {
@@ -36,9 +40,9 @@ export async function testLoopbackProxy(environment: NodeJS.ProcessEnv = process
       let stdout = '';
       try {
         ({ stdout } = await run(process.platform === 'win32' ? 'curl.exe' : 'curl', [
-          '--disable', '--silent', '--max-time', '5', '--connect-timeout', '3',
+          '--disable', '--silent', '--max-time', maxTimeSeconds, '--connect-timeout', String(Math.min(3, Number(maxTimeSeconds))),
           '--max-filesize', '1024', '--write-out', '\n%{proxy_used}', url
-        ], { env, timeout: 6500, maxBuffer: 4096, windowsHide: true }));
+        ], { env, timeout: timeoutMs, maxBuffer: 4096, windowsHide: true }));
       } catch (error) {
         const failure = error as { code?: string; stdout?: string };
         if (failure.code === 'ENOENT') throw new Error('本机代理测试需要 curl，请安装 curl 后重试。');
