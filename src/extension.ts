@@ -704,7 +704,9 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
 }
 
 function folderUri(folder: RemoteFolder, remotePath = folder.defaultRemotePath ?? folder.remoteRoot): string {
-  return remoteUri(folder.mountName, workspacePathForRemote(folder, remotePath));
+  const host = lastReadConfig?.hosts.find(candidate => candidate.name === folder.hostName);
+  const label = host ? lastReadConfig?.host_aliases?.[host.ip] ?? host.ip : undefined;
+  return remoteUri(folder.mountName, workspacePathForRemote(folder, remotePath), label);
 }
 
 function reportedRemoteTerminalCwd(
@@ -4455,8 +4457,10 @@ async function refreshRemoteWorkspaceNames(): Promise<void> {
       continue;
     }
     // 只换 authority，路径/query 原样保留：不依赖 vscode.Uri.path 的编码约定。
-    const authority = mountAuthorityAlias(location.mountName) ?? location.mountName;
-    const desired = folder.uri.with({ authority });
+    const host = lastReadConfig?.hosts.find(candidate => candidate.name === location.mountName);
+    if (!host) continue;
+    const label = lastReadConfig?.host_aliases?.[host.ip] ?? host.ip;
+    const desired = vscode.Uri.parse(remoteUri(location.mountName, location.remotePath, label));
     if (desired.toString() === folder.uri.toString()) continue;
     bridgeOutput?.info(
       `[工作区] 远程配置名已更新：${folder.uri.authority} → ${desired.authority}`

@@ -41,6 +41,9 @@ esbuild.build({
   sourcemap: !production,
   sourcesContent: false,
   platform: 'node',
+  // The UMD entry passes require into a factory, hiding relative imports from
+  // esbuild. Bundle the ESM entry so no ./impl/* imports escape into the VSIX.
+  alias: { 'jsonc-parser': require.resolve('jsonc-parser/lib/esm/main.js') },
   outdir: 'dist',
   // 原生 .node 模块不能打包（ssh2/ssh2 依赖 cpu-features 的预编译 binding）：
   // 外部化后运行时 require 失败会被依赖自身的 try/catch 兜底到纯 JS 实现。

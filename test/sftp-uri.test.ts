@@ -175,3 +175,14 @@ test('names that look like the legacy hex form never use a plain authority', () 
   assert.equal(parseRemoteUri(uri).mountName, 'm-ab');
   assert.equal(parseRemoteUri('safs://m-67617465776179/home').mountName, 'gateway');
 });
+
+test('host-only workspace labels preserve account identity including escaped queries', () => {
+  const first = remoteUri('gyy(alice)', '/project', 'gyy');
+  const second = remoteUri('gyy(bob)', '/project', 'gyy');
+  assert.equal(new URL(first).hostname, 'gyy');
+  assert.notEqual(first, second);
+  assert.equal(parseRemoteUri(first).mountName, 'gyy(alice)');
+  const url = new URL(second);
+  url.search = encodeURIComponent(url.search.slice(1));
+  assert.equal(parseRemoteUri(url.toString()).mountName, 'gyy(bob)');
+});

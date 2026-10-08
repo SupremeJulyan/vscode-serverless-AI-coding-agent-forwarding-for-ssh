@@ -151,10 +151,10 @@ function decodeRemotePath(pathname: string): string {
  * an opaque, reversible mount identifier so names containing spaces, Unicode,
  * or host-like punctuation do not leak into URI parsing rules.
  */
-export function remoteUri(mountName: string, remotePath: string): string {
-  const authority = encodeMountAuthority(mountName);
-  const query = authority === mountName && !/[^\x00-\x7f]/.test(mountName)
-    ? '' : `?mount=${encodeURIComponent(mountName)}`;
+export function remoteUri(mountName: string, remotePath: string, hostLabel?: string): string {
+  const authority = hostLabel ? encodeURIComponent(hostLabel) : encodeMountAuthority(mountName);
+  const query = !hostLabel && authority === mountName && !/[^\x00-\x7f]/.test(mountName)
+    ? '' : `?mount=${encodeURIComponent(mountName)}${hostLabel ? '&hostLabel=1' : ''}`;
   return `${remoteFileSystemScheme}://${authority}${encodeRemotePath(remotePath)}${query}`;
 }
 
@@ -182,7 +182,9 @@ export function parseRemoteUri(value: string): RemoteUriLocation {
   if (parsed.username || parsed.password || parsed.port) {
     throw new Error(`Invalid remote workspace URI: ${value}`);
   }
-  const queryMountName = parsed.searchParams.get('mount');
+  const decodedQuery = new URLSearchParams(decodeURIComponent(parsed.search.slice(1)));
+  const queryMountName = parsed.searchParams.get('mount')
+    ?? (decodedQuery.get('hostLabel') === '1' ? decodedQuery.get('mount') : undefined);
   // `?mount=` 仅供参考：VS Code 可能把其中的 `=` 转义成 `%3D` 而取不到，所以
   // authority 必须是可还原的（十六进制，或由扩展登记过的转义形式）。
   const authorityName = decodeMountAuthority(decodeAuthority(parsed.hostname));
