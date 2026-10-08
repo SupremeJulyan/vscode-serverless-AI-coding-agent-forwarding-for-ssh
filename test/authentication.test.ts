@@ -89,3 +89,9 @@ test('locates the correct password in hierarchical accounts without saved accoun
   assert.ok(configEntryOffset(content, 'dev(alice)')! < configEntryOffset(content, 'dev(bob)')!);
   assert.equal(passwordValueOffset(content, 'dev(missing)'), undefined);
 });
+
+test('locates a pending account using its IP identifier', () => {
+  const content = JSON.stringify({ hosts: [{ name: 'dev', ip: '10.0.0.1', accounts: [{ user: '' }] }] });
+  assert.notEqual(configEntryOffset(content, '10.0.0.1'), undefined);
+  assert.equal(passwordValueOffset(content, '10.0.0.1'), undefined);
+});

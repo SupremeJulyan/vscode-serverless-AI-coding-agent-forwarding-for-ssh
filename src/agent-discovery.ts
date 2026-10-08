@@ -2,7 +2,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 
 const maxRecordAgeMs = 35_000;
 
@@ -10,6 +10,7 @@ export interface AgentWorkspaceRecord {
   version: 1;
   instanceId: string;
   processId: number;
+  processPlatform?: NodeJS.Platform;
   focused: boolean;
   execution: 'remote';
   workspaceUri: string;
@@ -74,7 +75,10 @@ export function readAgentWorkspaceRecord(
       return undefined;
     }
     if (!Number.isInteger(value.processId) || value.processId! <= 0) return undefined;
-    try { process.kill(value.processId!, 0); }
+    const samePlatform = value.processPlatform
+      ? value.processPlatform === process.platform
+      : !(process.platform === 'linux' && /^\/mnt\/[a-z]\//i.test(filePath));
+    try { if (samePlatform) process.kill(value.processId!, 0); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') return undefined;
     }
@@ -115,7 +119,7 @@ export class AgentWorkspacePublisher {
     this.filePath = path.join(directory, `${instanceId}.json`);
   }
 
-  publish(record: Omit<AgentWorkspaceRecord, 'version' | 'instanceId' | 'processId' | 'updatedAt'>): Promise<void> {
+  publish(record: Omit<AgentWorkspaceRecord, 'version' | 'instanceId' | 'processId' | 'processPlatform' | 'updatedAt'>): Promise<void> {
     if (this.stopped) return Promise.resolve();
     const next = this.pending.then(async () => {
       if (this.stopped) return;
@@ -124,13 +128,19 @@ export class AgentWorkspacePublisher {
         version: 1,
         instanceId: this.instanceId,
         processId: process.pid,
+        processPlatform: process.platform,
         ...record,
         updatedAt: new Date().toISOString()
       };
-      await writeFile(this.filePath, `${JSON.stringify(value, null, 2)}\n`, {
-        encoding: 'utf8',
-        mode: 0o600
-      });
+      const temporaryPath = `${this.filePath}.tmp`;
+      try {
+        await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
+          encoding: 'utf8', mode: 0o600
+        });
+        await rename(temporaryPath, this.filePath);
+      } finally {
+        await rm(temporaryPath, { force: true });
+      }
     });
     this.pending = next.catch(() => {});
     return next;

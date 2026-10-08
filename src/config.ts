@@ -99,8 +99,16 @@ export function parseConfig(value: unknown): BridgeConfig {
   if (object.hosts.some(item => item && typeof item === 'object' && 'accounts' in item)) {
     const flatHosts: Record<string, unknown>[] = [];
     const mounts: MountConfig[] = [];
+    const accountLocations = new Map<string, string>();
     const aliases = { ...(parseHostAliases(object.host_aliases) ?? {}) };
     for (const [index, item] of object.hosts.entries()) {
+      if (item && typeof item === 'object' && !Array.isArray(item) && !('accounts' in item)) {
+        const legacy = parseConfig({ hosts: [item],
+          ...(Array.isArray(object.mounts) ? { mounts: object.mounts.filter(mount => mount?.host === item.name) } : {}) });
+        flatHosts.push(...legacy.hosts.map(host => ({ ...host })));
+        mounts.push(...legacy.mounts);
+        continue;
+      }
       if (!item || typeof item !== 'object' || !Array.isArray(item.accounts)) {
         throw new Error(`hosts[${index}] must contain an accounts array`);
       }
@@ -108,17 +116,26 @@ export function parseConfig(value: unknown): BridgeConfig {
       const label = requireString(item.name, `hosts[${index}].name`);
       if (label !== ip) aliases[ip] = label;
       const accounts = item.accounts.length ? item.accounts : [{ name: ip, user: '' }];
-      for (const account of accounts) {
+      for (const [accountIndex, account] of accounts.entries()) {
         if (!account || typeof account !== 'object' || Array.isArray(account)) throw new Error('Invalid account');
         const user = typeof account.user === 'string' ? account.user : '';
         const name = typeof account.name === 'string' && account.name ? account.name : user ? `${/[^\x00-\x7f]/.test(label) ? ip : label}(${user})` : ip;
+        const location = `hosts[${index}].accounts[${accountIndex}]`;
+        const previous = accountLocations.get(name);
+        if (previous) {
+          throw new Error(`config.json：${location} 与 ${previous} 的连接标识 '${name}' 冲突（主机 '${label}'，账号 '${user}'）；请修改 hosts 中的主机 name 或删除重复账号。`);
+        }
+        accountLocations.set(name, location);
         flatHosts.push({ ...account, name, ip, user });
         const connections = account.connections ?? [{ name, remote_path: '.' }];
         if (!Array.isArray(connections)) throw new Error('Invalid account connections');
-        for (const connection of connections) mounts.push({
+        for (const connection of connections) {
+          if (!connection || typeof connection !== 'object' || Array.isArray(connection)) throw new Error(`Invalid connection for account '${name}'`);
+          mounts.push({
           name: requireString(connection.name, 'connection.name'), host: name,
           remote_path: requireString(connection.remote_path, 'connection.remote_path'), remote_terminal: 'open'
-        });
+          });
+        }
       }
     }
     return parseConfig({ ...object, hosts: flatHosts, mounts, host_aliases: aliases });
@@ -254,6 +271,8 @@ export async function saveConfig(configPath: string, config: BridgeConfig, prese
       });
     }
     const saved = { encrypt_passwords: config.encrypt_passwords !== false, hosts: [...groups.values()] };
+    // Validate the serialized identifiers before replacing the existing file.
+    parseConfig(saved);
     await fs.writeFile(temporaryPath, `${JSON.stringify(saved, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     await fs.rename(temporaryPath, resolvedPath);
   } finally {

@@ -186,3 +186,14 @@ test('host-only workspace labels preserve account identity including escaped que
   url.search = encodeURIComponent(url.search.slice(1));
   assert.equal(parseRemoteUri(url.toString()).mountName, 'gyy(bob)');
 });
+
+test('host-only URIs preserve literal query characters and tolerate malformed preview metadata', () => {
+  for (const name of ['dev(a&b)', 'dev(a+b)', 'dev(a%b)', 'dev(a=b)']) {
+    const uri = remoteUri(name, '/project', 'dev');
+    assert.equal(parseRemoteUri(uri).mountName, name);
+    assert.equal(parseRemoteUri(`${uri}&preview=%invalid`).mountName, name);
+    const url = new URL(uri);
+    url.search = encodeURIComponent(url.search.slice(1));
+    assert.equal(parseRemoteUri(url.toString()).mountName, name);
+  }
+});

@@ -193,3 +193,36 @@ test('loading legacy config migrates it automatically and keeps a backup', async
   assert.equal(reloaded.mounts[0].remote_path, '/srv/repo');
   assert.equal(reloaded.mounts[0].host, 'old');
 });
+
+test('mixed legacy and hierarchical host records retain both connections', () => {
+  const config = parseConfig({ hosts: [
+    { name: 'legacy', ip: '10.0.0.1', user: 'alice' },
+    { name: 'dev', ip: '10.0.0.2', accounts: [{ user: 'bob' }] }
+  ] });
+  assert.deepEqual(config.hosts.map(host => host.name), ['legacy', 'dev(bob)']);
+  assert.deepEqual(config.mounts.map(mount => mount.host), ['legacy', 'dev(bob)']);
+});
+
+test('conflicting host and account identifiers report both config locations', () => {
+  assert.throws(() => parseConfig({ hosts: [
+    { name: 'dev', ip: '192.0.2.1', accounts: [{ user: 'alice' }] },
+    { name: 'dev', ip: '192.0.2.2', accounts: [{ user: 'alice' }] }
+  ] }), /hosts\[1\]\.accounts\[0\].*hosts\[0\]\.accounts\[0\].*dev\(alice\).*请修改/);
+  assert.equal(parseConfig({ hosts: [
+    { name: 'dev', ip: '192.0.2.1', accounts: [{ user: 'alice' }] },
+    { name: 'dev', ip: '192.0.2.2', accounts: [{ user: 'bob' }] }
+  ] }).hosts.length, 2);
+});
+
+test('saving conflicting generated identifiers preserves the existing config', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-conflict-'));
+  const configPath = path.join(directory, 'config.json');
+  const original = '{"hosts":[]}\n';
+  await writeFile(configPath, original);
+  const config = parseConfig({ hosts: [
+    { name: 'dev(alice)', ip: '192.0.2.1', user: 'alice' },
+    { name: 'dev(alice)#2', ip: '192.0.2.2', user: 'alice' }
+  ], host_aliases: { '192.0.2.1': 'dev', '192.0.2.2': 'dev' } });
+  await assert.rejects(saveConfig(configPath, config), /连接标识.*冲突/);
+  assert.equal(await readFile(configPath, 'utf8'), original);
+});

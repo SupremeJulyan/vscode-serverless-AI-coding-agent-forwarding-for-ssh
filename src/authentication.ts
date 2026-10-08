@@ -56,7 +56,7 @@ function hierarchicalAccountRange(content: string, name: string): { start: numbe
     const accounts = findNodeAtLocation(host, ['accounts']);
     for (const account of accounts?.children ?? []) {
       const value = getNodeValue(account);
-      if (value.name === name || `${base}(${value.user ?? ''})` === name) {
+      if (value.name === name || (value.user ? `${base}(${value.user})` : String(getNodeValue(host).ip)) === name) {
         return { start: account.offset, end: account.offset + account.length };
       }
     }

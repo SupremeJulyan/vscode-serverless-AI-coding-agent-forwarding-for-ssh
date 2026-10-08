@@ -24,6 +24,7 @@ test('publishes a private, versioned remote workspace record and removes it', as
   const value = JSON.parse(await readFile(filePath, 'utf8'));
   assert.equal(value.version, 1);
   assert.equal(value.instanceId, 'window-one');
+  assert.equal(value.processPlatform, process.platform);
   assert.equal(value.execution, 'remote');
   assert.equal(value.mountName, 'project');
   assert.equal(value.mcpServerName, undefined);
@@ -123,4 +124,18 @@ test('ignores a fresh record owned by a terminated process', async () => {
     host: 'dev', mcpUrl: 'http://127.0.0.1:9848/mcp', updatedAt: new Date().toISOString()
   }));
   assert.deepEqual(discoverAgentWorkspaces([directory]), []);
+});
+
+test('foreign platform PIDs are not checked against the local process table', async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'safs-discovery-foreign-'));
+  const directory = agentDiscoveryDirectory(home);
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, 'foreign.json'), JSON.stringify({
+    version: 1, instanceId: 'foreign', processId: 2147483647,
+    processPlatform: process.platform === 'win32' ? 'linux' : 'win32',
+    focused: true, execution: 'remote', workspaceUri: 'safs://project/srv/project',
+    mountName: 'project', workspaceRoot: '/srv/project', host: 'dev',
+    mcpUrl: 'http://127.0.0.1:9848/mcp', updatedAt: new Date().toISOString()
+  }));
+  assert.equal(discoverAgentWorkspaces([directory]).length, 1);
 });

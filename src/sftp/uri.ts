@@ -182,9 +182,15 @@ export function parseRemoteUri(value: string): RemoteUriLocation {
   if (parsed.username || parsed.password || parsed.port) {
     throw new Error(`Invalid remote workspace URI: ${value}`);
   }
-  const decodedQuery = new URLSearchParams(decodeURIComponent(parsed.search.slice(1)));
-  const queryMountName = parsed.searchParams.get('mount')
-    ?? (decodedQuery.get('hostLabel') === '1' ? decodedQuery.get('mount') : undefined);
+  let queryMountName = parsed.searchParams.get('mount');
+  // Decode a saved, wholly escaped query only when normal parameter parsing
+  // failed. Otherwise literal &, + and % inside mount names must stay encoded.
+  if (!queryMountName) {
+    try {
+      const decodedQuery = new URLSearchParams(decodeURIComponent(parsed.search.slice(1)));
+      if (decodedQuery.get('hostLabel') === '1') queryMountName = decodedQuery.get('mount');
+    } catch { /* unrelated malformed preview metadata is not a connection identifier */ }
+  }
   // `?mount=` 仅供参考：VS Code 可能把其中的 `=` 转义成 `%3D` 而取不到，所以
   // authority 必须是可还原的（十六进制，或由扩展登记过的转义形式）。
   const authorityName = decodeMountAuthority(decodeAuthority(parsed.hostname));
