@@ -255,6 +255,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       return element;
     }
     function label(event) { return labels[event.toolName] || event.toolName; }
+    function displayedAgentName(event) { return event.source === 'cli' ? '' : event.agentName; }
     function target(event) {
       const value = event.summary || {};
       const targetValue = value.path || value.targetPath || value.remotePath || value.remoteDirectory
@@ -300,7 +301,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       card.appendChild(head);
       const destination = target(event);
       if (destination) card.appendChild(textElement('div', 'target', destination));
-      const meta = [event.agentName, statusText(event.status), formatDuration(event), formatTime(event.startedAt)].filter(Boolean).join(' · ');
+      const meta = [displayedAgentName(event), statusText(event.status), formatDuration(event), formatTime(event.startedAt)].filter(Boolean).join(' · ');
       card.appendChild(textElement('div', 'meta', meta));
       if (Object.keys(event.summary || {}).length || event.error) card.appendChild(detailList(event));
       return card;
@@ -346,7 +347,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
         const wrapper = document.createElement('details');
         wrapper.className = 'group';
         const first = group.items[0];
-        wrapper.appendChild(textElement('summary', '', first.agentName + ' · ' + label(first) + ' × ' + group.items.length));
+        wrapper.appendChild(textElement('summary', '', [displayedAgentName(first), label(first) + ' × ' + group.items.length].filter(Boolean).join(' · ')));
         const list = textElement('div', 'group-items', '');
         group.items.slice().reverse().forEach(function(event) { list.appendChild(eventCard(event, true)); });
         wrapper.appendChild(list);
@@ -383,7 +384,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       events = incoming;
       const running = events.slice().reverse().find(function(event) { return event.status === 'running'; });
       if (running) {
-        setStatus('running', running.agentName + ' 正在' + label(running), target(running));
+        setStatus('running', (displayedAgentName(running) ? displayedAgentName(running) + ' ' : '') + '正在' + label(running), target(running));
       } else if (completedEvent) {
         setStatus(completedEvent.status === 'success' ? 'success' : 'error',
           label(completedEvent) + statusText(completedEvent.status), target(completedEvent));
