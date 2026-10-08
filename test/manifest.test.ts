@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { defaultHighRiskCommandPatterns } from '../src/high-risk-commands';
@@ -53,18 +54,12 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
 });
 
-test('extension and native CLI release versions stay synchronized', async () => {
+test('bundled Node CLI reports the extension release version', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
-  const cargo = await readFile(new URL('../native-cli/Cargo.toml', import.meta.url), 'utf8');
-  const nativeSource = await readFile(
-    new URL('../native-cli/src/main.rs', import.meta.url), 'utf8'
-  );
-  assert.match(cargo, new RegExp(`^version = "${manifest.version.replaceAll('.', '\\.')}"$`, 'm'));
-  assert.ok(nativeSource.includes(
-    `assert_eq!(env!("CARGO_PKG_VERSION"), "${manifest.version}")`
-  ));
+  const output = execFileSync(process.execPath, ['dist/safs-cli.js', '--version'], { encoding: 'utf8' });
+  assert.equal(output.trim(), `safs ${manifest.version}`);
 });
 
 test('every SAFS menu item references a contributed command', async () => {
@@ -181,15 +176,16 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
     new URL('../native-cli/src/main.rs', import.meta.url), 'utf8'
   );
   const nativeCliIntegrationSource = await readFile(
-    new URL('../src/native-cli.ts', import.meta.url), 'utf8'
+    new URL('../src/node-cli-install.ts', import.meta.url), 'utf8'
   );
   const vscodeIgnore = await readFile(new URL('../.vscodeignore', import.meta.url), 'utf8');
   assert.equal(extensionSource.includes('mcp-router.cjs'), false);
   assert.equal(extensionSource.includes("'--', 'node'"), false);
   assert.equal(nativeCliSource.includes('mcp-bridge'), false);
   assert.equal(/^bin\/\*\*$/m.test(vscodeIgnore), true);
-  assert.ok(nativeCliIntegrationSource.includes('releases/download'));
-  assert.ok(nativeCliIntegrationSource.includes('nativeCliDownloadUrl'));
+  assert.equal(nativeCliIntegrationSource.includes('releases/download'), false);
+  assert.ok(nativeCliIntegrationSource.includes('Node.js CLI'));
+  await access(new URL('../src/safs-cli.ts', import.meta.url));
   await access(new URL('../skills/safs-cli/SKILL.md', import.meta.url));
   await access(new URL('../skills/safs-cli/references/commands.md', import.meta.url));
   await assert.rejects(access(new URL(
@@ -199,8 +195,8 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
 
 test('Agent integration installs the bundled CLI Skill without probing Agent installations', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
-  assert.ok(nativeCliSource.includes('globalNativeCliSkill'));
+  const nativeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
+  assert.ok(nativeCliSource.includes('globalNodeCliSkill'));
   assert.ok(extensionSource.includes("args: ['install', '--skills', '-g']"));
   assert.equal(extensionSource.includes('nativeCliUsagePrompt'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
@@ -434,7 +430,7 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.equal(extensionSource.includes('legacyAgentInterfaceMigrationTarget'), false);
   assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
   assert.ok(extensionSource.includes('检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。'));
-  const nativeCliSource = await readFile(new URL('../src/native-cli.ts', import.meta.url), 'utf8');
+  const nativeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
   assert.ok(nativeCliSource.includes('user-level Streamable HTTP MCP'));
   assert.equal(nativeCliSource.includes('switch the proxy to rule-based mode'), false);
 });

@@ -3,84 +3,33 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto';
 import type { CommandPlan } from './platform';
 
-export type NativeCliPlatform =
+export type NodeCliPlatform =
   | 'linux-x64' | 'linux-arm64' | 'darwin-x64' | 'darwin-arm64'
   | 'win32-x64' | 'win32-arm64';
 
-export function nativeCliPlatform(
+export function nodeCliPlatform(
   host: NodeJS.Platform, arch: string
-): NativeCliPlatform {
+): NodeCliPlatform {
   const cpu = arch === 'x64' ? 'x64' : arch === 'arm64' ? 'arm64' : undefined;
   if (!cpu) throw new Error(`SAFS CLI 不支持 CPU 架构：${arch}`);
   const os = host === 'linux' ? 'linux'
     : host === 'darwin' ? 'darwin' : host === 'win32' ? 'win32' : undefined;
   if (!os) throw new Error(`SAFS CLI 不支持操作系统：${host}`);
-  return `${os}-${cpu}` as NativeCliPlatform;
-}
-
-const nativeCliReleaseBase =
-  'https://github.com/SupremeJulyan/vscode-serverless-AI-coding-agent-forwarding-for-ssh/releases/download';
-
-export function nativeCliAssetName(platform: NativeCliPlatform): string {
-  return `safs-${platform}${platform.startsWith('win32-') ? '.exe' : ''}`;
-}
-
-export function nativeCliDownloadUrl(version: string, platform: NativeCliPlatform): string {
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-    throw new Error(`无效的 SAFS CLI 版本：${version}`);
-  }
-  return `${nativeCliReleaseBase}/v${version}/${nativeCliAssetName(platform)}`;
-}
-
-export type NativeCliDownloader = (url: string) => Promise<Uint8Array>;
-
-const nativeCliDownloadRetryHint =
-  '确定网络正常后，使用命令“SAFS: 安装或更新全局 CLI”重新下载。';
-
-export async function downloadNativeCli(url: string): Promise<Uint8Array> {
-  try {
-    const response = await fetch(url, { redirect: 'follow' });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    }
-    const declared = Number(response.headers.get('content-length'));
-    if (Number.isFinite(declared) && declared > 10 * 1024 * 1024) {
-      throw new Error(`文件大小异常：${declared} 字节`);
-    }
-    return new Uint8Array(await response.arrayBuffer());
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`下载 SAFS CLI 失败：${detail}。${nativeCliDownloadRetryHint}`);
-  }
+  return `${os}-${cpu}` as NodeCliPlatform;
 }
 
 /** Parse the stable `safs --version` output without accepting unrelated numbers. */
-export function parseNativeCliVersion(output: string): string | undefined {
+export function parseNodeCliVersion(output: string): string | undefined {
   return /^safs\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s*$/m.exec(output)?.[1];
 }
 
-function validateNativeCli(
-  content: Uint8Array, platform: NativeCliPlatform, version: string
-): void {
-  if (content.byteLength < 100 * 1024 || content.byteLength > 10 * 1024 * 1024) {
-    throw new Error(`下载的 SAFS CLI 大小异常：${content.byteLength} 字节`);
-  }
-  const expected = platform.startsWith('win32-') ? '4d5a'
-    : platform.startsWith('darwin-') ? 'cffaedfe' : '7f454c46';
-  const actual = Buffer.from(content.subarray(0, expected.length / 2)).toString('hex');
-  if (actual !== expected) throw new Error(`下载的 SAFS CLI 文件格式与 ${platform} 不符`);
-  if (!Buffer.from(content).includes(Buffer.from(`safs ${version}`))) {
-    throw new Error(`下载的 SAFS CLI 版本与插件版本 ${version} 不一致`);
-  }
-}
-
-export function globalNativeCli(home: string, platform: NativeCliPlatform): string {
+export function globalNodeCli(home: string, platform: NodeCliPlatform): string {
   return platform.startsWith('win32-')
-    ? path.join(home, 'AppData', 'Local', 'SAFS', 'bin', 'safs.exe')
+    ? path.join(home, 'AppData', 'Local', 'SAFS', 'bin', 'safs.cmd')
     : path.join(home, '.local', 'bin', 'safs');
 }
 
-export function nativeCliConnectionPath(executable: string): string {
+export function nodeCliConnectionPath(executable: string): string {
   return path.join(path.dirname(executable), '.safs-connection.json');
 }
 
@@ -91,19 +40,19 @@ export function streamableHttpMcpInstallPrompt(url: string): string {
   ].join('\n');
 }
 
-export type NativeCliSkillTarget = 'agents' | 'claude' | 'codex' | 'copilot';
+export type NodeCliSkillTarget = 'agents' | 'claude' | 'codex' | 'copilot';
 
-export function globalNativeCliSkill(
-  home: string, target: NativeCliSkillTarget = 'agents'
+export function globalNodeCliSkill(
+  home: string, target: NodeCliSkillTarget = 'agents'
 ): string {
   const directory = target === 'copilot' ? '.copilot' : `.${target}`;
   return path.join(home, directory, 'skills', 'safs-cli');
 }
 
-export async function removeGlobalNativeCliSkill(
-  home: string, target: NativeCliSkillTarget = 'agents'
+export async function removeGlobalNodeCliSkill(
+  home: string, target: NodeCliSkillTarget = 'agents'
 ): Promise<string> {
-  const directory = globalNativeCliSkill(home, target);
+  const directory = globalNodeCliSkill(home, target);
   await rm(directory, { recursive: true, force: true });
   return directory;
 }
@@ -154,37 +103,28 @@ export function windowsUserPathRemovePlan(binDirectory: string): CommandPlan {
   };
 }
 
-/** Download, validate, and replace only the current platform CLI. */
-export async function installNativeCli(
-  home: string, platform: NativeCliPlatform, version: string,
-  hostPlatform: NodeJS.Platform = process.platform,
-  downloader: NativeCliDownloader = downloadNativeCli
+/** Install the bundled Node.js CLI without downloading platform binaries. */
+export async function installNodeCli(
+  home: string, platform: NodeCliPlatform, version: string,
+  source: string
 ): Promise<string> {
-  const destination = globalNativeCli(home, platform);
-  const destinationDirectory = path.dirname(destination);
-  await mkdir(destinationDirectory, { recursive: true });
-  const temporary = path.join(
-    destinationDirectory, `.safs-download-${process.pid}-${randomBytes(6).toString('hex')}`
-  );
+  const destination = globalNodeCli(home, platform);
+  const directory = path.dirname(destination);
+  const content = await readFile(source, 'utf8');
+  if (!content.startsWith('#!/usr/bin/env node') || !content.includes(version)) {
+    throw new Error('打包的 Node.js CLI 无效或版本不一致');
+  }
+  await mkdir(directory, { recursive: true });
+  const payload = platform.startsWith('win32-') ? path.join(directory, 'safs-cli.js') : destination;
+  const temporary = `${payload}.${randomBytes(6).toString('hex')}.tmp`;
   try {
-    const content = await downloader(nativeCliDownloadUrl(version, platform));
-    validateNativeCli(content, platform, version);
-    await writeFile(temporary, content, {
-      mode: 0o700, flag: 'wx'
-    });
-    // POSIX rename replaces atomically. Windows cannot replace an existing
-    // executable with rename, so remove the old installed copy first.
-    if (hostPlatform === 'win32') await rm(destination, { force: true });
-    await rename(temporary, destination);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-  // A Windows extension host installing into WSL addresses the destination via
-  // UNC. Node's chmod on that path can fail even though chmod inside WSL works;
-  // the caller applies the mode through wsl.exe after the copy.
-  if (!platform.startsWith('win32-') && hostPlatform !== 'win32') {
-    await chmod(destination, 0o755);
-  }
+    await writeFile(temporary, content, { mode: 0o755, flag: 'wx' });
+    await rename(temporary, payload);
+  } finally { await rm(temporary, { force: true }); }
+  if (platform.startsWith('win32-')) {
+    await writeFile(destination, '@echo off\r\nnode "%~dp0safs-cli.js" %*\r\n', 'utf8');
+    await rm(path.join(directory, 'safs.exe'), { force: true });
+  } else { await chmod(destination, 0o755); }
   return destination;
 }
 
@@ -235,15 +175,17 @@ export async function ensureUnixCliPath(home: string): Promise<void> {
 }
 
 /** Remove the global CLI, all supported global Skills, and Unix PATH entries. */
-export async function removeNativeCli(
-  home: string, platform: NativeCliPlatform
+export async function removeNodeCli(
+  home: string, platform: NodeCliPlatform
 ): Promise<string> {
-  const executable = globalNativeCli(home, platform);
+  const executable = globalNodeCli(home, platform);
   await Promise.all([
     rm(executable, { force: true }),
-    rm(nativeCliConnectionPath(executable), { force: true }),
+    rm(path.join(path.dirname(executable), 'safs-cli.js'), { force: true }),
+    ...(platform.startsWith('win32-') ? [rm(path.join(path.dirname(executable), 'safs.exe'), { force: true })] : []),
+    rm(nodeCliConnectionPath(executable), { force: true }),
     ...(['agents', 'claude', 'codex', 'copilot'] as const).map((target) =>
-      rm(globalNativeCliSkill(home, target), { recursive: true, force: true })
+      rm(globalNodeCliSkill(home, target), { recursive: true, force: true })
     ),
     ...(!platform.startsWith('win32-') ? [
       removeUnixProfilePath(path.join(home, '.profile')),

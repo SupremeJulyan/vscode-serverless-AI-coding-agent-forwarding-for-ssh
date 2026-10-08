@@ -9,10 +9,7 @@ const production = process.argv.includes('--production');
 // older builds so VSIX packages contain a single authoritative set.
 const wslOut = path.join(__dirname, 'dist', 'resources', 'wsl');
 fs.rmSync(wslOut, { recursive: true, force: true });
-// The Agent entry point is a native binary. Never leave the old Node wrapper
-// in a package after switching branches or upgrading an existing checkout.
-fs.rmSync(path.join(__dirname, 'dist', 'safs-cli.js'), { force: true });
-fs.rmSync(path.join(__dirname, 'dist', 'safs-cli.js.map'), { force: true });
+
 if (production) {
   // Development builds create this map. Do not let a stale artifact leak into
   // production VSIX packages, where it adds several megabytes but is unused.
@@ -50,4 +47,14 @@ esbuild.build({
   external: ['vscode', '*.node'],
   logLevel: 'info',
   plugins: [sftpBannerPatch]
+}).catch(() => process.exit(1));
+
+esbuild.build({
+  entryPoints: ['src/safs-cli.ts'], bundle: true, platform: 'node', target: 'node18',
+  format: 'cjs', outfile: 'dist/safs-cli.js', minify: production,
+  define: {
+    CLI_VERSION: JSON.stringify(require('./package.json').version),
+    CLI_SKILL: JSON.stringify(fs.readFileSync('skills/safs-cli/SKILL.md', 'utf8')),
+    CLI_REFERENCE: JSON.stringify(fs.readFileSync('skills/safs-cli/references/commands.md', 'utf8'))
+  }
 }).catch(() => process.exit(1));

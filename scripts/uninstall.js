@@ -70,6 +70,7 @@ async function cleanup(options = {}) {
   const binDirectory = path.join(home, '.local', 'bin');
   await Promise.all([
     fs.rm(path.join(binDirectory, 'safs'), { force: true }),
+    fs.rm(path.join(binDirectory, 'safs-cli.js'), { force: true }),
     fs.rm(path.join(binDirectory, '.safs-connection.json'), { force: true }),
     ...globalSkillDirectories(home).map((directory) =>
       fs.rm(directory, { recursive: true, force: true })),

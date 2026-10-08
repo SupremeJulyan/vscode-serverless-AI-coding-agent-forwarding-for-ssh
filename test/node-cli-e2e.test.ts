@@ -7,8 +7,11 @@ import { join } from 'node:path';
 import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
 import { AgentHttpRouter, workspaceIdFor } from '../src/agent-http-router';
 import { cliConfigPath, writeCliConnection } from '../src/cli-integration';
-import { nativeCliPlatform } from '../src/native-cli';
-import { executeCaptured } from '../src/process';
+import { executeCaptured as capture } from '../src/process';
+
+function executeCaptured(plan: Parameters<typeof capture>[0], ...rest: Parameters<typeof capture> extends [any, ...infer R] ? R : never) {
+  return capture({ ...plan, command: process.execPath, args: [plan.command, ...(plan.args ?? [])] }, ...rest);
+}
 
 async function freePort(): Promise<number> {
   const server = http.createServer();
@@ -22,11 +25,10 @@ async function freePort(): Promise<number> {
 }
 
 function developmentNativeCli(): string {
-  const platform = nativeCliPlatform(process.platform, process.arch);
-  return join(process.cwd(), 'bin', platform, platform.startsWith('win32-') ? 'safs.exe' : 'safs');
+  return join(process.cwd(), 'dist', 'safs-cli.js');
 }
 
-test('native CLI installs its bundled Agent Skill without a router', async () => {
+test('Node.js CLI installs its bundled Agent Skill without a router', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-skill-'));
   const executable = developmentNativeCli();
   try {
@@ -68,7 +70,7 @@ test('native CLI installs its bundled Agent Skill without a router', async () =>
   }
 });
 
-test('native CLI lists and executes through the existing SAFS router', async () => {
+test('Node.js CLI lists and executes through the existing SAFS router', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-e2e-'));
   let runs = 0;
   let currentFileReads = 0;
@@ -279,7 +281,7 @@ test('native CLI lists and executes through the existing SAFS router', async () 
   }
 });
 
-test('native CLI applies the connection-file request timeout', async () => {
+test('Node.js CLI applies the connection-file request timeout', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-timeout-'));
   const hanging = http.createServer(() => {});
   await new Promise<void>((resolve) => hanging.listen(0, '127.0.0.1', resolve));
@@ -304,7 +306,7 @@ test('native CLI applies the connection-file request timeout', async () => {
   }
 });
 
-test('native CLI bypasses proxy variables for loopback', async () => {
+test('Node.js CLI bypasses proxy variables for loopback', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-no-proxy-'));
   let proxyHits = 0;
   const proxy = http.createServer((_request, response) => {
@@ -350,7 +352,7 @@ test('native CLI bypasses proxy variables for loopback', async () => {
   }
 });
 
-test('native CLI preserves HTTP rejection details and redacts the token', async () => {
+test('Node.js CLI preserves HTTP rejection details and redacts the token', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-http-error-'));
   const server = http.createServer((_request, response) => {
     response.writeHead(400, { 'content-type': 'application/json' });
@@ -372,7 +374,7 @@ test('native CLI preserves HTTP rejection details and redacts the token', async 
   }
 });
 
-test('native CLI batch permits the combined operation budget', async () => {
+test('Node.js CLI batch permits the combined operation budget', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-native-batch-budget-'));
   const server = http.createServer((_request, response) => {
     setTimeout(() => {
