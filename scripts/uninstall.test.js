@@ -26,7 +26,8 @@ test('Unix cleanup removes CLI files, every global Skill, and managed profile en
   const home = await mkdtemp(path.join(tmpdir(), 'safs-uninstall-'));
   const bin = path.join(home, '.local', 'bin');
   await mkdir(bin, { recursive: true });
-  await writeFile(path.join(bin, 'safs'), 'binary');
+  await writeFile(path.join(bin, 'safs'), 'node launcher');
+  await writeFile(path.join(bin, 'safs-cli.js'), 'node payload');
   await writeFile(path.join(bin, '.safs-connection.json'), '{}');
   const skills = ['.agents', '.claude', '.codex', '.copilot'].map((directory) =>
     path.join(home, directory, 'skills', 'safs-cli'));
@@ -38,6 +39,7 @@ test('Unix cleanup removes CLI files, every global Skill, and managed profile en
   await cleanup({ platform: 'linux', home });
   assert.equal(await readFile(path.join(home, '.profile'), 'utf8'), 'keep\n');
   await assert.rejects(readFile(path.join(bin, 'safs')), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(bin, 'safs-cli.js')), { code: 'ENOENT' });
   await assert.rejects(readFile(path.join(bin, '.safs-connection.json')), { code: 'ENOENT' });
   for (const skill of skills) {
     await assert.rejects(readFile(path.join(skill, 'SKILL.md')), { code: 'ENOENT' });
@@ -51,13 +53,17 @@ test('Windows cleanup removes its install root and every global Skill', async ()
   const skills = ['.agents', '.claude', '.codex', '.copilot'].map((directory) =>
     path.join(home, directory, 'skills', 'safs-cli'));
   await mkdir(path.dirname(executable), { recursive: true });
-  await writeFile(executable, 'binary');
+  await writeFile(executable, 'legacy binary');
+  await writeFile(path.join(path.dirname(executable), 'safs.cmd'), 'node launcher');
+  await writeFile(path.join(path.dirname(executable), 'safs-cli.js'), 'node payload');
   await Promise.all(skills.map(async (skill) => {
     await mkdir(skill, { recursive: true });
     await writeFile(path.join(skill, 'SKILL.md'), 'installed');
   }));
   await cleanup({ platform: 'win32', home, run: () => undefined });
   await assert.rejects(readFile(executable), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(path.dirname(executable), 'safs.cmd')), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(path.dirname(executable), 'safs-cli.js')), { code: 'ENOENT' });
   for (const skill of skills) {
     await assert.rejects(readFile(path.join(skill, 'SKILL.md')), { code: 'ENOENT' });
   }

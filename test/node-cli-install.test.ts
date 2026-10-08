@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   NodeRuntimeUnavailableError, requireNodeRuntime, ensureUnixCliPath, globalNodeCli, installNodeCli,
-  globalNodeCliSkill, nodeCliConnectionPath, nodeCliPlatform,
+  globalNodeCliSkill, nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion, removeGlobalNodeCliSkill, removeNodeCli, withoutSafsPathBlock,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from '../src/node-cli-install';
 
-test('parses only the stable native CLI version output', () => {
+test('parses only the stable Node CLI version output', () => {
   assert.equal(parseNodeCliVersion('safs 1.8.2\n'), '1.8.2');
   assert.equal(parseNodeCliVersion('safs v2.0.0-beta.1\n'), '2.0.0-beta.1');
   assert.equal(parseNodeCliVersion('warning: version 1.8.0\n'), undefined);
@@ -35,15 +35,13 @@ test('locates and removes the global SAFS Agent Skill', async () => {
   }
 });
 
-test('selects native binaries for the current extension environment', () => {
-  assert.equal(nodeCliPlatform('linux', 'x64'), 'linux-x64');
-  assert.equal(nodeCliPlatform('darwin', 'arm64'), 'darwin-arm64');
-  assert.equal(nodeCliPlatform('win32', 'x64'), 'win32-x64');
-  assert.equal(nodeCliPlatform('win32', 'arm64'), 'win32-arm64');
-  const home = join(tmpdir(), 'safs-native-home');
-  assert.equal(globalNodeCli(home, 'linux-x64'), join(home, '.local', 'bin', 'safs'));
+test('locates platform launchers without restricting the Node CPU architecture', () => {
+  const home = join(tmpdir(), 'safs-node-home');
+  assert.equal(globalNodeCli(home, 'linux'), join(home, '.local', 'bin', 'safs'));
+  assert.equal(globalNodeCli(home, 'darwin'), join(home, '.local', 'bin', 'safs'));
+  assert.equal(globalNodeCli(home, 'freebsd'), join(home, '.local', 'bin', 'safs'));
+  assert.equal(globalNodeCli(home, 'win32'), join(home, 'AppData', 'Local', 'SAFS', 'bin', 'safs.cmd'));
   assert.equal(nodeCliConnectionPath(join(home, '.local', 'bin', 'safs')), join(home, '.local', 'bin', '.safs-connection.json'));
-  assert.throws(() => nodeCliPlatform('linux', 'ia32'));
 });
 
 test('builds a concise Streamable HTTP MCP installation prompt', () => {
@@ -93,22 +91,22 @@ test('installs the bundled Node CLI and migrates Windows native launchers', asyn
     const source = join(root, 'cli.js');
     const content = '#!/usr/bin/env node\nconsole.log("safs 2.0.4");\n';
     await writeFile(source, content);
-    const installed = await installNodeCli(root, 'linux-x64', '2.0.4', source);
+    const installed = await installNodeCli(root, 'linux', '2.0.4', source);
     assert.equal(await readFile(installed, 'utf8'), content);
     await writeFile(source, 'invalid');
-    await assert.rejects(installNodeCli(root, 'linux-x64', '2.0.4', source));
+    await assert.rejects(installNodeCli(root, 'linux', '2.0.4', source));
     assert.equal(await readFile(installed, 'utf8'), content);
     await writeFile(source, content);
     const winRoot = join(root, 'windows');
-    const win = globalNodeCli(winRoot, 'win32-x64');
+    const win = globalNodeCli(winRoot, 'win32');
     await mkdir(join(winRoot, 'AppData', 'Local', 'SAFS', 'bin'), { recursive: true });
     const old = join(winRoot, 'AppData', 'Local', 'SAFS', 'bin', 'safs.exe');
     await writeFile(old, 'old binary');
-    assert.equal(await installNodeCli(winRoot, 'win32-x64', '2.0.4', source), win);
+    assert.equal(await installNodeCli(winRoot, 'win32', '2.0.4', source), win);
     assert.match(await readFile(win, 'utf8'), /node "%~dp0safs-cli.js" %\*/);
     assert.equal(await readFile(join(winRoot, 'AppData', 'Local', 'SAFS', 'bin', 'safs-cli.js'), 'utf8'), content);
     await assert.rejects(readFile(old), { code: 'ENOENT' });
-    await removeNodeCli(winRoot, 'win32-x64');
+    await removeNodeCli(winRoot, 'win32');
     await assert.rejects(readFile(win), { code: 'ENOENT' });
     await assert.rejects(readFile(join(winRoot, 'AppData', 'Local', 'SAFS', 'bin', 'safs-cli.js')), { code: 'ENOENT' });
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -132,7 +130,7 @@ test('adds the user CLI directory to the Unix login PATH idempotently', async ()
 test('removes CLI files, every global Skill, and managed Unix PATH entries', async () => {
   const home = await mkdtemp(join(tmpdir(), 'safs-native-remove-'));
   try {
-    const executable = globalNodeCli(home, 'linux-x64');
+    const executable = globalNodeCli(home, 'linux');
     await import('node:fs/promises').then(fs => fs.mkdir(join(home, '.local', 'bin'), { recursive: true }));
     await writeFile(executable, 'native');
     await writeFile(nodeCliConnectionPath(executable), '{}');
@@ -144,7 +142,7 @@ test('removes CLI files, every global Skill, and managed Unix PATH entries', asy
     }
     await writeFile(join(home, '.profile'), 'before\n# SAFS CLI PATH BEGIN\nmanaged\n# SAFS CLI PATH END\nafter\n');
     await writeFile(join(home, '.zprofile'), '# SAFS CLI PATH BEGIN\nmanaged\n# SAFS CLI PATH END\nkeep\n');
-    await removeNodeCli(home, 'linux-x64');
+    await removeNodeCli(home, 'linux');
     await assert.rejects(readFile(executable), { code: 'ENOENT' });
     await assert.rejects(readFile(nodeCliConnectionPath(executable)), { code: 'ENOENT' });
     for (const target of skills) {
@@ -168,4 +166,32 @@ test('accepts Node 18+ and identifies missing, old, or invalid runtimes', async 
     await assert.rejects(requireNodeRuntime(async () => result), NodeRuntimeUnavailableError);
   }
   await assert.rejects(requireNodeRuntime(async () => { throw new Error('ENOENT'); }), NodeRuntimeUnavailableError);
+});
+
+test('detects deleted payloads, damaged Windows shims and shadowing old binaries', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safs-node-repair-'));
+  try {
+    const source = join(root, 'bundle.js');
+    const content = '#!/usr/bin/env node\nconsole.log("safs 2.0.4");\n';
+    await writeFile(source, content);
+    const executable = await installNodeCli(root, 'win32', '2.0.4', source);
+    const directory = join(root, 'AppData', 'Local', 'SAFS', 'bin');
+    assert.equal(await nodeCliMatchesBundle(executable, 'win32', source), true);
+    await writeFile(executable, 'broken shim');
+    assert.equal(await nodeCliMatchesBundle(executable, 'win32', source), false);
+    await installNodeCli(root, 'win32', '2.0.4', source);
+    await writeFile(join(directory, 'safs.exe'), 'legacy');
+    assert.equal(await nodeCliMatchesBundle(executable, 'win32', source), false);
+    await installNodeCli(root, 'win32', '2.0.4', source);
+    assert.equal(await nodeCliMatchesBundle(executable, 'win32', source), true);
+    await rm(join(directory, 'safs-cli.js'));
+    assert.equal(await nodeCliMatchesBundle(executable, 'win32', source), false);
+    await installNodeCli(root, 'win32', '2.0.4', source);
+    assert.equal(await nodeCliMatchesBundle(executable, 'win32', source), true);
+    await rm(executable);
+    await mkdir(executable);
+    const payload = join(directory, 'safs-cli.js');
+    await assert.rejects(installNodeCli(root, 'win32', '2.0.4', source));
+    assert.equal(await readFile(payload, 'utf8'), content);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

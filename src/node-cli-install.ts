@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import type { CommandPlan } from './platform';
 
@@ -19,20 +19,7 @@ export async function requireNodeRuntime(
   }
 }
 
-export type NodeCliPlatform =
-  | 'linux-x64' | 'linux-arm64' | 'darwin-x64' | 'darwin-arm64'
-  | 'win32-x64' | 'win32-arm64';
-
-export function nodeCliPlatform(
-  host: NodeJS.Platform, arch: string
-): NodeCliPlatform {
-  const cpu = arch === 'x64' ? 'x64' : arch === 'arm64' ? 'arm64' : undefined;
-  if (!cpu) throw new Error(`SAFS CLI 不支持 CPU 架构：${arch}`);
-  const os = host === 'linux' ? 'linux'
-    : host === 'darwin' ? 'darwin' : host === 'win32' ? 'win32' : undefined;
-  if (!os) throw new Error(`SAFS CLI 不支持操作系统：${host}`);
-  return `${os}-${cpu}` as NodeCliPlatform;
-}
+export type NodeCliPlatform = NodeJS.Platform;
 
 /** Parse the stable `safs --version` output without accepting unrelated numbers. */
 export function parseNodeCliVersion(output: string): string | undefined {
@@ -40,7 +27,7 @@ export function parseNodeCliVersion(output: string): string | undefined {
 }
 
 export function globalNodeCli(home: string, platform: NodeCliPlatform): string {
-  return platform.startsWith('win32-')
+  return platform === 'win32'
     ? path.join(home, 'AppData', 'Local', 'SAFS', 'bin', 'safs.cmd')
     : path.join(home, '.local', 'bin', 'safs');
 }
@@ -119,6 +106,25 @@ export function windowsUserPathRemovePlan(binDirectory: string): CommandPlan {
   };
 }
 
+const windowsCliLauncher = '@echo off\r\nnode "%~dp0safs-cli.js" %*\r\n';
+
+/** Verify payload and launcher, including legacy executables that shadow .cmd. */
+export async function nodeCliMatchesBundle(
+  executable: string, platform: NodeCliPlatform, source: string
+): Promise<boolean> {
+  try {
+    const directory = path.dirname(executable);
+    const payload = platform === 'win32' ? path.join(directory, 'safs-cli.js') : executable;
+    const [installed, bundled] = await Promise.all([readFile(payload), readFile(source)]);
+    if (!installed.equals(bundled)) return false;
+    if (platform === 'win32') {
+      if (await readFile(executable, 'utf8') !== windowsCliLauncher) return false;
+      if (await lstat(path.join(directory, 'safs.exe')).then(() => true, () => false)) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
 /** Install the bundled Node.js CLI without downloading platform binaries. */
 export async function installNodeCli(
   home: string, platform: NodeCliPlatform, version: string,
@@ -131,16 +137,27 @@ export async function installNodeCli(
     throw new Error('打包的 Node.js CLI 无效或版本不一致');
   }
   await mkdir(directory, { recursive: true });
-  const payload = platform.startsWith('win32-') ? path.join(directory, 'safs-cli.js') : destination;
+  const payload = platform === 'win32' ? path.join(directory, 'safs-cli.js') : destination;
   const temporary = `${payload}.${randomBytes(6).toString('hex')}.tmp`;
+  const launcherTemporary = `${destination}.${randomBytes(6).toString('hex')}.tmp`;
+  if (platform === 'win32') {
+    const existing = await lstat(destination).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return undefined;
+    });
+    if (existing && !existing.isFile()) throw new Error('SAFS CLI 启动入口不是普通文件');
+  }
   try {
     await writeFile(temporary, content, { mode: 0o755, flag: 'wx' });
+    if (platform === 'win32') await writeFile(launcherTemporary, windowsCliLauncher, { flag: 'wx' });
     await rename(temporary, payload);
-  } finally { await rm(temporary, { force: true }); }
-  if (platform.startsWith('win32-')) {
-    await writeFile(destination, '@echo off\r\nnode "%~dp0safs-cli.js" %*\r\n', 'utf8');
-    await rm(path.join(directory, 'safs.exe'), { force: true });
-  } else { await chmod(destination, 0o755); }
+    if (platform === 'win32') {
+      await rename(launcherTemporary, destination);
+      await rm(path.join(directory, 'safs.exe'), { force: true });
+    } else { await chmod(destination, 0o755); }
+  } finally {
+    await Promise.all([rm(temporary, { force: true }), rm(launcherTemporary, { force: true })]);
+  }
   return destination;
 }
 
@@ -198,12 +215,12 @@ export async function removeNodeCli(
   await Promise.all([
     rm(executable, { force: true }),
     rm(path.join(path.dirname(executable), 'safs-cli.js'), { force: true }),
-    ...(platform.startsWith('win32-') ? [rm(path.join(path.dirname(executable), 'safs.exe'), { force: true })] : []),
+    ...(platform === 'win32' ? [rm(path.join(path.dirname(executable), 'safs.exe'), { force: true })] : []),
     rm(nodeCliConnectionPath(executable), { force: true }),
     ...(['agents', 'claude', 'codex', 'copilot'] as const).map((target) =>
       rm(globalNodeCliSkill(home, target), { recursive: true, force: true })
     ),
-    ...(!platform.startsWith('win32-') ? [
+    ...(platform !== 'win32' ? [
       removeUnixProfilePath(path.join(home, '.profile')),
       removeUnixProfilePath(path.join(home, '.zprofile'))
     ] : [])

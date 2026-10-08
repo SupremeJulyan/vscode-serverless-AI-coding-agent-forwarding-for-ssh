@@ -14,7 +14,7 @@ import { updateCliInstructions, writeCliConnectionFile } from './cli-integration
 import {
   ensureUnixCliPath, globalNodeCli, installNodeCli, removeNodeCli,
   NodeRuntimeUnavailableError, requireNodeRuntime,
-  nodeCliConnectionPath, nodeCliPlatform,
+  nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
@@ -5476,11 +5476,11 @@ async function probeInstalledCliVersion(executable: string): Promise<string | un
 
 async function ensureGlobalCliVersion(
   context: vscode.ExtensionContext, executable: string,
-  nativePlatform: ReturnType<typeof nodeCliPlatform>, agentHome: string
+  cliPlatform: NodeJS.Platform, agentHome: string
 ): Promise<void> {
   const extensionVersion = String(context.extension.packageJSON?.version ?? '');
   if (!extensionVersion) throw new Error('无法读取当前 SAFS 插件版本');
-  const checkKey = `node\0${nativePlatform}\0${executable}\0${extensionVersion}`;
+  const checkKey = `node\0${cliPlatform}\0${executable}\0${extensionVersion}`;
   const existing = cliVersionChecks.get(checkKey);
   if (existing) return existing;
   const check = (async () => {
@@ -5492,14 +5492,13 @@ async function ensureGlobalCliVersion(
       ? await probeInstalledCliVersion(executable)
       : undefined;
     const bundledSource = path.join(context.extensionPath, 'dist', 'safs-cli.js');
-    const installedPayload = nativePlatform.startsWith('win32-') ? path.join(path.dirname(executable), 'safs-cli.js') : executable;
-    const matchesBundle = await Promise.all([readFile(installedPayload), readFile(bundledSource)]).then(([a,b]) => a.equals(b), () => false);
+    const matchesBundle = await nodeCliMatchesBundle(executable, cliPlatform, bundledSource);
     if (installedVersion !== extensionVersion || !matchesBundle) {
       bridgeOutput?.warn(
         `[Agent CLI] 正在安装打包的 Node.js CLI；installed=${installedVersion ?? '<unknown>'}；` +
-        `extension=${extensionVersion}；platform=${nativePlatform}`
+        `extension=${extensionVersion}；platform=${cliPlatform}`
       );
-      await installNodeCli(agentHome, nativePlatform, extensionVersion, bundledSource);
+      await installNodeCli(agentHome, cliPlatform, extensionVersion, bundledSource);
       const refreshedVersion = await probeInstalledCliVersion(executable);
       if (refreshedVersion !== extensionVersion) {
         throw new Error(
@@ -5513,12 +5512,11 @@ async function ensureGlobalCliVersion(
       bridgeOutput?.debug(`[Agent CLI] 版本检查通过：${installedVersion}；${executable}`);
     }
     await context.globalState.update(cliInstallKey, {
-      platform: nativePlatform, installPath: executable, version: extensionVersion,
+      platform: cliPlatform, installPath: executable, version: extensionVersion,
       home: agentHome
     });
-  })().catch((error) => {
+  })().finally(() => {
     cliVersionChecks.delete(checkKey);
-    throw error;
   });
   cliVersionChecks.set(checkKey, check);
   return check;
@@ -5528,11 +5526,11 @@ async function installGlobalCli(
   context: vscode.ExtensionContext, routerUrl: string
 ): Promise<string> {
   const agentHome = os.homedir();
-  const nativePlatform = nodeCliPlatform(process.platform, process.arch);
-  const executable = globalNodeCli(agentHome, nativePlatform);
+  const cliPlatform = process.platform;
+  const executable = globalNodeCli(agentHome, cliPlatform);
   // 核对版本与打包内容，将旧版原生二进制迁移为 Node.js CLI。
   await ensureGlobalCliVersion(
-    context, executable, nativePlatform, agentHome
+    context, executable, cliPlatform, agentHome
   );
   const forwardingTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
   const cliTimeoutMs = forwardingTimeoutMs > 0 ? forwardingTimeoutMs + 5_000 : 0;
@@ -5540,7 +5538,7 @@ async function installGlobalCli(
     nodeCliConnectionPath(executable), routerUrl, cliTimeoutMs
   );
   const binDirectory = path.dirname(executable);
-  if (nativePlatform.startsWith('win32-')) {
+  if (cliPlatform === 'win32') {
     const result = await executeCaptured(windowsUserPathUpdatePlan(binDirectory));
     if (result.exitCode !== 0) throw new Error('无法更新用户级 PATH：' + result.stderr.trim());
   } else {
@@ -5556,17 +5554,17 @@ async function installGlobalCli(
 
 async function uninstallGlobalCli(context: vscode.ExtensionContext): Promise<string> {
   const agentHome = os.homedir();
-  const nativePlatform = nodeCliPlatform(process.platform, process.arch);
-  const executable = globalNodeCli(agentHome, nativePlatform);
+  const cliPlatform = process.platform;
+  const executable = globalNodeCli(agentHome, cliPlatform);
   const binDirectory = path.dirname(executable);
   let pathError: Error | undefined;
-  if (nativePlatform.startsWith('win32-')) {
+  if (cliPlatform === 'win32') {
     const result = await executeCaptured(windowsUserPathRemovePlan(binDirectory));
     if (result.exitCode !== 0) {
       pathError = new Error('无法从用户级 PATH 移除 SAFS CLI：' + result.stderr.trim());
     }
   }
-  await removeNodeCli(agentHome, nativePlatform);
+  await removeNodeCli(agentHome, cliPlatform);
   context.environmentVariableCollection.delete('PATH');
   const samePath = (entry: string) => process.platform === 'win32'
     ? entry.toLocaleLowerCase() === binDirectory.toLocaleLowerCase()
