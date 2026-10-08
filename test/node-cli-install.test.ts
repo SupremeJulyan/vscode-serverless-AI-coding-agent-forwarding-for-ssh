@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  ensureUnixCliPath, globalNodeCli, installNodeCli,
+  NodeRuntimeUnavailableError, requireNodeRuntime, ensureUnixCliPath, globalNodeCli, installNodeCli,
   globalNodeCliSkill, nodeCliConnectionPath, nodeCliPlatform,
   parseNodeCliVersion, removeGlobalNodeCliSkill, removeNodeCli, withoutSafsPathBlock,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
@@ -157,4 +157,15 @@ test('removes CLI files, every global Skill, and managed Unix PATH entries', asy
     assert.equal(await readFile(join(home, '.zprofile'), 'utf8'), 'keep\n');
     assert.equal(withoutSafsPathBlock('plain\n'), 'plain\n');
   } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test('accepts Node 18+ and identifies missing, old, or invalid runtimes', async () => {
+  for (const stdout of ['v18.20.8\n', 'v22.0.0', 'v24.21.0\r\n']) {
+    await requireNodeRuntime(async () => ({ exitCode: 0, stdout }));
+  }
+  for (const result of [{ exitCode: 0, stdout: 'v16.20.2' }, { exitCode: 0, stdout: '' },
+    { exitCode: 0, stdout: 'unrelated 22' }, { exitCode: 1, stdout: 'v22.0.0' }]) {
+    await assert.rejects(requireNodeRuntime(async () => result), NodeRuntimeUnavailableError);
+  }
+  await assert.rejects(requireNodeRuntime(async () => { throw new Error('ENOENT'); }), NodeRuntimeUnavailableError);
 });

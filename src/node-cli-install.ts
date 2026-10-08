@@ -3,6 +3,22 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto';
 import type { CommandPlan } from './platform';
 
+export class NodeRuntimeUnavailableError extends Error {
+  constructor() {
+    super('未检测到可用的 Node.js 18 或以上版本。请安装或升级 Node.js，并重启 VS Code 后运行“SAFS: 安装或更新全局 CLI”。');
+    this.name = 'NodeRuntimeUnavailableError';
+  }
+}
+
+export async function requireNodeRuntime(
+  probe: () => Promise<{ exitCode: number; stdout: string }>
+): Promise<void> {
+  const result = await probe().catch(() => undefined);
+  if (!result || result.exitCode !== 0 || Number(/^v(\d+)\.\d+\.\d+\s*$/.exec(result.stdout.trim())?.[1] ?? 0) < 18) {
+    throw new NodeRuntimeUnavailableError();
+  }
+}
+
 export type NodeCliPlatform =
   | 'linux-x64' | 'linux-arm64' | 'darwin-x64' | 'darwin-arm64'
   | 'win32-x64' | 'win32-arm64';

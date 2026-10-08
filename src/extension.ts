@@ -13,6 +13,7 @@ import { RemoteGitHistory } from './remote-git-history';
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
   ensureUnixCliPath, globalNodeCli, installNodeCli, removeNodeCli,
+  NodeRuntimeUnavailableError, requireNodeRuntime,
   nodeCliConnectionPath, nodeCliPlatform,
   parseNodeCliVersion,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
@@ -5483,10 +5484,9 @@ async function ensureGlobalCliVersion(
   const existing = cliVersionChecks.get(checkKey);
   if (existing) return existing;
   const check = (async () => {
-    const nodeVersion = await executeCaptured({ command: 'node', args: ['--version'] }, AbortSignal.timeout(5000), 4096).catch(() => undefined);
-    if (!nodeVersion || nodeVersion.exitCode !== 0 || Number(/^v(\d+)/.exec(nodeVersion.stdout)?.[1] ?? 0) < 18) {
-      throw new Error('SAFS CLI 需要 Node.js 18 或以上版本，请安装 Node.js 后重启 VS Code，再运行“SAFS: 安装或更新全局 CLI”。');
-    }
+    await requireNodeRuntime(() => executeCaptured(
+      { command: 'node', args: ['--version'] }, AbortSignal.timeout(5000), 4096
+    ));
     const fileExists = await access(executable).then(() => true, () => false);
     const installedVersion = fileExists
       ? await probeInstalledCliVersion(executable)
@@ -5607,13 +5607,16 @@ async function configureAgentInterface(
     await installGlobalCliSkill(executable);
   } catch (error) {
     const detail = redactSensitiveText(error instanceof Error ? error.message : String(error));
+    const missingNode = error instanceof NodeRuntimeUnavailableError;
     const action = await vscode.window.showErrorMessage(
-      'SAFS CLI 安装或更新失败',
-      { modal: true, detail: `${detail}\n请检查网络是否能够访问 GitHub。也可以切换 MCP 模式，跳过 CLI 下载。` },
-      '检查 GitHub 网络', '切换 MCP 模式'
+      missingNode ? 'SAFS CLI 需要 Node.js 18 或以上版本' : 'SAFS CLI 安装或更新失败',
+      { modal: true, detail: missingNode
+        ? `${detail}\n也可以切换 MCP 模式，无需安装 Node.js。`
+        : `${detail}\n请检查本地 Node.js 环境与安装目录权限，也可以切换 MCP 模式。` },
+      ...(missingNode ? ['安装 Node.js', '切换 MCP 模式'] : ['切换 MCP 模式'])
     );
-    if (action === '检查 GitHub 网络') {
-      await vscode.env.openExternal(vscode.Uri.parse('https://github.com'));
+    if (action === '安装 Node.js') {
+      await vscode.env.openExternal(vscode.Uri.parse('https://nodejs.org/zh-cn'));
     }
     if (action === '切换 MCP 模式') {
       await settings().update('agentInterface', 'mcp', vscode.ConfigurationTarget.Global);
