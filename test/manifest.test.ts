@@ -202,7 +202,7 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
   assert.ok(extensionSource.includes("tagged.searchParams.delete('agent')"));
-  assert.ok(extensionSource.includes("command('installCli'"));
+  assert.equal(extensionSource.includes("command('installCli'"), false);
   assert.ok(extensionSource.includes("if (!cliEnabled())"));
   assert.equal(extensionSource.includes('cliAgentIdentity'), false);
   assert.ok(extensionSource.includes("args: ['--version']"));
@@ -407,10 +407,10 @@ test('installs forwarding only for the globally first enabled mount or an explic
   const installCli = commands.find((item) => item.command === 'safs.installCli');
   assert.equal(install?.title, 'SAFS: 为我的Agent安装转发功能');
   assert.equal(uninstall?.title, 'SAFS: 为我的Agent卸载转发功能');
-  assert.equal(installCli?.title, 'SAFS: 安装或更新全局 CLI');
+  assert.equal(installCli, undefined);
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.installAgentForwarding'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.uninstallAgentForwarding'));
-  assert.ok(manifest.activationEvents?.includes('onCommand:safs.installCli'));
+  assert.equal(manifest.activationEvents?.includes('onCommand:safs.installCli'), false);
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes("command('installAgentForwarding'"));
   assert.equal(extensionSource.includes('.installAgentForwarding`'), false);

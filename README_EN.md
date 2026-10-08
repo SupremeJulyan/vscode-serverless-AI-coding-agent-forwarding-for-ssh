@@ -37,7 +37,7 @@ The first time you open the configured remote home from a parent connection node
 
 **CLI mode** is the default and requires local **Node.js 18+**. The extension installs the global `safs` command and Skill. If Node.js is missing, the dialog offers an [installation link](https://nodejs.org/zh-cn) or a switch to MCP mode.
 
-Restart VS Code, run `safs --version` to check installation, then enter `/safs-cli` in your Agent and select a remote workspace. To repair installation, run `SAFS: Install or Update Global CLI`.
+Restart VS Code, run `safs --version` to check installation, then enter `/safs-cli` in your Agent and select a remote workspace.
 
 For **MCP mode**, first set `safs.agentInterface` to `mcp`:
 

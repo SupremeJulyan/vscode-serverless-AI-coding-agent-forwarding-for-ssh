@@ -6191,20 +6191,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.env.clipboard.writeText(url);
     void vscode.window.showInformationMessage('SAFS：URL 已复制。');
   });
-  command('installCli', async () => {
-    if (agentInterface() !== 'cli') {
-      await settings().update('agentInterface', 'cli', vscode.ConfigurationTarget.Global);
-      return;
-    }
-    startAgentHttpRouterLeadership(context);
-    const executable = (await configureAgentInterface(context)).cliExecutable;
-    if (!executable) {
-      if (agentInterface() === 'mcp') return;
-      throw new Error('SAFS CLI 尚未安装');
-    }
-    bridgeOutput?.info(`[Agent CLI] 用户主动安装或更新完成：${executable}`);
-    await installAgentForwardingIntegration(context, executable);
-  });
   command('installAgentForwarding', async () => {
     // This explicit command prepares the selected interface. MCP mode copies its
     // install prompt; CLI mode copies the mutually exclusive MCP removal prompt.

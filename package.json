@@ -53,7 +53,6 @@
     "onCommand:safs.addHostCredentials",
     "onCommand:safs.renameHost",
     "onCommand:safs.copyStreamableHttpUrl",
-    "onCommand:safs.installCli",
     "onCommand:safs.installAgentForwarding",
     "onCommand:safs.uninstallAgentForwarding",
     "onCommand:safs.openHistoryItem",
@@ -127,10 +126,6 @@
       {
         "command": "safs.testLocalProxy",
         "title": "SAFS: 测试本机代理连接"
-      },
-      {
-        "command": "safs.installCli",
-        "title": "SAFS: 安装或更新全局 CLI"
       },
       {
         "command": "safs.installAgentForwarding",

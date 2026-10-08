@@ -12,7 +12,7 @@ safs install --skills       # current project
 safs install --skills -g    # user-level Skill
 ```
 
-The extension installs and updates the global CLI. Use `SAFS: Install or Update Global CLI` in VS Code to repair it.
+The extension installs and updates the global CLI. Restart VS Code in CLI mode to retry installation.
 
 ## Workspace
 

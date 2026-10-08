@@ -7,7 +7,7 @@ description: Operate an SSH/SFTP remote workspace through the installed SAFS CLI
 
 SAFS exposes a remote workspace through the global `safs` command while the SAFS VS Code extension is running in CLI mode. The CLI requires local Node.js 18+.
 
-The extension installs the CLI and this Skill. If `safs` is unavailable, use `SAFS: Install or Update Global CLI` in VS Code. If Node.js is missing, the extension offers https://nodejs.org/zh-cn or MCP mode.
+The extension installs the CLI and this Skill. If `safs` is unavailable, restart VS Code in CLI mode to trigger automatic installation. If Node.js is missing, the extension offers https://nodejs.org/zh-cn or MCP mode.
 
 ## Select a workspace
 
