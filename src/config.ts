@@ -111,7 +111,7 @@ export function parseConfig(value: unknown): BridgeConfig {
       for (const account of accounts) {
         if (!account || typeof account !== 'object' || Array.isArray(account)) throw new Error('Invalid account');
         const user = typeof account.user === 'string' ? account.user : '';
-        const name = typeof account.name === 'string' && account.name ? account.name : `${label}(${user})`;
+        const name = typeof account.name === 'string' && account.name ? account.name : user ? `${/[^\x00-\x7f]/.test(label) ? ip : label}(${user})` : ip;
         flatHosts.push({ ...account, name, ip, user });
         const connections = account.connections ?? [{ name, remote_path: '.' }];
         if (!Array.isArray(connections)) throw new Error('Invalid account connections');
@@ -210,7 +210,7 @@ export async function loadConfig(configPath: string): Promise<BridgeConfig> {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     });
     await fs.chmod(backup, 0o600);
-    await saveConfig(configPath, config);
+    await saveConfig(configPath, config, true);
   }
   return config;
 }
@@ -229,7 +229,7 @@ export async function ensureConfigFile(configPath: string): Promise<string> {
   return resolvedPath;
 }
 
-export async function saveConfig(configPath: string, config: BridgeConfig): Promise<void> {
+export async function saveConfig(configPath: string, config: BridgeConfig, preserveLegacyNames = false): Promise<void> {
   const resolvedPath = expandHome(configPath);
   await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
   const temporaryPath = path.join(
@@ -244,10 +244,11 @@ export async function saveConfig(configPath: string, config: BridgeConfig): Prom
         group = { name: config.host_aliases?.[host.ip] ?? host.ip, ip: host.ip, accounts: [] };
         groups.set(host.ip, group);
       }
-      const { ip: _ip, ...account } = host;
+      const { ip: _ip, name: _name, ...account } = host;
       const connections = config.mounts.filter(mount => mount.host === host.name);
       group.accounts.push({
         ...account,
+        ...(preserveLegacyNames ? { name: host.name } : {}),
         ...(connections.length === 1 && connections[0].name === host.name && connections[0].remote_path === '.'
           ? {} : { connections: connections.map(({ name, remote_path }) => ({ name, remote_path })) })
       });

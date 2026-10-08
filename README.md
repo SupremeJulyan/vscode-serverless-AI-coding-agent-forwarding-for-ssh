@@ -35,7 +35,6 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
       "ip": "10.0.0.2",
       "accounts": [
         {
-          "name": "10.0.0.2(alice)",
           "user": "alice",
           "port": 22,
           "private_key_path": "~/.ssh/id_ed25519"
@@ -46,7 +45,7 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 }
 ```
 
-配置按 SAFS 目录树中的主机、账号分组：`hosts` 是主机，`accounts` 是账号。历史目录继续保存在 VS Code 扩展的全局状态中，不写入 `config.json`。账号中的 `name` 是用于兼容已有窗口、标签页与同步记录的连接标识；界面和 Agent 工作区使用主机名、账号和目录展示。旧版平铺的 `hosts` / `mounts` 配置会自动转换，并保留 `config.json.legacy.bak` 备份。密码、私钥、端口与 VPN 设置保留在对应账号下。
+配置按 SAFS 目录树中的主机、账号分组：`hosts` 是主机，`accounts` 是账号。历史目录继续保存在 VS Code 扩展的全局状态中，不写入 `config.json`。账号只需填写 `user` 和认证信息，内部连接标识由主机名和账号自动生成；界面和 Agent 工作区使用主机名、账号和目录展示。旧版平铺的 `hosts` / `mounts` 配置会自动转换，并保留 `config.json.legacy.bak` 备份。密码、私钥、端口与 VPN 设置保留在对应账号下。
 
 ### 2. 打开并编辑远程目录
 

@@ -4552,14 +4552,9 @@ async function normalizeHierarchicalConfigNames(
   const claimed = new Set<string>();
 
   for (const host of config.hosts) {
-    if (!host.user.trim()) {
-      usedNames.add(host.name);
-      claimed.add(host.name);
-      continue;
-    }
     // 配置名是 `主机名(账号)`：主机名取 ASCII 别名（如 `ws1`），别名是中文或没配时
     // 退回 IP；和界面上的主机节点 + 账号节点一一对应。
-    const baseName = mountNameFor(host, config.host_aliases);
+    const baseName = host.user.trim() ? mountNameFor(host, config.host_aliases) : host.ip;
     let nextName = baseName;
     let suffix = 2;
     while ((usedNames.has(nextName) && nextName !== host.name) || claimed.has(nextName)) {

@@ -100,6 +100,23 @@ entries = data.get("hosts", []) if isinstance(data, dict) else data
 if not isinstance(entries, list):
     raise SystemExit("配置顶层必须是数组，或包含 hosts 数组的对象")
 
+# Hierarchical configs keep credentials under each host's accounts.
+flat_entries = []
+for host in entries:
+    if isinstance(host, dict) and isinstance(host.get("accounts"), list):
+        for account in host["accounts"]:
+            if not isinstance(account, dict):
+                raise SystemExit("账号配置必须是对象")
+            entry = {**account, "ip": host.get("ip")}
+            label = str(host.get("name", host.get("ip", "")))
+            if not label.isascii():
+                label = str(host.get("ip", ""))
+            entry.setdefault("name", f"{label}({account.get('user', '')})")
+            flat_entries.append(entry)
+    else:
+        flat_entries.append(host)
+entries = flat_entries
+
 for index, item in enumerate(entries):
     if not isinstance(item, dict):
         raise SystemExit(f"第 {index + 1} 项不是对象")

@@ -37,7 +37,7 @@ test('saves a configuration that can be loaded as JSON', async () => {
   const reloaded = parseConfig(saved);
   assert.equal(reloaded.mounts.length, 1);
   assert.equal(reloaded.mounts[0].name, 'project');
-  assert.equal(reloaded.mounts[0].host, 'dev');
+  assert.equal(reloaded.mounts[0].host, '10.0.0.2(alice)');
   assert.equal(reloaded.mounts[0].remote_path, '/srv/project');
 });
 
@@ -171,7 +171,11 @@ test('hierarchical config groups accounts and preserves credentials, paths and c
   assert.equal(saved.hosts.length, 1);
   assert.equal(saved.hosts[0].accounts.length, 2);
   assert.equal(saved.hosts[0].accounts[0].directories, undefined);
-  assert.deepEqual(parseConfig(saved), config);
+  assert.equal(saved.hosts[0].accounts[0].name, undefined);
+  const reloaded = parseConfig(saved);
+  assert.equal(reloaded.hosts[0].name, '10.0.0.1(alice)');
+  assert.equal(reloaded.hosts[0].password, config.hosts[0].password);
+  assert.equal(reloaded.hosts[1].port, 2222);
 });
 
 test('loading legacy config migrates it automatically and keeps a backup', async () => {
@@ -184,5 +188,8 @@ test('loading legacy config migrates it automatically and keeps a backup', async
   const config = await loadConfig(configPath);
   assert.equal(await readFile(`${configPath}.legacy.bak`, 'utf8'), legacy);
   assert.equal(JSON.parse(await readFile(configPath, 'utf8')).hosts[0].accounts[0].name, 'old');
-  assert.deepEqual((await loadConfig(configPath)).mounts, config.mounts);
+  const reloaded = await loadConfig(configPath);
+  assert.equal(reloaded.mounts[0].name, config.mounts[0].name);
+  assert.equal(reloaded.mounts[0].remote_path, '/srv/repo');
+  assert.equal(reloaded.mounts[0].host, 'old');
 });

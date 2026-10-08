@@ -632,7 +632,7 @@ test('generates config names as host(account) and migrates the old ones', async 
   assert.ok(extensionSource.includes(
     'const generatedName = mountNameFor({ ...host, user: normalizedUser }, config.host_aliases);'
   ));
-  assert.ok(extensionSource.includes('const baseName = mountNameFor(host, config.host_aliases);'));
+  assert.ok(extensionSource.includes('const baseName = host.user.trim() ? mountNameFor(host, config.host_aliases) : host.ip;'));
   // 改名后把已打开窗口的工作区 URI（左下角指示器）也换成新名字。
   assert.ok(extensionSource.includes('await guard(refreshRemoteWorkspaceNames)'));
   assert.ok(extensionSource.includes('vscode.workspace.updateWorkspaceFolders(index, 1, {'));

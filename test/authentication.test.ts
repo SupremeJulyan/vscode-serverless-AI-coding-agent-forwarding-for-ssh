@@ -76,3 +76,16 @@ test('prefers the hosts array over a legacy mounts array with the same name', ()
   // hosts 在第 7 行左右：命中的那条记录后面跟着 ip/user。
   assert.equal(content.slice(offset!).includes('"ip"'), true);
 });
+
+test('locates the correct password in hierarchical accounts without saved account names', () => {
+  const content = JSON.stringify({ hosts: [
+    { name: 'dev', ip: '10.0.0.1', accounts: [{ user: 'alice', password: 'a{b}\\"c' }, { user: 'bob', password: 'bob-secret' }] },
+    { name: '构建机', ip: '10.0.0.2', accounts: [{ user: 'alice', password: 'other-secret' }] }
+  ] }, null, 2);
+  const bob = passwordValueOffset(content, 'dev(bob)');
+  assert.equal(content.slice(bob!, bob! + 10), 'bob-secret');
+  const other = passwordValueOffset(content, '10.0.0.2(alice)');
+  assert.equal(content.slice(other!, other! + 12), 'other-secret');
+  assert.ok(configEntryOffset(content, 'dev(alice)')! < configEntryOffset(content, 'dev(bob)')!);
+  assert.equal(passwordValueOffset(content, 'dev(missing)'), undefined);
+});

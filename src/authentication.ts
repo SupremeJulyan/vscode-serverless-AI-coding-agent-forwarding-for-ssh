@@ -1,4 +1,5 @@
 import type { Prompt } from 'ssh2';
+import { parseTree, findNodeAtLocation, getNodeValue } from 'jsonc-parser';
 
 export function keyboardInteractivePasswordReplies(
   prompts: Prompt[], password: string
@@ -41,6 +42,28 @@ export function isNetworkFailure(error: unknown): boolean {
   return networkFailurePatterns.some((pattern) => pattern.test(message));
 }
 
+/** Locate a nested account even when its generated connection name is not saved. */
+function hierarchicalAccountRange(content: string, name: string): { start: number; end: number } | undefined {
+  if (typeof name !== 'string' || !name) return undefined;
+  const root = parseTree(content);
+  if (!root) return undefined;
+  const hosts = findNodeAtLocation(root, ['hosts']);
+  for (const host of hosts?.children ?? []) {
+    const value = getNodeValue(host);
+    if (!Array.isArray(value.accounts) || typeof value.ip !== 'string') continue;
+    const label = String(value.name ?? value.ip);
+    const base = /[^\x00-\x7f]/.test(label) ? value.ip : label;
+    const accounts = findNodeAtLocation(host, ['accounts']);
+    for (const account of accounts?.children ?? []) {
+      const value = getNodeValue(account);
+      if (value.name === name || `${base}(${value.user ?? ''})` === name) {
+        return { start: account.offset, end: account.offset + account.length };
+      }
+    }
+  }
+  return undefined;
+}
+
 /** 匹配配置原文中的 `"name": "<hostName>"` 字段（按 JSON 转义后的名字精确匹配）。 */
 function nameFieldMatch(content: string, hostName: string): RegExpExecArray | null {
   // 名字来自命令参数/树节点，扩展边界上可能是任意值：不是非空字符串就当作没命中，
@@ -60,6 +83,8 @@ function nameFieldMatch(content: string, hostName: string): RegExpExecArray | nu
  * 所以一次全文匹配即可命中唯一的那条记录。
  */
 export function configEntryOffset(content: string, hostName: string): number | undefined {
+  const account = hierarchicalAccountRange(content, hostName);
+  if (account) return account.start;
   const match = nameFieldMatch(content, hostName);
   if (!match) return undefined;
   // 手工维护的配置可能同时有 mounts 数组：优先落在 hosts 里的那条记录上。
@@ -74,6 +99,11 @@ export function configEntryOffset(content: string, hostName: string): number | u
 }
 
 export function passwordValueOffset(content: string, hostName: string): number | undefined {
+  const account = hierarchicalAccountRange(content, hostName);
+  if (account) {
+    const match = /"password"\s*:\s*"/.exec(content.slice(account.start, account.end));
+    return match ? account.start + match.index + match[0].length : undefined;
+  }
   const nameMatch = nameFieldMatch(content, hostName);
   if (!nameMatch) return undefined;
   const remainder = content.slice(nameMatch.index + nameMatch[0].length);
