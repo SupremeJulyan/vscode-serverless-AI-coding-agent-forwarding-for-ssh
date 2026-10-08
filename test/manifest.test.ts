@@ -172,19 +172,19 @@ test('shows separate Agent forwarding actions for enabled and disabled mounts', 
 test('packages Agent integration without the legacy JS stdio router or Codex plugin', async () => {
   await access(new URL('../src/agent-http-router.ts', import.meta.url));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const nativeCliSource = await readFile(
-    new URL('../native-cli/src/main.rs', import.meta.url), 'utf8'
+  const nodeCliSource = await readFile(
+    new URL('../src/safs-cli.ts', import.meta.url), 'utf8'
   );
-  const nativeCliIntegrationSource = await readFile(
+  const nodeCliIntegrationSource = await readFile(
     new URL('../src/node-cli-install.ts', import.meta.url), 'utf8'
   );
   const vscodeIgnore = await readFile(new URL('../.vscodeignore', import.meta.url), 'utf8');
   assert.equal(extensionSource.includes('mcp-router.cjs'), false);
   assert.equal(extensionSource.includes("'--', 'node'"), false);
-  assert.equal(nativeCliSource.includes('mcp-bridge'), false);
+  assert.equal(nodeCliSource.includes('mcp-bridge'), false);
   assert.equal(/^bin\/\*\*$/m.test(vscodeIgnore), true);
-  assert.equal(nativeCliIntegrationSource.includes('releases/download'), false);
-  assert.ok(nativeCliIntegrationSource.includes('Node.js CLI'));
+  assert.equal(nodeCliIntegrationSource.includes('releases/download'), false);
+  assert.ok(nodeCliIntegrationSource.includes('Node.js CLI'));
   await access(new URL('../src/safs-cli.ts', import.meta.url));
   await access(new URL('../skills/safs-cli/SKILL.md', import.meta.url));
   await access(new URL('../skills/safs-cli/references/commands.md', import.meta.url));
@@ -195,8 +195,8 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
 
 test('Agent integration installs the bundled CLI Skill without probing Agent installations', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const nativeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
-  assert.ok(nativeCliSource.includes('globalNodeCliSkill'));
+  const nodeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
+  assert.ok(nodeCliSource.includes('globalNodeCliSkill'));
   assert.ok(extensionSource.includes("args: ['install', '--skills', '-g']"));
   assert.equal(extensionSource.includes('nativeCliUsagePrompt'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
@@ -430,9 +430,9 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.equal(extensionSource.includes('legacyAgentInterfaceMigrationTarget'), false);
   assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
   assert.ok(extensionSource.includes('检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。'));
-  const nativeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
-  assert.ok(nativeCliSource.includes('user-level Streamable HTTP MCP'));
-  assert.equal(nativeCliSource.includes('switch the proxy to rule-based mode'), false);
+  const nodeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
+  assert.ok(nodeCliSource.includes('user-level Streamable HTTP MCP'));
+  assert.equal(nodeCliSource.includes('switch the proxy to rule-based mode'), false);
 });
 
 test('runs CLI cleanup after the extension is completely uninstalled', async () => {

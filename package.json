@@ -959,16 +959,13 @@
   },
   "scripts": {
     "vscode:uninstall": "node ./scripts/uninstall.js",
-    "build:native-cli": "node build/build-native-cli.js",
-    "test:native-cli": "cargo test --locked --manifest-path native-cli/Cargo.toml",
-    "verify:native-cli": "node build/verify-native-cli.js",
     "benchmark:mcp": "tsx build/mcp-efficiency.ts",
     "check-types": "tsx build/sync-high-risk-defaults.ts --check && tsc --noEmit",
     "sync-manifest-defaults": "tsx build/sync-high-risk-defaults.ts",
     "compile": "npm run check-types && node esbuild.js",
     "package": "npm run check-types && node esbuild.js --production && node build/verify-extension-bundle.js",
     "vscode:prepublish": "npm run package",
-    "test": "npm run compile && tsx --test --require ./test/vscode-register.cjs test/*.test.ts",
+    "test": "npm run compile && tsx --test --require ./test/vscode-register.cjs test/*.test.ts scripts/*.test.js",
     "vsix": "npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/blob/main --baseImagesUrl https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main"
   },
   "devDependencies": {

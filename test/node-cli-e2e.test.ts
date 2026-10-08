@@ -24,13 +24,13 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-function developmentNativeCli(): string {
+function developmentNodeCli(): string {
   return join(process.cwd(), 'dist', 'safs-cli.js');
 }
 
 test('Node.js CLI installs its bundled Agent Skill without a router', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-native-skill-'));
-  const executable = developmentNativeCli();
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-skill-'));
+  const executable = developmentNodeCli();
   try {
     await mkdir(join(temporary, 'project'));
     const installed = await executeCaptured({
@@ -71,12 +71,12 @@ test('Node.js CLI installs its bundled Agent Skill without a router', async () =
 });
 
 test('Node.js CLI lists and executes through the existing SAFS router', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-native-e2e-'));
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-e2e-'));
   let runs = 0;
   let currentFileReads = 0;
   const operations: string[] = [];
   const activity: Array<{ phase: string; agentName?: string; source?: string }> = [];
-  const backend = new AgentMcpServer(0, 'native-test', {
+  const backend = new AgentMcpServer(0, 'node-test', {
     currentWorkspace: async () => ({
       name: 'dev', host: 'dev', workspaceRoot: '/project', workspaceUri: 'safs://dev/project'
     }),
@@ -110,7 +110,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
         );
       }
       runs += 1;
-      return { stdout: 'native-out', stderr: 'native-err', exitCode: 7 };
+      return { stdout: 'node-out', stderr: 'node-err', exitCode: 7 };
     },
     activity: {
       start: (entry: { agentName?: string; source: string }) => {
@@ -131,7 +131,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
   });
   await router.start();
   const config = cliConfigPath(temporary);
-  const executable = developmentNativeCli();
+  const executable = developmentNodeCli();
   const extensionVersion = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ).version as string;
@@ -166,8 +166,8 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       '--config', config, 'exec', 'exit 7', '--workspace', workspaceId
     ] });
     assert.equal(run.exitCode, 7);
-    assert.equal(run.stdout, 'native-out');
-    assert.equal(run.stderr, 'native-err');
+    assert.equal(run.stdout, 'node-out');
+    assert.equal(run.stderr, 'node-err');
     assert.equal(runs, 1);
     const blockedRun = await executeCaptured({ command: executable, args: [
       '--config', config, 'exec', '--workspace', workspaceId, '--', 'blocked-write'
@@ -282,12 +282,12 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
 });
 
 test('Node.js CLI applies the connection-file request timeout', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-native-timeout-'));
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-timeout-'));
   const hanging = http.createServer(() => {});
   await new Promise<void>((resolve) => hanging.listen(0, '127.0.0.1', resolve));
   const address = hanging.address();
   assert.ok(address && typeof address !== 'string');
-  const executable = developmentNativeCli();
+  const executable = developmentNodeCli();
   try {
     const config = cliConfigPath(temporary);
     await writeCliConnection(
@@ -307,7 +307,7 @@ test('Node.js CLI applies the connection-file request timeout', async () => {
 });
 
 test('Node.js CLI bypasses proxy variables for loopback', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-native-no-proxy-'));
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-no-proxy-'));
   let proxyHits = 0;
   const proxy = http.createServer((_request, response) => {
     proxyHits += 1;
@@ -321,7 +321,7 @@ test('Node.js CLI bypasses proxy variables for loopback', async () => {
     discover: () => []
   });
   await router.start();
-  const executable = developmentNativeCli();
+  const executable = developmentNodeCli();
   const config = cliConfigPath(temporary);
   const proxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
   const proxyEnvironment = {
@@ -353,7 +353,7 @@ test('Node.js CLI bypasses proxy variables for loopback', async () => {
 });
 
 test('Node.js CLI preserves HTTP rejection details and redacts the token', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-native-http-error-'));
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-http-error-'));
   const server = http.createServer((_request, response) => {
     response.writeHead(400, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ ok: false, error: 'Invalid batch at index 1: secret-test-token' }));
@@ -362,7 +362,7 @@ test('Node.js CLI preserves HTTP rejection details and redacts the token', async
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); assert.ok(address && typeof address !== 'string');
     await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/mcp?token=secret-test-token`);
-    const result = await executeCaptured({ command: developmentNativeCli(), args: [
+    const result = await executeCaptured({ command: developmentNodeCli(), args: [
       '--config', cliConfigPath(temporary), 'workspaces'
     ] });
     assert.equal(result.exitCode, 1);
@@ -375,7 +375,7 @@ test('Node.js CLI preserves HTTP rejection details and redacts the token', async
 });
 
 test('Node.js CLI batch permits the combined operation budget', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-native-batch-budget-'));
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-batch-budget-'));
   const server = http.createServer((_request, response) => {
     setTimeout(() => {
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -389,7 +389,7 @@ test('Node.js CLI batch permits the combined operation budget', async () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); assert.ok(address && typeof address !== 'string');
     await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/mcp?token=secret`, 100);
-    const result = await executeCaptured({ command: developmentNativeCli(), args: [
+    const result = await executeCaptured({ command: developmentNodeCli(), args: [
       '--config', cliConfigPath(temporary), 'batch', '--workspace', 'selected', '--input',
       JSON.stringify({ operations: [
         { command: 'read', arguments: { path: 'a' } },

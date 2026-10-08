@@ -3,3 +3,5 @@ dist/
 release-assets/
 *.log
 *.vsix
+bin/
+native-cli/
