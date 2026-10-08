@@ -40,7 +40,8 @@ test('discovers fresh windows first and ignores stale records', async () => {
   const record = (instanceId: string, focused: boolean, updatedAtMs: number) => ({
     version: 1,
     instanceId,
-    processId: 1,
+    processId: process.pid,
+    processPlatform: process.platform,
     focused,
     execution: 'remote',
     workspaceUri: `safs://${instanceId}/srv/${instanceId}`,
@@ -73,7 +74,8 @@ test('ignores records whose updatedAt is in the future', async () => {
   const record = (instanceId: string, updatedAtMs: number) => ({
     version: 1,
     instanceId,
-    processId: 1,
+    processId: process.pid,
+    processPlatform: process.platform,
     focused: true,
     execution: 'remote',
     workspaceUri: `safs://${instanceId}/srv/${instanceId}`,
@@ -119,7 +121,8 @@ test('ignores a fresh record owned by a terminated process', async () => {
   const directory = agentDiscoveryDirectory(home);
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, 'dead.json'), JSON.stringify({
-    version: 1, instanceId: 'dead', processId: pid, focused: true, execution: 'remote',
+    version: 1, instanceId: 'dead', processId: pid, processPlatform: process.platform,
+    focused: true, execution: 'remote',
     workspaceUri: 'safs://project/srv/project', mountName: 'project', workspaceRoot: '/srv/project',
     host: 'dev', mcpUrl: 'http://127.0.0.1:9848/mcp', updatedAt: new Date().toISOString()
   }));
