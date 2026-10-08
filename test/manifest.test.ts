@@ -712,7 +712,7 @@ test('打开配置 locates the selected tree item, and deleting a host removes a
   // 主机节点的 ＋ 只追加账号，不再覆盖单账号主机。
   assert.ok(extensionSource.includes('accountTargetIndex(config, requestedGroup'));
   assert.equal(extensionSource.includes('groupHosts.length === 1'), false);
-  assert.ok(extensionSource.includes('更新已有账号'));
+  assert.ok(extensionSource.includes('该主机下已存在此账号，请编辑已有账号或使用其他账号。'));
   // 删除配置后要清场：停同步任务、清历史目录与本地副本配对。
   assert.ok(extensionSource.includes('async function forgetMountState('));
   assert.ok(extensionSource.includes('await forgetMountState([mount.name]);'));

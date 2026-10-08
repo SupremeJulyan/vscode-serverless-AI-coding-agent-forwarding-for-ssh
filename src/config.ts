@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { configUniquenessIssues } from './config-uniqueness';
 
 export interface HostConfig {
   name: string;
@@ -95,6 +96,8 @@ export function parseConfig(value: unknown): BridgeConfig {
   if (!Array.isArray(object.hosts)) {
     throw new Error('Config must contain a hosts array');
   }
+  const uniquenessIssues = configUniquenessIssues(value);
+  if (uniquenessIssues.length) throw new Error(`config.json：${uniquenessIssues[0].message}`);
 
   if (object.hosts.some(item => item && typeof item === 'object' && 'accounts' in item)) {
     const flatHosts: Record<string, unknown>[] = [];

@@ -1,4 +1,5 @@
 import { operationMetric } from './operation-metric';
+import { registerConfigDiagnostics } from './config-diagnostics';
 import { createRemoteGitBundle } from './remote-git-bundle';
 import {
   applySuccessfulPushReceipt, recordSuccessfulPush, localGitRunner, pushReceiptKey,
@@ -3083,6 +3084,8 @@ const required = (label: string) => (value: string): string | undefined =>
 
 async function addSshConfig(context: vscode.ExtensionContext): Promise<void> {
   const title = 'Add SSH Config';
+  await ensureConfigFile(configPath());
+  const config = await loadConfig(configPath());
   const name = await input({
     title, prompt: '配置名称', value: 'dev', validateInput: required('配置名称')
   });
@@ -3092,7 +3095,12 @@ async function addSshConfig(context: vscode.ExtensionContext): Promise<void> {
     prompt: 'SSH 登录地址',
     value: `${os.userInfo().username}@10.0.0.1`,
     placeHolder: 'user@10.0.0.1',
-    validateInput: (value) => parseSshLogin(value) ? undefined : '请输入 user@IP 或 user@主机名'
+    validateInput: value => {
+      const login = parseSshLogin(value);
+      if (!login) return '请输入 user@IP 或 user@主机名';
+      return config.hosts.some(host => host.ip === login.host && host.user === login.user)
+        ? '该主机下已存在此账号，请编辑已有账号。' : undefined;
+    }
   });
   if (loginText === undefined) return;
   const login = parseSshLogin(loginText);
@@ -3140,8 +3148,6 @@ async function addSshConfig(context: vscode.ExtensionContext): Promise<void> {
     vpn = selectedVpn.value;
   }
 
-  await ensureConfigFile(configPath());
-  const config = await loadConfig(configPath());
   const normalizedName = name.trim();
   const existingIndex = config.hosts.findIndex((host) => host.name === normalizedName);
   if (existingIndex >= 0
@@ -3174,6 +3180,8 @@ async function addSshConfig(context: vscode.ExtensionContext): Promise<void> {
  */
 async function addRemoteDirectoryConfig(): Promise<void> {
   const title = '添加远程目录';
+  await ensureConfigFile(configPath());
+  const config = await loadConfig(configPath());
   const name = await input({
     title, prompt: '主机名', value: 'dev', validateInput: required('主机名')
   });
@@ -3183,26 +3191,20 @@ async function addRemoteDirectoryConfig(): Promise<void> {
     prompt: 'IP 地址或主机名',
     value: '10.0.0.1',
     placeHolder: '例如 10.0.0.2 或 server.example.com',
-    validateInput: required('IP 地址或主机名')
+    validateInput: value => required('IP 地址或主机名')(value)
+      ?? (config.hosts.some(host => host.ip === value.trim())
+        ? '该主机 IP 已存在，请在已有主机节点下添加账号。' : undefined)
   });
   if (ip === undefined) return;
 
-  await ensureConfigFile(configPath());
-  const config = await loadConfig(configPath());
   const normalizedName = name.trim();
   const normalizedIp = ip.trim();
   const existing = config.hosts.find((host) => host.ip === normalizedIp);
+  if (existing) throw new Error('该主机 IP 已存在，请在已有主机节点下添加账号。');
   const aliases = { ...(config.host_aliases ?? {}) };
-  if (existing) {
-    // The IP is the grouping key. Adding the same endpoint only updates its
-    // display name; the account '+' action adds the actual login config.
-    if (normalizedName === normalizedIp) delete aliases[normalizedIp];
-    else aliases[normalizedIp] = normalizedName;
-  } else {
-    config.hosts.push({ name: normalizedIp, ip: normalizedIp, user: '' });
-    if (normalizedName === normalizedIp) delete aliases[normalizedIp];
-    else aliases[normalizedIp] = normalizedName;
-  }
+  config.hosts.push({ name: normalizedIp, ip: normalizedIp, user: '' });
+  if (normalizedName === normalizedIp) delete aliases[normalizedIp];
+  else aliases[normalizedIp] = normalizedName;
   if (Object.keys(aliases).length > 0) config.host_aliases = aliases;
   else delete config.host_aliases;
   config.mounts = deriveMounts(config.hosts);
@@ -3245,7 +3247,10 @@ async function addHostCredentials(
     prompt: '账号',
     // 追加新账号时默认用本机账号名，改已有那条时才预填它的账号。
     value: (index >= 0 ? host.user : '') || os.userInfo().username,
-    validateInput: required('账号')
+    validateInput: value => required('账号')(value)
+      ?? (config.hosts.some((candidate, candidateIndex) => candidateIndex !== index
+        && candidate.ip === host.ip && candidate.user === value.trim())
+        ? '该主机下已存在此账号，请编辑已有账号或使用其他账号。' : undefined)
   });
   if (user === undefined) return;
   const password = await input({
@@ -3257,19 +3262,12 @@ async function addHostCredentials(
   if (password === undefined) return;
 
   const normalizedUser = user.trim();
-  // 同 IP 同账号：明确问一句再更新，避免"添加账号"变成静默覆盖别人的密码/私钥。
+  // Adding a duplicate account must never overwrite an existing login.
   const matchingUserIndex = config.hosts.findIndex((candidate) =>
     candidate.ip === host.ip && candidate.user === normalizedUser
   );
   if (matchingUserIndex >= 0 && matchingUserIndex !== index) {
-    const confirmed = await vscode.window.showWarningMessage(
-      `账号"${normalizedUser}"已存在于 ${host.ip}。要更新这条配置（覆盖密码/私钥）吗？`
-      + '要新增账号请换一个账号名。',
-      { modal: true },
-      '更新已有账号'
-    );
-    if (confirmed !== '更新已有账号') return;
-    index = matchingUserIndex;
+    throw new Error(`主机 ${host.ip} 下已存在账号 '${normalizedUser}'，请编辑已有账号。`);
   }
   const targetHost = index >= 0 ? config.hosts[index] : host;
   // 配置名是 `主机名(账号)`：主机名取 ASCII 别名，别名是中文或没配时退回 IP。
@@ -5868,6 +5866,7 @@ async function ensureSystemDependencies(): Promise<void> {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   vscodeContext = context;
+  registerConfigDiagnostics(context, configPath);
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
   // 旧配置名 → 当前配置名：改名后已保存的 safs:// 窗口/标签页仍然能打开。
