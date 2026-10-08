@@ -125,7 +125,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
   await backend.start();
   const router = new AgentHttpRouter(await freePort(), 'native-router', {
     discover: () => [{
-      instanceId: 'native-window', workspaceRoot: '/project',
+      instanceId: 'node-window', workspaceRoot: '/project',
       workspaceUri: 'safs://dev/project', host: 'dev', focused: true, mcpUrl: backend.url
     } as any]
   });
@@ -153,7 +153,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     assert.equal(workspaces.exitCode, 0, workspaces.stderr);
     assert.deepEqual(JSON.parse(workspaces.stdout), { workspaces: [{
       workspaceId: workspaceIdFor({
-        instanceId: 'native-window', workspaceUri: 'safs://dev/project', host: 'dev'
+        instanceId: 'node-window', workspaceUri: 'safs://dev/project', host: 'dev'
       }), workspaceRoot: '/project', host: 'dev', mode: 'workspace'
     }] });
     const workspaceId = JSON.parse(workspaces.stdout).workspaces[0].workspaceId as string;
@@ -398,6 +398,37 @@ test('Node.js CLI batch permits the combined operation budget', async () => {
     ] });
     assert.equal(result.exitCode, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).results.length, 2);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test('Node CLI handles global options without consuming content or command values', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-option-values-'));
+  const server = http.createServer(async (req, res) => {
+    let text = '';
+    for await (const chunk of req) text += chunk;
+    const request = JSON.parse(text);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ result: request.arguments }));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  try {
+    await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/cli?token=secret`);
+    const config = cliConfigPath(temporary);
+    const help = await executeCaptured({ command: developmentNodeCli(), args: ['--config', config, 'edit', '--help'] });
+    assert.equal(help.exitCode, 0, help.stderr);
+    assert.match(help.stdout, /^Usage: safs edit /);
+    for (const content of ['--compact', '--verbose', '--help', '-h']) {
+      const result = await executeCaptured({ command: developmentNodeCli(), args: [
+        '--config', config, '--compact', 'write', 'note.txt', '--workspace', 'chosen', '--content', content
+      ] });
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).content, content);
+    }
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(temporary, { recursive: true, force: true });

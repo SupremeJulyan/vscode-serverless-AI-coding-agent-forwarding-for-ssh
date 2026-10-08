@@ -14,6 +14,7 @@ if (production) {
   // Development builds create this map. Do not let a stale artifact leak into
   // production VSIX packages, where it adds several megabytes but is unused.
   fs.rmSync(path.join(__dirname, 'dist', 'extension.js.map'), { force: true });
+  fs.rmSync(path.join(__dirname, 'dist', 'safs-cli.js.map'), { force: true });
 }
 
 // 构建期补丁：把 NSG 网关 MOTD banner 容忍逻辑注入 ssh2 的 SFTP 版本握手

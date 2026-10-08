@@ -165,10 +165,26 @@ function compact(result: any): any {
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 1 && ['--version', '-V'].includes(args[0])) { console.log(`safs ${CLI_VERSION}`); return; }
+  let helpCommand: string | undefined;
   for (let i = 0; i < args.length && args[i] !== '--'; i++) {
-    if (['--help', '-h'].includes(args[i])) { process.stdout.write(commandHelp[args[0]] ?? help); return; }
+    if (['--help', '-h'].includes(args[i])) { process.stdout.write(commandHelp[helpCommand ?? ''] ?? help); return; }
+    if (!args[i].startsWith('-') && !helpCommand) helpCommand = args[i];
     if (args[i].startsWith('--') && !['--compact', '--verbose', '--skills', '--global'].includes(args[i]) && !args[i].startsWith('--skills=')) i++;
   }
+  const config = option(args, '--config') ?? process.env.SAFS_CONFIG ?? join(dirname(process.argv[1]), '.safs-connection.json');
+  let isCompact = false, verbose = false;
+  const commandArgs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') { commandArgs.push(...args.slice(i)); break; }
+    if (arg === '--compact') { isCompact = true; continue; }
+    if (arg === '--verbose') { verbose = true; continue; }
+    commandArgs.push(arg);
+    if (arg.startsWith('--') && arg !== '--skills' && arg !== '--global' && !arg.startsWith('--skills=') && i + 1 < args.length) {
+      commandArgs.push(args[++i]);
+    }
+  }
+  args.splice(0, args.length, ...commandArgs);
   if (args[0] === 'install') {
     try {
       const skill = args.find(v => v === '--skills' || v.startsWith('--skills='));
@@ -182,10 +198,7 @@ async function main() {
       console.log(`Installed SAFS skill to ${directory}`); return;
     } catch (error) { throw new Error(`${error instanceof Error ? error.message : error}\n\n${commandHelp.install}`); }
   }
-  const config = option(args, '--config') ?? process.env.SAFS_CONFIG ?? join(dirname(process.argv[1]), '.safs-connection.json');
-  const isCompact = args.includes('--compact'), verbose = args.includes('--verbose');
-  const boundary = args.indexOf('--');
-  const request = await parse(args.filter((v,i) => !(i < (boundary < 0 ? args.length : boundary) && ['--compact','--verbose'].includes(v))));
+  const request = await parse(args);
   let result = await invoke(config, request);
   const code = exitCode(result);
   if (code && (request.name !== 'run_remote_command' || result.code || result.status === 'error')) throw new Error(verbose ? JSON.stringify(result) : concise(result));

@@ -35,7 +35,7 @@ The first time you open the configured remote home from a parent connection node
 
 ### 3. Let an Agent operate the remote workspace
 
-**CLI mode** is the default. Install **Node.js 18 or later** locally and make sure `node --version` works in your terminal. The extension installs or updates the global `safs` CLI and user-level Skill from its bundled Node.js script. No separate platform binary download or Rust installation is required. Run `safs --version` to verify installation, or run `SAFS: Install or Update Global CLI` to repair it.
+**CLI mode** is the default. Install **Node.js 18 or later** locally and make sure `node --version` works in your terminal. The extension installs or updates the global `safs` CLI and user-level Skill from its bundled Node.js script. No separate platform binary download or Rust installation is required. Run `safs --version` to verify installation, or run `SAFS: Install or Update Global CLI` to repair it. If Node.js 18+ is unavailable, the dialog offers the Node.js installation website or a switch to MCP mode, which does not require Node.js.
 
 Restart VS Code to refresh environment variables, then enter `/safs-cli` in your Agent to use the Skill. The Agent lists the remote workspaces; select one to start working.
 
