@@ -1,13 +1,11 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdtemp, writeFile, rename, rm, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { gitCommand, isGitConflict, parseGitStatus, RemoteGit, GitRunner } from '../src/remote-git';
 
-const exec = promisify(execFile);
+import { execGitFixture as exec } from './git-fixture-exec';
 async function fixture(t: Parameters<Parameters<typeof test>[1]>[0]) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'safs-git-'));
   t.after(() => rm(cwd, { recursive: true, force: true }));
@@ -36,7 +34,9 @@ test('porcelain parser preserves unusual paths, rename ordering and conflicts', 
 
 test('initial stage, unstage and commit preserve literal filenames and message', async t => {
   const { cwd, git } = await fixture(t);
-  const filename = ":(glob)* ' $(touch INJECTED)\n中文.txt";
+  const filename = process.platform === 'win32'
+    ? "(glob) ' $(echo INJECTED) 中文.txt"
+    : ":(glob)* ' $(touch INJECTED)\n中文.txt";
   await writeFile(path.join(cwd, filename), 'first\n');
   await writeFile(path.join(cwd, 'other.txt'), 'untouched');
   await git.stage((await git.status()).filter(c => c.path === filename));

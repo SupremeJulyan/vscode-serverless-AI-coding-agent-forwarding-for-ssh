@@ -1,7 +1,6 @@
+import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -12,7 +11,7 @@ import {
   resolveShallowBoundaries, resolvePushTarget, validatePushUrl
 } from '../src/local-git-push';
 
-const exec = promisify(execFile);
+import { execGitFixture as exec } from './git-fixture-exec';
 
 function shellRunner(cwd: string): GitRunner {
   return async command => {
@@ -146,7 +145,7 @@ test('shallow remote pushes by declaring the same boundary in the relay', async 
   await exec('git', ['-C', seed, 'commit', '-qam', 'upstream again']);
   await exec('git', ['-C', seed, 'push', '-q', 'origin', 'topic']);
   // 远端是浅克隆：对象库里只有边界提交往上的历史，边界提交的父对象根本没有。
-  await exec('git', ['clone', '-q', '--depth', '1', `file://${upstream}`, source]);
+  await exec('git', ['clone', '-q', '--depth', '1', pathToFileURL(upstream).href, source]);
   await identity(source);
   await writeFile(path.join(source, 'local.txt'), 'local\n');
   await exec('git', ['-C', source, 'add', '.']);
@@ -191,7 +190,7 @@ test('shallow relay explains a target that lacks the truncated history', async t
   await exec('git', ['-C', seed, 'add', '.']);
   await exec('git', ['-C', seed, 'commit', '-qm', 'one']);
   await exec('git', ['-C', seed, 'push', '-q', 'origin', 'topic']);
-  await exec('git', ['clone', '-q', '--depth', '1', `file://${fork}`, source]);
+  await exec('git', ['clone', '-q', '--depth', '1', pathToFileURL(fork).href, source]);
   await identity(source);
   await writeFile(path.join(source, 'local.txt'), 'local\n');
   await exec('git', ['-C', source, 'add', '.']);

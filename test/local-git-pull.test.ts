@@ -1,7 +1,6 @@
+import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdtemp, writeFile, readFile, rm, readdir, copyFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -9,7 +8,7 @@ import { RemoteGit, GitRunner } from '../src/remote-git';
 import { localGitRunner, resolveShallowBoundaries, validateFetchUrl } from '../src/local-git-push';
 import { describeFetchFailure, fetchThroughLocalGit, pullThroughLocalGit, resolveFetchTarget, resolvePullTarget } from '../src/local-git-pull';
 
-const exec = promisify(execFile);
+import { execGitFixture as exec } from './git-fixture-exec';
 
 async function fixture(t: any) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'safs-pull-test-'));
@@ -275,7 +274,7 @@ test('relay pulls into a shallow remote by declaring the same boundary locally',
   await exec('git', ['-C', seed, 'commit', '-qm', 'first']);
   await exec('git', ['-C', seed, 'push', '-q', 'origin', 'main']);
   // 远端是深 1 的浅克隆：边界提交就是它的 HEAD，边界提交的父对象不在对象库里。
-  await exec('git', ['clone', '-q', '--depth', '1', `file://${upstream}`, source]);
+  await exec('git', ['clone', '-q', '--depth', '1', pathToFileURL(upstream).href, source]);
   await identity(source);
   await exec('git', ['-C', source, 'remote', 'set-url', 'origin', 'https://example.test/project.git']);
   await writeFile(path.join(seed, 'file.txt'), 'second\n');

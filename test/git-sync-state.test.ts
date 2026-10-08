@@ -1,7 +1,5 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -13,7 +11,7 @@ import {
   applySuccessfulPushReceipt, recordSuccessfulPush, resolvePushTarget, successfulPushReceipt
 } from '../src/local-git-push';
 import { resolveFetchTarget, resolvePullTarget } from '../src/local-git-pull';
-const exec = promisify(execFile);
+import { execGitFixture as exec } from './git-fixture-exec';
 async function fixture(t: any) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'safs-sync-state-'));
   t.after(() => rm(cwd, { recursive: true, force: true }));
