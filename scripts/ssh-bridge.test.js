@@ -6,7 +6,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 test('password-configured bridge probes need no ASKPASS; logins still require it', {
-  skip: process.platform === 'win32'
+  // The bundled WSL bridge uses Linux utilities and is not a native macOS path.
+  skip: process.platform !== 'linux'
 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'safs-bridge-test-'));
   try {
