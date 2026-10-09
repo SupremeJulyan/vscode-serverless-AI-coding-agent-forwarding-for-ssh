@@ -386,7 +386,7 @@ test('uses only the unified cross-platform config path', async () => {
   assert.equal(
     manifest.contributes?.configuration?.properties?.['safs.agentHttpRouterPort']
       ?.default,
-    9848
+    0
   );
   assert.equal(
     manifest.contributes?.configuration?.properties?.['safs.agentMcpTimeoutMs']

@@ -821,3 +821,43 @@ test('CLI batch preserves completed results and stops after an uncertain timeout
     assert.equal(writes, 1);
   } finally { await router.stop(); await backend.stop(); }
 });
+
+test('fixed router health timeout is retryable and does not report unrelated occupation', async () => {
+  const port = await freePort();
+  let ready = false;
+  const existing = http.createServer((_request, response) => {
+    if (ready) {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ identity: 'safs-http-router-v1' }));
+    }
+  });
+  await new Promise<void>(resolve => existing.listen(port, '127.0.0.1', resolve));
+  const router = new AgentHttpRouter(port, 'shared-token', { discover: () => [] });
+  try {
+    await assert.rejects(router.start(), /健康检查暂时失败.*心跳重试/);
+    assert.equal(router.available, false);
+    ready = true;
+    await router.start();
+    assert.equal(router.available, true);
+    assert.equal(router.leader, false);
+    assert.equal(new URL(router.url).port, String(port));
+  } finally {
+    await router.stop();
+    existing.closeAllConnections();
+    await new Promise<void>((resolve, reject) => existing.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test('fixed router reports authentication mismatch separately from unrelated occupation', async () => {
+  const port = await freePort();
+  const leader = new AgentHttpRouter(port, 'leader-token', { discover: () => [] });
+  const follower = new AgentHttpRouter(port, 'different-token', { discover: () => [] });
+  try {
+    await leader.start();
+    await assert.rejects(follower.start(), /健康检查认证失败/);
+    assert.equal(follower.available, false);
+    assert.equal(leader.available, true);
+  } finally {
+    await Promise.all([leader.stop(), follower.stop()]);
+  }
+});

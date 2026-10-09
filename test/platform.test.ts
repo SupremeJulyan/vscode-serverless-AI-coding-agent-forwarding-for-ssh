@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import { HostConfig } from '../src/config';
-import { createPlatformAdapter, detectPlatform } from '../src/platform';
+import { agentHttpRouterPort, createPlatformAdapter, detectPlatform } from '../src/platform';
 
 // Stub WSL bundle path so platform.ts resolves ssh-bridge without a VS Code
 // extension context. Uses dynamic import to avoid compile-time vscode dep.
@@ -229,4 +229,18 @@ test('accept points known_hosts at the null device; prompt uses the extension fi
     reject.args.some((argument) => argument.startsWith('GlobalKnownHostsFile=')), false
   );
   assert.equal(reject.args.includes('LogLevel=ERROR'), false);
+});
+
+
+test('fixed router defaults separate Windows and WSL while honoring explicit ports', () => {
+  assert.equal(agentHttpRouterPort('windows'), 9848);
+  assert.equal(agentHttpRouterPort('wsl'), 9849);
+  assert.equal(agentHttpRouterPort('macos'), 9848);
+  assert.equal(agentHttpRouterPort('linux'), 9848);
+  for (const kind of ['windows', 'wsl', 'macos', 'linux'] as const) {
+    assert.equal(agentHttpRouterPort(kind, 12345), 12345);
+    assert.equal(agentHttpRouterPort(kind, 0), agentHttpRouterPort(kind));
+    assert.equal(agentHttpRouterPort(kind, 9848), agentHttpRouterPort(kind));
+    assert.equal(agentHttpRouterPort(kind, 9849), agentHttpRouterPort(kind));
+  }
 });

@@ -42,7 +42,7 @@ import {
   AskpassCredentials, createAskpassCredentials, platformUsesAskpass
 } from './askpass';
 import {
-  CommandPlan, createPlatformAdapter, platformExtensionStateKey
+  CommandPlan, agentHttpRouterPort, createPlatformAdapter, platformExtensionStateKey
 } from './platform';
 import { executeCaptured, missingExecutableName, resolveExecutable } from './process';
 import {
@@ -5088,7 +5088,7 @@ async function ensureAgentHttpRouter(
     if (!httpRouterCreation) {
       httpRouterCreation = (async () => {
         const router = new AgentHttpRouter(
-          settings().get<number>('agentHttpRouterPort', 9848),
+          agentHttpRouterPort(platformAdapter.kind, settings().get<number>('agentHttpRouterPort', 0)),
           await agentMcpToken(context),
           {
             log: (message) => logMcpMessage('Agent HTTP Router', message),

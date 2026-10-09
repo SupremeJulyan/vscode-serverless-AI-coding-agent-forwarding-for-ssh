@@ -313,16 +313,25 @@ export class AgentHttpRouter {
   }
 
   private async isExistingRouter(): Promise<boolean> {
+    let response: Response;
     try {
-      const response = await fetch(
+      response = await fetch(
         `http://127.0.0.1:${this.port}/health?token=${encodeURIComponent(this.token)}`,
         { signal: AbortSignal.timeout(1500) }
       );
-      if (!response.ok) return false;
-      const value = await response.json() as { identity?: unknown };
-      return value.identity === routerIdentity;
     } catch {
-      return false;
+      throw new Error(`固定 HTTP MCP 端口 ${this.port} 的健康检查暂时失败，将在下次心跳重试。`);
+    }
+    if (response.status === 401) {
+      throw new Error(`固定 HTTP MCP 端口 ${this.port} 的健康检查认证失败，请重新加载使用此端口的 SAFS 窗口。`);
+    }
+    if (!response.ok) return false;
+    try {
+      const value = await response.json() as { identity?: unknown };
+      return value?.identity === routerIdentity;
+    } catch (error) {
+      if (error instanceof SyntaxError) return false;
+      throw new Error(`固定 HTTP MCP 端口 ${this.port} 的健康检查响应未完成，将在下次心跳重试。`);
     }
   }
 
@@ -493,6 +502,7 @@ export class AgentHttpRouter {
       return;
     }
     this._leader = false;
+    this._available = false;
     this._available = await this.isExistingRouter();
     if (!this._available) {
       throw new Error(

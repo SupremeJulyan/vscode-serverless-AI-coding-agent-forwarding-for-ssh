@@ -789,11 +789,11 @@
         },
         "safs.agentHttpRouterPort": {
           "type": "number",
-          "minimum": 1024,
+          "minimum": 0,
           "maximum": 65535,
-          "default": 9848,
+          "default": 0,
           "scope": "machine",
-          "description": "Stable loopback-only Streamable HTTP MCP router port registered with Agents. All VS Code windows must use the same value."
+          "description": "Stable loopback-only Streamable HTTP MCP router port registered with Agents. Automatically uses Windows/macOS/Linux 9848 and WSL 9849. Values 0, 9848 and 9849 select this platform-specific default, including legacy settings. Other values select a custom port; use different custom ports for Windows and WSL."
         },
         "safs.agentMcpTimeoutMs": {
           "type": "number",
