@@ -144,7 +144,9 @@ if ((${#config_values[@]})); then
   ((${#config_values[@]} == 6)) || die "配置项读取不完整"
   target_host="${config_values[0]}"
   ssh_user="${config_values[1]}"
-  if [[ -n "${config_values[2]}" && -z "${SSH_ASKPASS:-}" ]]; then
+  # ssh-keyscan only reads the server's public host keys; probe mode never
+  # authenticates and must not require login credentials.
+  if [[ "$probe_mode" != true && -n "${config_values[2]}" && -z "${SSH_ASKPASS:-}" ]]; then
     die "配置包含密码，但扩展未提供 SSH_ASKPASS 凭据"
   fi
   private_key_path="${config_values[3]}"
