@@ -479,7 +479,7 @@ async function timedPhase<T>(label: string, action: () => Promise<T>): Promise<T
 }
 
 async function promptMasterPassword(
-  context: vscode.ExtensionContext, confirm: boolean, force = false
+  context: vscode.ExtensionContext, confirm: boolean, force = false, persist = true
 ): Promise<string> {
   const stored = await context.secrets.get(masterPasswordSecret);
   if (stored && !force) return stored;
@@ -499,7 +499,7 @@ async function promptMasterPassword(
     if (repeated === undefined) throw new Error('已取消密码加密');
     if (repeated !== password) throw new Error('两次输入的加密主口令不一致');
   }
-  await context.secrets.store(masterPasswordSecret, password);
+  if (persist) await context.secrets.store(masterPasswordSecret, password);
   return password;
 }
 
@@ -513,7 +513,7 @@ async function decryptHostPassword(context: vscode.ExtensionContext, encrypted: 
       // 其它主机可能仍能用旧口令解密；这里仅对本次解密重新提示。
     }
   }
-  const password = await promptMasterPassword(context, false, true);
+  const password = await promptMasterPassword(context, false, true, false);
   const decrypted = await decryptPassword(encrypted, password);
   // 新口令成功解密后才更新全局 secret；失败则保持旧 secret 不动。
   await context.secrets.store(masterPasswordSecret, password);
@@ -564,7 +564,7 @@ async function resolvedHost(
   if (!isEncryptedPassword(host.password)) return { ...host };
   return {
     ...host,
-    password: await decryptPassword(host.password, await promptMasterPassword(context, false))
+    password: await decryptHostPassword(context, host.password)
   };
 }
 
