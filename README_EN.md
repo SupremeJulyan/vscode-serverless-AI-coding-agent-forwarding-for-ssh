@@ -119,6 +119,8 @@ See the SAFS page in VS Code Settings for additional advanced options.
 
 SAFS establishes SSH/SFTP connections inside the local VS Code extension process and maps a remote directory to a `safs://` virtual file system. Browsing and editing use SFTP, while terminals and Agent commands run over SSH. The server therefore needs neither VS Code Server nor an Agent.
 
+SAFS provides MCP and CLI interfaces so Agents can safely and efficiently access the extension's file operations and remote command capabilities. Both interfaces use the extension's managed connections, workspace boundaries, and safety checks. Structured file operations, batch requests, and paginated output reduce repeated connections and unnecessary data transfer.
+
 With Agent Forwarding enabled, every remote window starts an MCP service accessible only from the local machine. Multiple windows share a stable local routing endpoint. Each routed operation carries an explicit `workspaceId`, so the router can select the exact window and never fall back to focus or a matching remote path.
 
 Structured writes are restricted to the current remote workspace. An SSH command matching a high-risk rule is denied by default and recorded in a redacted audit log. SSH commands are not a sandbox, however: an allowed command still has all permissions of the login account. Use a non-root, least-privilege account and disable passwordless privilege escalation.
