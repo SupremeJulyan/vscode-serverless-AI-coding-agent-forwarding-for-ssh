@@ -2,18 +2,6 @@
 
 Use a `workspaceId` returned by `safs workspaces` as `ID` below.
 
-## Installation
-
-The CLI requires local Node.js 18+ and a running SAFS extension in CLI mode.
-
-```bash
-safs --version
-safs install --skills       # current project
-safs install --skills -g    # user-level Skill
-```
-
-The extension installs and updates the global CLI. Restart VS Code in CLI mode to retry installation.
-
 ## Workspace
 
 ```bash
