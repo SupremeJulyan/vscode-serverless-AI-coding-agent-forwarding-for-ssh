@@ -282,10 +282,10 @@ const syncTasksKey = platformStateKey('syncTasks');
 /** 旧版未按平台分键的同步任务键，启动时迁移一次。 */
 const legacySyncTasksKey = 'safs.syncTasks';
 
-function saveSyncTasks(persist = true): void {
+async function saveSyncTasks(persist = true): Promise<void> {
   if (!syncManager) return;
   if (persist) {
-    void vscodeContext.globalState.update(
+    await vscodeContext.globalState.update(
       syncTasksKey,
       syncManager.list().map(({
         mountName, remotePath, localDir, isFile, fingerprintLines, resetLocalOnFirstSync
@@ -1632,8 +1632,15 @@ async function stopSync(mountName: string, remotePath: string): Promise<void> {
   if (existingTask) {
     await syncCoordinator?.clearReady(mountName, remotePath, existingTask.localDir);
   }
-  // manager.remove 会通过 onTaskChanged 持久化并刷新视图，这里不用再存一次。
   syncManager?.remove(mountName, remotePath);
+  // A non-owner only removes its local task; also remove the persisted entry
+  // before refreshing, otherwise historySyncTask falls back to the old record.
+  const storedTasks = vscodeContext.globalState.get<RemoteSyncTask[]>(syncTasksKey, []);
+  await vscodeContext.globalState.update(syncTasksKey, storedTasks.filter(
+    (task) => task.mountName !== mountName || task.remotePath !== remotePath
+  ));
+  refreshTree();
+  await updateSyncStatusBar();
 }
 
 /** 解析本地同步目标：右键目录取自身，右键文件取所在目录。 */
@@ -6044,7 +6051,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     },
     (message) => bridgeOutput?.appendLine(`[远程同步] ${message}`),
-    (persist) => saveSyncTasks(persist),
+    (persist) => void saveSyncTasks(persist).catch((error) =>
+      logAsyncFailure('同步状态保存失败', error)
+    ),
     // 同步进度显示在 VS Code 底部中间（短暂消息，如“正在下载…”）。
     (message) => void vscode.window.setStatusBarMessage(message, 3000),
     (task) => syncCoordinator?.acquire(task.mountName, task.remotePath) ?? Promise.resolve(true),
