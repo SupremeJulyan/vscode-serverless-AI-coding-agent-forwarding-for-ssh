@@ -7,6 +7,7 @@ import {
 import { SftpSession } from './sftp/session';
 import { assertSafeRemoteEntryName } from './sftp/uri';
 import { writeStreamToFile } from './stream-file';
+import { sameResumePrefix } from './resume-checksum';
 
 export interface RemoteDirectoryDownloadProgress {
   phase: 'scanning' | 'downloading';
@@ -93,13 +94,26 @@ export async function downloadRemoteDirectoryTree(options: {
       const target = await localTarget(relative);
       // 续传判定：远端在这两次尝试之间被改过，残片名就对不上，自动全量重来。
       const info = await options.session.stat(remoteFile, controller.signal);
-      const resume: DownloadResume = await prepareDownloadResume({
+      let resume: DownloadResume = await prepareDownloadResume({
         remoteName: remoteFile,
         remote: { size: info.size, mtimeMs: info.mtime },
         localTarget: target,
         canRange: options.session.transport !== 'scp',
         log: options.log
       });
+      if (resume.offset > 0) {
+        const matches = await sameResumePrefix({
+          session: options.session, localPath: resume.partPath, remotePath: remoteFile,
+          length: resume.offset, signal: controller.signal
+        });
+        if (!matches) {
+          options.log?.(`下载残片 SHA-256 校验失败，删除残片并完整重传：${remoteFile}`);
+          await rm(resume.partPath, { force: true });
+          resume = { ...resume, offset: 0, reason: 'source-changed' };
+        } else {
+          options.log?.(`下载续传 ${target}：SHA-256 校验通过，从 ${resume.offset} 字节继续`);
+        }
+      }
       const source = await options.session.readFileStream(
         remoteFile, controller.signal, resume.offset > 0 ? resume.offset : undefined
       );

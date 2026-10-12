@@ -93,7 +93,7 @@ async function bigSource(t: { after(fn: () => Promise<void>): void }): Promise<s
   return source;
 }
 
-function resumableSession() {
+function resumableSession(remoteByte = 0x41) {
   const partSizes = new Map<string, number>();
   const partMtimes = new Map<string, number>();
   const opened: Array<{ path: string; startOffset?: number }> = [];
@@ -108,6 +108,8 @@ function resumableSession() {
       return { type: 'file', size, mtime: partMtimes.get(name) ?? writtenMtime };
     },
     createDirectory: async () => undefined,
+    readFileRange: async (_name: string, _offset: number, length: number) =>
+      Buffer.alloc(length, remoteByte),
     writeFileStream: async (name: string, options: { startOffset?: number }) => {
       opened.push({ path: name, startOffset: options.startOffset });
       let size = options.startOffset ?? 0;
@@ -143,6 +145,24 @@ test('resumes an interrupted upload from the byte count already on the remote', 
   // bytes 只统计本轮新传的，不含续传起点。
   assert.equal(result.bytes, 1024 * 1024);
   assert.equal(result.completed, 1);
+});
+
+test('a same-size corrupted upload part fails SHA-256 and restarts from zero', async (t) => {
+  const source = await bigSource(t);
+  const signature = await stat(source);
+  const part = uploadPartName('/dest/big.bin', {
+    size: signature.size, mtimeMs: signature.mtimeMs
+  });
+  const r = resumableSession(0x42);
+  r.partSizes.set(part, 1024 * 1024);
+
+  const result = await uploadRemoteTree({
+    session: r.session, sources: [source], targetDir: '/dest', targetFile: '/dest/big.bin'
+  });
+
+  assert.equal(r.opened[0].startOffset, undefined);
+  assert.equal(result.bytes, signature.size);
+  assert.deepEqual(r.deleted, [part]);
 });
 
 test('a partial from a different source signature is discarded instead of resumed', async (t) => {

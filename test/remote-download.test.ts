@@ -56,6 +56,10 @@ function fakeSession(
       }
       return Readable.from(chunks());
     },
+    readFileRange: async (remotePath: string, offset: number, length: number) => {
+      const content = Buffer.from(entries[remotePath].content ?? '', 'latin1');
+      return content.subarray(offset, offset + length);
+    },
     // 续传判定要读远端 size+mtime：签名一致才允许复用残片。
     stat: async (remotePath: string) => ({
       type: entries[remotePath]?.type ?? 'file',
@@ -163,6 +167,28 @@ test('resumes an interrupted download from the bytes already on disk', async () 
   assert.equal(remote.starts[0].start, 1024 * 1024);
   assert.equal(result.transferredBytes, 1024 * 1024);
   assert.equal((await readFile(target)).length, content.length);
+});
+
+test('a same-size corrupted download part fails SHA-256 and restarts from zero', async () => {
+  const mtimeMs = 5_000;
+  const content = Buffer.alloc(2 * 1024 * 1024, 0x42);
+  const remote = fakeSession({
+    '/root/big.bin': { type: 'file', content: content.toString('latin1') }
+  }, 0, mtimeMs);
+  const localRoot = path.join(await mkdtemp(path.join(os.tmpdir(), 'safs-download-')), 'copy');
+  const signature = { size: content.length, mtimeMs };
+  const corrupted = Buffer.alloc(content.length, 0x43);
+  const { target } = await seedPart(
+    localRoot, '/root/big.bin', corrupted, signature, 1024 * 1024
+  );
+
+  const result = await downloadRemoteDirectoryTree({
+    session: remote.session, remoteRoot: '/root', localRoot, concurrency: 1
+  });
+
+  assert.equal(remote.starts[0].start, undefined);
+  assert.equal(result.transferredBytes, content.length);
+  assert.deepEqual(await readFile(target), content);
 });
 
 test('a part from an older remote version is not reused', async () => {

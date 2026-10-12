@@ -69,6 +69,7 @@ import {
   cleanupDownloadPart, commitDownloadPart, prepareDownloadResume
 } from './resume-store';
 import { downloadRemoteDirectoryTree } from './remote-download';
+import { sameResumePrefix } from './resume-checksum';
 import { uploadRemoteTree } from './remote-upload';
 import { defaultSshClientIdent, ensureSshCapabilities } from './ssh-algorithms';
 import { SftpConnectionPool } from './sftp/connection-pool';
@@ -1835,13 +1836,24 @@ async function downloadRemoteFile(
   if (!target) return false;
   // 续传准备：残片名由「远端 size+mtime」推导，远端一变名字就变、旧残片自动失效；
   // 只有 SFTP 通道能做范围读，SCP 回退直接全量。
-  const resume = await prepareDownloadResume({
+  let resume = await prepareDownloadResume({
     remoteName: remotePath,
     remote,
     localTarget: target,
     canRange: session.transport !== 'scp',
     log: (message) => bridgeOutput?.appendLine(message)
   });
+  if (resume.offset > 0) {
+    const matches = await sameResumePrefix({
+      session, localPath: resume.partPath, remotePath,
+      length: resume.offset
+    });
+    if (!matches) {
+      bridgeOutput?.appendLine(`[下载] 残片 SHA-256 校验失败，完整重传：${remotePath}`);
+      await rm(resume.partPath, { force: true });
+      resume = { ...resume, offset: 0, reason: 'source-changed' };
+    }
+  }
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: resume.offset > 0 ? 'SAFS：正在续传下载' : 'SAFS：正在下载文件',

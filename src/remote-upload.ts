@@ -7,6 +7,7 @@ import {
   type ResumeSourceSignature
 } from './resume-plan';
 import { SftpSession } from './sftp/session';
+import { sameResumePrefix } from './resume-checksum';
 import { pipeStreams } from './stream-file';
 
 /** 新文件的远端默认权限：与补可执行位之前的行为一致，读写范围不因这次修复改变。 */
@@ -111,8 +112,17 @@ export async function uploadRemoteTree(options: {
         canRange: true
       });
       if (decision.resume) {
-        resumeAt = decision.offset;
-        options.log?.(`上传续传 ${remote}：已有 ${resumeAt} 字节，从该处继续`);
+        const matches = await sameResumePrefix({
+          session, localPath: local, remotePath: temporary,
+          length: decision.offset, signal
+        });
+        if (matches) {
+          resumeAt = decision.offset;
+          options.log?.(`上传续传 ${remote}：SHA-256 校验通过，已有 ${resumeAt} 字节，从该处继续`);
+        } else {
+          options.log?.(`上传残片 SHA-256 校验失败，删除残片并完整重传：${remote}`);
+          await session.deleteFile(temporary, signal);
+        }
       } else if (part !== undefined && decision.reason !== 'no-part') {
         // 残片在但不属于当前源（或已不可信）：删掉重来，别留着下一轮再判一次。
         options.log?.(`上传残片不可用（${decision.reason}），重新上传：${remote}`);

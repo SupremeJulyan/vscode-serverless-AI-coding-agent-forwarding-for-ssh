@@ -11,6 +11,7 @@ import { TrailingOperationQueue } from './trailing-operation-queue';
 import { deleteRemoteTree, ensureRemoteDir } from './remote-tree';
 import { assertLocalSyncPath, localPathForRemote } from './sync-path';
 import { uploadRemoteTree } from './remote-upload';
+import { sameResumePrefix } from './resume-checksum';
 
 export { ensureRemoteDir } from './remote-tree';
 
@@ -576,13 +577,24 @@ export class RemoteSyncManager {
       // 残片名由「远端 size+mtime」推导：远端变了名字就变，旧残片自动失效，
       // 因此重试下载大文件时能从断点继续，而不是从 0 重来。
       const remoteStat = await session.stat(remotePath, options.signal);
-      const resume = await prepareDownloadResume({
+      let resume = await prepareDownloadResume({
         remoteName: remotePath,
         remote: { size: remoteStat.size, mtimeMs: remoteStat.mtime },
         localTarget: localFull,
         canRange: session.transport !== 'scp',
         log: (message) => this.log(message)
       });
+      if (resume.offset > 0) {
+        const matches = await sameResumePrefix({
+          session, localPath: resume.partPath, remotePath,
+          length: resume.offset, signal: options.signal
+        });
+        if (!matches) {
+          this.log(`同步下载残片 SHA-256 校验失败，完整重传：${remotePath}`);
+          await fs.rm(resume.partPath, { force: true });
+          resume = { ...resume, offset: 0, reason: 'source-changed' };
+        }
+      }
       let transferred = resume.offset;
       try {
         await writeStreamToFile(

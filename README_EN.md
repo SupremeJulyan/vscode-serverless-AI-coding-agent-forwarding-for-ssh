@@ -91,7 +91,7 @@ When an upload or download of a large file (1 MiB or more) is interrupted, trans
 
 - No `rsync` and nothing installed on the remote host: SFTP read and write packets carry a byte offset, and SAFS uses it for positioned I/O. Only the `scp` fallback channel (used when a gateway has no SFTP subsystem) has to restart from zero.
 - Interrupted transfers keep their partial file next to the target (remote `.<name>.safs-part-<hash>` for uploads, local `<name>.safs-part-<hash>` for downloads) and rename it into place on success.
-- **A changed source is never resumed**: the partial's name encodes the source file's size and mtime. If the remote (or local) file changed between attempts the name no longer matches and the transfer restarts — two versions are never concatenated into a file that merely looks fine.
+- **A changed source is never resumed**: the partial's name encodes the source file's size and mtime, and SAFS compares SHA-256 hashes of the source prefix and partial immediately before resuming. Any metadata or content mismatch deletes the partial and automatically restarts the complete transfer, so bytes from two versions are never concatenated into a file that merely looks fine.
 - Partials below 1 MiB are not kept, and partials older than 7 days are cleaned up during the next transfer.
 
 ## Remote Git source control
