@@ -6,6 +6,8 @@
 
 SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote terminal over SSH, without installing VS Code Server on the server. After Agent Forwarding is enabled, AI Coding Agents such as Copilot, Codex, and Claude Code can also read and write files, search code, and run commands in the current remote workspace.
 
+![SAFS demo](images/safs-demo.gif)
+
 ## When to use SAFS
 
 - VS Code Server cannot or should not be installed on the server.

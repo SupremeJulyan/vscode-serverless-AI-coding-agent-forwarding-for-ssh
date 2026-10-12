@@ -961,7 +961,7 @@
     "package": "npm run check-types && node esbuild.js --production && node build/verify-extension-bundle.js",
     "vscode:prepublish": "npm run package",
     "test": "npm run compile && tsx --test --require ./test/vscode-register.cjs test/*.test.ts scripts/*.test.js",
-    "vsix": "npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/blob/main --baseImagesUrl https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-agent-forwarding-for-remotes/main"
+    "vsix": "npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/SupremeJulyan/vscode-serverless-AI-coding-agent-forwarding-for-ssh/blob/main --baseImagesUrl https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-AI-coding-agent-forwarding-for-ssh/main"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
