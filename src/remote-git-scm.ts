@@ -40,6 +40,8 @@ export class RemoteGitScm implements vscode.Disposable {
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly repositoryEmitter = new vscode.EventEmitter<void>();
   private readonly historyEmitter = new vscode.EventEmitter<void>();
+  private readonly statusEmitter = new vscode.EventEmitter<void>();
+  readonly onDidChangeStatus = this.statusEmitter.event;
   /** 已发现的仓库集合发生变化（新增/关闭）。 */
   readonly onDidChangeRepositories = this.repositoryEmitter.event;
   /** 提交、拉取、推送之后：历史内容可能变了。 */
@@ -49,10 +51,10 @@ export class RemoteGitScm implements vscode.Disposable {
   private disposed = false;
 
   /** 供历史视图复用同一批仓库实例（同一个 RemoteGit，避免重复发现）。 */
-  repositoriesInUse(): { uri: vscode.Uri; name: string; git: RemoteGit; syncState?: GitSyncState }[] {
+  repositoriesInUse(): { uri: vscode.Uri; name: string; git: RemoteGit; syncState?: GitSyncState; pendingChanges: number }[] {
     return [...this.repositories.values()].map(repository => ({
       uri: repository.uri, name: repository.name, git: repository.git,
-      syncState: repository.syncState
+      syncState: repository.syncState, pendingChanges: repository.scm.count ?? 0
     }));
   }
 
@@ -66,7 +68,7 @@ export class RemoteGitScm implements vscode.Disposable {
       uri: vscode.Uri, git: RemoteGit
     ) => Promise<ObservedPushState | undefined>
   ) {
-    this.subscriptions.push(this.repositoryEmitter, this.historyEmitter);
+    this.subscriptions.push(this.repositoryEmitter, this.historyEmitter, this.statusEmitter);
     this.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('safs-git', {
       provideTextDocumentContent: async uri => {
         const data = JSON.parse(uri.query) as { repository: string; ref: string; file: string; empty: boolean };
@@ -329,6 +331,7 @@ export class RemoteGitScm implements vscode.Disposable {
     repository.index.resourceStates = changes.filter(c => !isGitConflict(c) && ![' ', '?', '!'].includes(c.index)).map(c => resource(c, true));
     repository.working.resourceStates = changes.filter(c => !isGitConflict(c) && ![' ', '!'].includes(c.working)).map(c => resource(c, false));
     repository.conflicts.resourceStates = changes.filter(isGitConflict).map(c => resource(c, false));
+    this.statusEmitter.fire();
   }
 
   private snapshot(repository: Repository, file: string, ref: string, empty = false): vscode.Uri {

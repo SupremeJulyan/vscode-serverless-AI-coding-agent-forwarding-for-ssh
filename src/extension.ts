@@ -187,6 +187,7 @@ let lastForwardingSignature = '';
 let safsStatusBar: vscode.StatusBarItem | undefined;
 let statusBarSyncTask: RemoteSyncTask | undefined;
 let statusBarGitAvailable = false;
+let statusBarGitTooltip = '';
 /** Session-only opt-in target for executing Agent commands in a visible SAFS terminal. */
 let agentCommandTerminal: vscode.Terminal | undefined;
 /** Live workspace root reported by the selected terminal in terminal-only mode. */
@@ -241,7 +242,7 @@ function refreshSafsEntryLabel(): void {
     safsStatusBar.tooltip = `正在双向同步：${statusBarSyncTask.remotePath} ↔ ${statusBarSyncTask.localDir}`;
   } else if (statusBarGitAvailable) {
     safsStatusBar.text = '$(git-branch) SAFS Git';
-    safsStatusBar.tooltip = '当前工作区的 SAFS Git 仓库可用';
+    safsStatusBar.tooltip = statusBarGitTooltip;
   } else {
     const transport = currentSessionTransport();
     if (!transport) {
@@ -252,6 +253,12 @@ function refreshSafsEntryLabel(): void {
     safsStatusBar.tooltip = transport === 'scp'
       ? '传输通道：SCP/exec（服务器未提供 SFTP 子系统）'
       : '传输通道：SFTP';
+    const location = currentRemoteLocation();
+    const folder = location && registry?.get(location.mountName);
+    const host = lastReadConfig?.hosts.find(candidate => candidate.name === folder?.hostName);
+    if (host) {
+      safsStatusBar.tooltip += `\n主机：${hierarchicalHostName(host, lastReadConfig?.host_aliases)}\n账号：${host.user}`;
+    }
   }
   safsStatusBar.show();
 }
@@ -6347,10 +6354,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   const refreshGitStatus = () => {
-    statusBarGitAvailable = gitScm.repositoriesInUse().length > 0;
+    const repositories = gitScm.repositoriesInUse();
+    statusBarGitAvailable = repositories.length > 0;
+    statusBarGitTooltip = repositories.map(repository => {
+      const state = repository.syncState;
+      return `${repository.name}\n待提交：${repository.pendingChanges} 个文件\n待推送：${state?.ahead ?? '未知'} 个提交\n待拉取：${state?.behind ?? '未知'} 个提交`;
+    }).join('\n\n');
     refreshSafsEntryLabel();
   };
-  context.subscriptions.push(gitScm.onDidChangeRepositories(refreshGitStatus));
+  context.subscriptions.push(gitScm.onDidChangeRepositories(refreshGitStatus),
+    gitScm.onDidChangeStatus(refreshGitStatus), gitScm.onDidChangeHistory(refreshGitStatus));
   refreshGitStatus();
   context.subscriptions.push(gitScm, new RemoteGitHistory(
     () => gitScm.repositoriesInUse(),
