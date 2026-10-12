@@ -184,9 +184,8 @@ let agentWorkspaceHeartbeat: NodeJS.Timeout | undefined;
 let lastAgentDiscoveryState = '';
 let lastForwardingSignature = '';
 let safsStatusBar: vscode.StatusBarItem | undefined;
-let forwardingFocusStatusBar: vscode.StatusBarItem | undefined;
-let syncStatusBar: vscode.StatusBarItem | undefined;
-let focusedAgentSource: { name: string } | undefined;
+let statusBarSyncTask: RemoteSyncTask | undefined;
+let statusBarGitAvailable = false;
 /** Session-only opt-in target for executing Agent commands in a visible SAFS terminal. */
 let agentCommandTerminal: vscode.Terminal | undefined;
 /** Live workspace root reported by the selected terminal in terminal-only mode. */
@@ -232,48 +231,28 @@ function currentSessionTransport(): 'sftp' | 'scp' | undefined {
   return folder ? pool.transport(folder.hostName) : undefined;
 }
 
-/** 按当前会话传输通道刷新底栏入口文案（SFTP 或 SCP 回退），不影响焦点提示。 */
+/** 优先显示同步、Git，再显示实际连接的传输通道。 */
 function refreshSafsEntryLabel(): void {
   if (!safsStatusBar) return;
-  // 服务器未提供 SFTP 子系统而回退 SCP/exec 时，入口相应显示为 SAFS SCP。
-  const scpFallback = currentSessionTransport() === 'scp';
-  safsStatusBar.text = scpFallback ? '$(remote) SAFS SCP' : '$(remote) SAFS SFTP';
-  safsStatusBar.name = scpFallback ? 'SAFS SCP' : 'SAFS SFTP';
-  safsStatusBar.tooltip = scpFallback
-    ? '打开远程目录（服务器未提供 SFTP 子系统，当前经 SCP/exec 回退）'
-    : '打开 SFTP 远程目录';
-}
-
-/** 同步镜像窗口：工作区是本地目录，但语义上仍绑定远程挂载并双向同步。 */
-function isSyncMirrorWindow(): boolean {
-  const folders = vscode.workspace.workspaceFolders ?? [];
-  if (folders.some((folder) => folder.uri.scheme === remoteFileSystemScheme)) return false;
-  return folders.some(
-    (folder) => folder.uri.scheme === 'file' && syncedRemoteLocation(folder.uri.fsPath)
-  );
-}
-
-function updateSafsStatusBar(
-  agentFocus = false, agentName?: string, clearSource = false
-): void {
-  if (!safsStatusBar || !forwardingFocusStatusBar) return;
-  if (clearSource) focusedAgentSource = undefined;
-  // Agent 通常在 VS Code 失焦时发起请求（用户正在操作桌面版/终端）。
-  // 当下可以不显示焦点提示，但必须记住来源，以便切回窗口时恢复。
-  if (agentName) focusedAgentSource = { name: agentName };
-  const source = focusedAgentSource?.name ?? 'Agent';
-  // SFTP 入口与 SAFS SYNC 一样常驻；转发焦点提示单独一项，不再顶替 SFTP 文案。
-  refreshSafsEntryLabel();
-  // 镜像窗口在悬停里注明双向同步，避免“本地改还是远程改”的困惑。
-  const mirrorHint = isSyncMirrorWindow() ? '（本地镜像：改动与远程双向同步）' : '';
-  forwardingFocusStatusBar.text = focusedAgentSource
-    ? `$(sparkle) ${source}远程转发中💪`
-    : '$(sparkle) Agent 已聚焦当前窗口😏';
-  forwardingFocusStatusBar.tooltip = focusedAgentSource
-    ? `${source} 正在通过本窗口的远程连接干活${mirrorHint}`
-    : `本窗口已参与 Agent MCP 转发${mirrorHint}`;
-  if (agentFocus) forwardingFocusStatusBar.show();
-  else forwardingFocusStatusBar.hide();
+  safsStatusBar.name = 'SAFS 状态';
+  if (statusBarSyncTask) {
+    safsStatusBar.text = '$(sync) SAFS SYNC';
+    safsStatusBar.tooltip = `正在双向同步：${statusBarSyncTask.remotePath} ↔ ${statusBarSyncTask.localDir}`;
+  } else if (statusBarGitAvailable) {
+    safsStatusBar.text = '$(git-branch) SAFS Git';
+    safsStatusBar.tooltip = '当前工作区的 SAFS Git 仓库可用';
+  } else {
+    const transport = currentSessionTransport();
+    if (!transport) {
+      safsStatusBar.hide();
+      return;
+    }
+    safsStatusBar.text = transport === 'scp' ? '$(remote) SAFS SCP' : '$(remote) SAFS SFTP';
+    safsStatusBar.tooltip = transport === 'scp'
+      ? '传输通道：SCP/exec（服务器未提供 SFTP 子系统）'
+      : '传输通道：SFTP';
+  }
+  safsStatusBar.show();
 }
 
 let syncManager: RemoteSyncManager | undefined;
@@ -341,7 +320,7 @@ function syncedRemoteLocation(localPath: string): {
 }
 
 async function updateSyncStatusBar(): Promise<void> {
-  if (!syncStatusBar) return;
+  if (!safsStatusBar) return;
   const localFolders = (vscode.workspace.workspaceFolders ?? [])
     .filter((folder) => folder.uri.scheme === 'file')
     .map((folder) => path.resolve(folder.uri.fsPath));
@@ -356,13 +335,8 @@ async function updateSyncStatusBar(): Promise<void> {
       break;
     }
   }
-  if (!task) {
-    syncStatusBar.hide();
-    return;
-  }
-  syncStatusBar.text = '$(sync) SAFS SYNC';
-  syncStatusBar.tooltip = `正在双向同步：${task.remotePath} ↔ ${task.localDir}`;
-  syncStatusBar.show();
+  statusBarSyncTask = task;
+  refreshSafsEntryLabel();
 }
 
 // 重开远程窗口后，首次远程文件激活时无条件把自动连接的终端移到该文件目录
@@ -4711,15 +4685,13 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     const workspaces = discoverAgentWorkspaces();
     const forwarding = aiForwarded
       && workspaces.some((workspace) => workspace.mountName === mount.name);
-    const focused = aiForwarded
-      && workspaces.some((workspace) => workspace.mountName === mount.name && workspace.focused);
     const item = new vscode.TreeItem(mount.name);
     const connectionLabel = connected
       ? '已连接'
       : connectionState === 'connecting' || connectionState === 'reconnecting'
         ? '连接中'
         : connectionState === 'error' ? '连接错误' : '未连接';
-    const symbol = focused ? '👁' : forwarding ? '⚡' : aiForwarded ? '○' : undefined;
+    const symbol = forwarding ? '⚡' : aiForwarded ? '○' : undefined;
     item.description = symbol ? `Agent State: ${symbol}` : undefined;
     item.contextValue = [
       'safs.connection',
@@ -4739,11 +4711,6 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
         : aiForwarded
           ? 'Agent 转发：已启用（未转发）'
           : 'Agent 转发：已关闭',
-      focused
-        ? 'MCP 绑定：当前聚焦窗口（仅用于状态展示）'
-        : forwarding
-          ? 'MCP 绑定：其他窗口'
-          : 'MCP 绑定：无',
       '',
       '展开可查看历史远程目录。'
     ].join('\n'));
@@ -4780,10 +4747,7 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     const workspaces = discoverAgentWorkspaces();
     const forwarding = aiForwarded
       && workspaces.some((workspace) => workspace.mountName === item.hostName);
-    const focused = aiForwarded
-      && workspaces.some((workspace) =>
-        workspace.mountName === item.hostName && workspace.focused);
-    const symbol = focused ? '👁' : forwarding ? '⚡' : aiForwarded ? '○' : undefined;
+    const symbol = forwarding ? '⚡' : aiForwarded ? '○' : undefined;
     treeItem.description = symbol ? `Agent State: ${symbol}` : undefined;
     treeItem.contextValue = item.user.trim()
       ? [
@@ -5338,8 +5302,8 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
           source: input.source,
           mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
-        request: (agentName) => {
-          updateSafsStatusBar(vscode.window.state.focused, agentName);
+        request: () => {
+          refreshSafsEntryLabel();
         },
         audit: auditMcpTool,
         log: (message) => logMcpMessage('Agent MCP', message)
@@ -5367,7 +5331,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     await ensureAgentMcpServer(context);
   }
   if (!mountName || !enabled.has(mountName) || !mcp?.running || mcp.portUnavailable) {
-    updateSafsStatusBar(false, undefined, true);
+    refreshSafsEntryLabel();
     if (mountName && !enabled.has(mountName)) await mcp?.stop();
     await agentWorkspacePublisher.remove();
     const reason = !mountName ? '非远程工作区'
@@ -5382,7 +5346,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   const config = await readConfig();
   const mount = config.mounts.find((candidate) => candidate.name === mountName);
   if (!mount) {
-    updateSafsStatusBar(false, undefined, true);
+    refreshSafsEntryLabel();
     await agentWorkspacePublisher.remove();
     return;
   }
@@ -5411,7 +5375,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     mcpUrl: mcp.url,
     ...(terminalCommandOnly ? { terminalCommandOnly: true } : {})
   });
-  updateSafsStatusBar(vscode.window.state.focused);
+  refreshSafsEntryLabel();
   const state = `published:${mount.name}:${workspacePath}:${mcp.url}:${vscode.window.state.focused}:${terminalCommandOnly}`;
   if (lastAgentDiscoveryState !== state) {
     lastAgentDiscoveryState = state;
@@ -5430,7 +5394,7 @@ function startAgentWorkspacePublishing(context: vscode.ExtensionContext): void {
   refresh();
   agentWorkspaceHeartbeat = setInterval(refresh, 10_000);
   // 转发状态与聚焦窗口变化（本窗口或其他窗口启用/关闭/发布/聚焦切换）时刷新
-  // 树视图，让“转发中/已启用”状态与“👁 聚焦窗口”指示符保持最新。
+  // 树视图，让“转发中/已启用”状态保持最新。
   const forwardingRefresh = () => {
     const workspaces = discoverAgentWorkspaces();
     const active = new Set(workspaces.map((workspace) => workspace.mountName));
@@ -5445,7 +5409,7 @@ function startAgentWorkspacePublishing(context: vscode.ExtensionContext): void {
   const forwardingTimer = setInterval(forwardingRefresh, 10_000);
   context.subscriptions.push(
     vscode.window.onDidChangeWindowState((state) => {
-      if (!state.focused) updateSafsStatusBar(false);
+      if (!state.focused) refreshSafsEntryLabel();
       refresh();
       if (state.focused) forwardingRefresh();
     }),
@@ -5915,27 +5879,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   context.subscriptions.push(output, bridgeOutput, agentActivityView);
   await recoverTerminalDiagnostics(context);
-  // 独立、高优先级 ID：避免长焦点文案被底栏布局整项挤掉，也不复用
-  // 旧匿名 SAFS 状态项可能已被用户隐藏的可见性偏好。
-  forwardingFocusStatusBar = vscode.window.createStatusBarItem(
-    'safs.agentForwardingFocus', vscode.StatusBarAlignment.Left, 10_000
-  );
-  forwardingFocusStatusBar.name = 'SAFS Agent 转发焦点';
-  forwardingFocusStatusBar.command = `${commandPrefix}.openFolder`;
-  // SFTP 入口与 SAFS SYNC 一致：独立常驻一项，转发焦点提示不再顶替它。
+  // 常驻 SFTP 入口。
   safsStatusBar = vscode.window.createStatusBarItem(
-    'safs.sftpEntry', vscode.StatusBarAlignment.Left, 9_999
+    'safs.status', vscode.StatusBarAlignment.Left, 9_999
   );
-  safsStatusBar.name = 'SAFS SFTP';
-  safsStatusBar.command = `${commandPrefix}.openFolder`;
-  updateSafsStatusBar(false);
-  safsStatusBar.show();
-  context.subscriptions.push(safsStatusBar, forwardingFocusStatusBar);
-  syncStatusBar = vscode.window.createStatusBarItem(
-    'safs.syncStatus', vscode.StatusBarAlignment.Left, 99
-  );
-  syncStatusBar.name = 'SAFS 本地同步';
-  context.subscriptions.push(syncStatusBar);
+  refreshSafsEntryLabel();
+  context.subscriptions.push(safsStatusBar);
   syncCoordinator = new SyncCoordinator(
     vscode.Uri.joinPath(context.globalStorageUri, 'sync-coordination').fsPath
   );
@@ -6385,6 +6334,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       bridgeOutput?.appendLine(`[Git] 跨主机推送状态未同步：${redactSensitiveText(String(error))}`);
     }
   });
+  const refreshGitStatus = () => {
+    statusBarGitAvailable = gitScm.repositoriesInUse().length > 0;
+    refreshSafsEntryLabel();
+  };
+  context.subscriptions.push(gitScm.onDidChangeRepositories(refreshGitStatus));
+  refreshGitStatus();
   context.subscriptions.push(gitScm, new RemoteGitHistory(
     () => gitScm.repositoriesInUse(),
     (message) => bridgeOutput?.appendLine(`[Git] ${message}`),

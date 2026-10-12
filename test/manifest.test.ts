@@ -331,37 +331,21 @@ test('SAFS MCP is opt-in for remote context instead of mandatory in every worksp
   assert.equal(router.includes('resolve_workspace_execution'), false);
 });
 
-test('shows when this window is the Agent forwarding focus', async () => {
+test('omits Agent focus status bar and retains the SFTP entry', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extensionSource.includes(
-    '$(sparkle) Agent 已聚焦当前窗口😏'
-  ));
-  assert.ok(extensionSource.includes(
-    '$(sparkle) ${source}远程转发中💪'
-  ));
-  // 悬停说明路由关系；同步镜像窗口注明改动与远程双向同步。
-  assert.ok(extensionSource.includes('本窗口的远程连接干活'));
-  assert.ok(extensionSource.includes('改动与远程双向同步'));
-  assert.ok(extensionSource.includes('isSyncMirrorWindow()'));
-  assert.equal(extensionSource.includes('选择 Agent 所在平台'), false);
-  assert.equal(extensionSource.includes('askAgentNameAndPlatform'), false);
-  assert.ok(extensionSource.includes('updateSafsStatusBar(vscode.window.state.focused)'));
-  assert.ok(extensionSource.includes('if (agentName) focusedAgentSource'));
-  assert.ok(extensionSource.includes(
-    'updateSafsStatusBar(vscode.window.state.focused, agentName)'
-  ));
-  assert.ok(extensionSource.includes("'safs.agentForwardingFocus'"));
-  assert.ok(extensionSource.includes('vscode.StatusBarAlignment.Left, 10_000'));
-  // SAFS SFTP 入口与转发焦点提示分项显示（与 SAFS SYNC 一致），互不顶替。
-  assert.ok(extensionSource.includes("'safs.sftpEntry'"));
-  assert.ok(extensionSource.includes("'$(remote) SAFS SCP'"));
-  assert.ok(extensionSource.includes("'$(remote) SAFS SFTP'"));
-  assert.ok(extensionSource.includes('forwardingFocusStatusBar.show()'));
-  assert.ok(extensionSource.includes('forwardingFocusStatusBar.hide()'));
-  // 服务器无 SFTP 子系统回退 SCP/exec 时，入口显示为 SAFS SCP 并即时刷新。
+  assert.equal(extensionSource.includes('Agent 已聚焦当前窗口'), false);
+  assert.equal(extensionSource.includes('👁'), false);
+  assert.equal(extensionSource.includes('forwardingFocusStatusBar'), false);
+  assert.equal(extensionSource.includes('focusedAgentSource'), false);
+  assert.equal(extensionSource.includes("'safs.agentForwardingFocus'"), false);
+  assert.ok(extensionSource.includes("'safs.status'"));
+  assert.equal(extensionSource.includes('syncStatusBar'), false);
+  assert.equal(extensionSource.includes('safsStatusBar.command'), false);
+  assert.ok(extensionSource.includes("'$(sync) SAFS SYNC'"));
+  assert.ok(extensionSource.includes("'$(git-branch) SAFS Git'"));
+  assert.ok(extensionSource.includes('if (statusBarSyncTask)'));
+  assert.ok(extensionSource.includes('else if (statusBarGitAvailable)'));
   assert.ok(extensionSource.includes('refreshSafsEntryLabel()'));
-  // 连接状态变化事件即时刷新入口文案（重连换通道、空闲回收后懒重连）。
-  assert.match(extensionSource, /refreshTree\(\);\r?\n      refreshSafsEntryLabel\(\)/);
 });
 
 test('uses only the unified cross-platform config path', async () => {
