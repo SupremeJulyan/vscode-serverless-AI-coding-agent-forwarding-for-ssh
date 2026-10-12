@@ -674,7 +674,8 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
     : undefined;
   const folder: RemoteFolder = {
     mountName: mount.name, hostName: mount.host, remoteRoot, workspaceRoot, defaultRemotePath,
-    ...(legacyPlaceholder && legacyRoot ? { legacyMapping: {
+    ...(legacyPlaceholder && legacyRoot
+      && vscode.Uri.file(legacyPlaceholder.localPath).path !== workspaceRoot ? { legacyMapping: {
       workspaceRoot: vscode.Uri.file(legacyPlaceholder.localPath).path, remoteRoot: legacyRoot
     } } : {})
   };

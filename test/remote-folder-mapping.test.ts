@@ -34,3 +34,27 @@ test('root mount maps home and outside-home directories without colliding with r
     await rm(storage, { recursive: true, force: true });
   }
 });
+
+test('root login does not apply a conflicting home mapping to the root namespace', async () => {
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'safs-root-login-'));
+  try {
+    const root = await ensureAgentCwdPlaceholder('/', storage, 'dev(root)', '127.0.0.1', 'root');
+    const home = await ensureAgentCwdPlaceholder('/root', storage, 'dev(root)', '127.0.0.1', 'root');
+    assert.equal(root.localPath, home.localPath);
+    // Covers restored folder metadata as well as current root-folder mapping.
+    for (const workspaceRoot of [root.localPath.replace(/\\/g, '/'), '/c:/Users/admin/agent-cwd/7f000001/root/root']) {
+      const folder: RemoteFolder = {
+        mountName: 'dev(root)', hostName: 'dev(root)', remoteRoot: '/',
+        defaultRemotePath: '/root', workspaceRoot,
+        legacyMapping: { workspaceRoot, remoteRoot: '/root' }
+      };
+      for (const remote of ['/', '/root', '/root/project', '/etc']) {
+        const uriPath = workspacePathForRemote(folder, remote);
+        assert.equal(isWorkspaceUriPath(folder, uriPath), true);
+        assert.equal(remotePathForUri(folder, uriPath), remote);
+      }
+    }
+  } finally {
+    await rm(storage, { recursive: true, force: true });
+  }
+});

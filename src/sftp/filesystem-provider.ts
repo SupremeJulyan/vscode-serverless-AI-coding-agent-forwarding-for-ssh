@@ -37,7 +37,8 @@ export function isWorkspaceUriPath(folder: RemoteFolder, uriPath: string): boole
 }
 
 export function remotePathForUri(folder: RemoteFolder, uriPath: string): string {
-  if (folder.legacyMapping && isWorkspaceNamespacePath(
+  if (folder.legacyMapping
+    && folder.legacyMapping.workspaceRoot !== folder.workspaceRoot && isWorkspaceNamespacePath(
     folder.legacyMapping.workspaceRoot, uriPath
   )) {
     return path.posix.join(folder.legacyMapping.remoteRoot,
