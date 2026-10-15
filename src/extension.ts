@@ -12,7 +12,7 @@ import { RemoteGitScm } from './remote-git-scm';
 import { RemoteGitHistory } from './remote-git-history';
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
-  ensureUnixCliPath, globalNodeCli, installNodeCli, removeNodeCli,
+  ensureUnixCliPath, globalNodeCli, globalNodeCliSkill, installNodeCli, removeNodeCli,
   NodeRuntimeUnavailableError, requireNodeRuntime,
   nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion,
@@ -6446,7 +6446,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Do not probe Node.js or install the CLI during extension activation.
     // The first explicit Agent-forwarding enable action performs that setup.
     if (cliEnabled()) {
-      agentTrace('Activate', `${agentInterface()} 模式已启用，等待用户打开 Agent 转发后检查 Node.js 与 CLI`);
+      const executable = globalNodeCli(os.homedir(), process.platform);
+      const skill = path.join(globalNodeCliSkill(os.homedir()), 'SKILL.md');
+      const [cliExists, skillExists] = await Promise.all([
+        access(executable).then(() => true, () => false),
+        access(skill).then(() => true, () => false)
+      ]);
+      if (enabled.size > 0 && (!cliExists || !skillExists)) {
+        agentTrace(
+          'Activate',
+          `CLI/Skill 已不存在，清除卸载前遗留的 Agent 转发状态：${[...enabled].join(',')}`
+        );
+        enabled.clear();
+        await context.globalState.update(aiForwardMountsKey, []);
+        await context.globalState.update(cliInstallKey, undefined);
+        tree.refresh();
+      }
+      agentTrace('Activate', `${agentInterface()} 模式已启用，等待用户打开 Agent 转发后检查 Node.js、CLI 与 Skill`);
     } else {
       agentTrace('Activate', 'MCP 模式已启用，移除互斥的 CLI 和 Agent Skill');
       await uninstallGlobalCli(context);

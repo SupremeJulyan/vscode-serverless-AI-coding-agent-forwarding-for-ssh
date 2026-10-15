@@ -403,7 +403,10 @@ test('installs forwarding only for the globally first enabled mount or an explic
   ));
   assert.ok(extensionSource.includes('enabledValue && enabled.size === 0'));
   assert.ok(extensionSource.includes('if (!shouldInstallIntegration)'));
-  assert.ok(extensionSource.includes('等待用户打开 Agent 转发后检查 Node.js 与 CLI'));
+  assert.ok(extensionSource.includes('等待用户打开 Agent 转发后检查 Node.js、CLI 与 Skill'));
+  assert.ok(extensionSource.includes('CLI/Skill 已不存在，清除卸载前遗留的 Agent 转发状态'));
+  assert.ok(extensionSource.includes("path.join(globalNodeCliSkill(os.homedir()), 'SKILL.md')"));
+  assert.ok(extensionSource.includes('await context.globalState.update(aiForwardMountsKey, [])'));
   const activationSetup = extensionSource.slice(
     extensionSource.indexOf("agentTrace(\n      'Activate',\n      `当前远程挂载="),
     extensionSource.indexOf('startAgentWorkspacePublishing(context);')
