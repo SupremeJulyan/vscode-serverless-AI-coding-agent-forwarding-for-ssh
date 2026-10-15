@@ -6,19 +6,25 @@ export const agentActivityViewId = 'safs.agentActivity';
 
 export interface AgentTerminalTargetState {
   enabled: boolean;
+  interface?: 'cli' | 'mcp';
   mode?: 'workspace' | 'terminal';
   label?: string;
+  availability?: 'disabled' | 'checking' | 'ready' | 'error';
+  detail?: string;
+  recoveryLabel?: string;
 }
 
 export interface AgentActivityViewActions {
-  terminalTarget(): AgentTerminalTargetState;
+  terminalTarget(): AgentTerminalTargetState | Promise<AgentTerminalTargetState>;
   refreshTerminalTarget(): Promise<void>;
   switchWorkspace(): Promise<void>;
   openTerminalDirectory(): Promise<void>;
+  recoverForwarding(): Promise<void>;
 }
 
 export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
+  private targetRevision = 0;
   private readonly changeSubscription: { dispose(): void };
 
   constructor(
@@ -58,18 +64,30 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
         await this.actions?.switchWorkspace();
       } else if (type === 'openTerminalDirectory') {
         await this.actions?.openTerminalDirectory();
+      } else if (type === 'recoverForwarding') {
+        try {
+          await this.actions?.recoverForwarding();
+        } finally {
+          await this.updateTerminalTarget();
+        }
       }
     });
   }
 
   async updateTerminalTarget(): Promise<void> {
-    await this.view?.webview.postMessage({
+    const revision = ++this.targetRevision;
+    const view = this.view;
+    if (!view) return;
+    const state = await this.actions?.terminalTarget() ?? { enabled: false };
+    if (revision !== this.targetRevision || view !== this.view) return;
+    await view.webview.postMessage({
       type: 'terminalTarget',
-      ...(this.actions?.terminalTarget() ?? { enabled: false })
+      ...state
     });
   }
 
   dispose(): void {
+    this.targetRevision++;
     this.changeSubscription.dispose();
     this.view = undefined;
   }
@@ -201,11 +219,14 @@ export function activityViewHtml(webview: vscode.Webview): string {
     <div class="mode-switch" role="group" aria-label="Agent 工具模式">
       <span id="workspaceModeLabel" class="mode-label" hidden>工作区模式</span>
       <span id="terminalModeLabel" class="mode-label" hidden>终端模式</span>
-      <button id="refreshTerminalTarget" type="button" hidden>刷新工作区</button>
+      <button id="refreshTerminalTarget" type="button" hidden>刷新终端目录</button>
       <button id="switchWorkspace" type="button" title="在当前窗口选择并打开远程目录">切换工作区</button>
       <button id="openTerminalDirectory" type="button" title="在当前窗口打开转发终端所在的远程目录" hidden>打开远程目录</button>
     </div>
     <div id="agentModeDetail" class="agent-mode-detail">使用当前远程工作区</div>
+    <div id="modeCapabilities" class="agent-mode-detail" hidden>仅支持终端命令；文件、搜索和传输工具不可用。命令沿用所选终端的权限和环境。</div>
+    <div id="forwardingStatus" class="agent-mode-detail" role="status"></div>
+    <button id="recoverForwarding" type="button" hidden>重试连接</button>
   </section>
   <div class="controls">
     <select id="category" aria-label="按操作类型筛选">
@@ -233,9 +254,14 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const refreshTerminalTarget = document.getElementById('refreshTerminalTarget');
     const switchWorkspace = document.getElementById('switchWorkspace');
     const openTerminalDirectory = document.getElementById('openTerminalDirectory');
+    const modeCapabilities = document.getElementById('modeCapabilities');
+    const forwardingStatus = document.getElementById('forwardingStatus');
+    const recoverForwarding = document.getElementById('recoverForwarding');
     const agentMode = document.getElementById('agentMode');
     const agentModeDetail = document.getElementById('agentModeDetail');
     let events = [];
+    let statusKind = 'idle';
+    let idleHint = '当前远程窗口';
     let statusTimer;
     const seenStatus = new Map();
     const labels = {
@@ -360,10 +386,11 @@ export function activityViewHtml(webview: vscode.Webview): string {
       });
     }
     function setStatus(kind, title, detail) {
+      statusKind = kind;
       clearTimeout(statusTimer);
       statusCard.className = 'status ' + kind;
       statusTitle.textContent = title;
-      statusDetail.textContent = detail || '当前远程窗口';
+      statusDetail.textContent = kind === 'idle' ? idleHint : detail || '当前远程窗口';
       orb.setAttribute('aria-label', kind === 'running' ? '执行中' : kind === 'success' ? '成功' : kind === 'error' ? '失败' : '空闲');
       if (kind === 'success' || kind === 'error') {
         statusTimer = setTimeout(function() { setStatus('idle', '等待 Agent 操作', '当前远程窗口'); }, 2000);
@@ -402,6 +429,12 @@ export function activityViewHtml(webview: vscode.Webview): string {
       if (!event.data) return;
       if (event.data.type === 'state') acceptState(event.data);
       if (event.data.type === 'terminalTarget') {
+        if (event.data.interface === 'cli' || event.data.interface === 'mcp') {
+          idleHint = event.data.interface === 'cli'
+            ? '在 Agent 中输入 /safs-cli'
+            : '在 Agent 中输入 use safs mcp';
+          if (statusKind === 'idle') statusDetail.textContent = idleHint;
+        }
         const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'
           ? event.data.mode
           : event.data.enabled === true ? 'terminal' : undefined;
@@ -412,11 +445,16 @@ export function activityViewHtml(webview: vscode.Webview): string {
         refreshTerminalTarget.hidden = mode !== 'terminal';
         switchWorkspace.hidden = mode === 'terminal';
         openTerminalDirectory.hidden = mode !== 'terminal';
+        modeCapabilities.hidden = mode !== 'terminal';
         workspaceModeLabel.classList.toggle('active', mode === 'workspace');
         terminalModeLabel.classList.toggle('active', enabled);
-        agentModeDetail.textContent = mode === 'terminal'
-          ? '当前终端：' + (event.data.label || 'SAFS 终端')
-          : '使用当前远程工作区';
+        agentModeDetail.textContent = event.data.label || '尚未选择远程目标';
+        const availability = event.data.availability;
+        const statusLabel = { disabled: '未启用', checking: '准备中', ready: '转发就绪', error: '需要恢复' }[availability] || '';
+        forwardingStatus.textContent = statusLabel + (event.data.detail ? ' · ' + event.data.detail : '');
+        recoverForwarding.hidden = !event.data.recoveryLabel;
+        recoverForwarding.disabled = availability === 'checking';
+        recoverForwarding.textContent = event.data.recoveryLabel || '重试连接';
       }
     });
     categoryFilter.addEventListener('change', render);
@@ -430,6 +468,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
     });
     openTerminalDirectory.addEventListener('click', function() {
       vscode.postMessage({ type: 'openTerminalDirectory' });
+    });
+    recoverForwarding.addEventListener('click', function() {
+      recoverForwarding.disabled = true;
+      vscode.postMessage({ type: 'recoverForwarding' });
     });
     vscode.postMessage({ type: 'ready' });
   </script>

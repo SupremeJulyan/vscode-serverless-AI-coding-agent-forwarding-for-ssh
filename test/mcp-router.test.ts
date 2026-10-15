@@ -636,7 +636,11 @@ test('another VS Code window takes over the fixed HTTP port after its leader exi
     assert.equal(second.leader, false);
     assert.equal(second.available, true);
 
+    assert.equal(await first.healthy(), true);
+    assert.equal(await second.healthy(), true);
+
     await first.stop();
+    assert.equal(await second.healthy(), false);
     await second.start();
     assert.equal(second.leader, true);
     assert.equal(second.available, true);

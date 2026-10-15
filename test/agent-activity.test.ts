@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 import {
   AgentActivityStore, agentActivityLimit, summarizeAgentActivityInput
 } from '../src/agent-activity';
-import { activityViewHtml } from '../src/agent-activity-view';
+import { activityViewHtml, AgentActivityViewProvider } from '../src/agent-activity-view';
 
 class MemoryState {
   readonly values = new Map<string, unknown>();
@@ -12,6 +13,32 @@ class MemoryState {
   }
   async update(key: string, value: unknown): Promise<void> { this.values.set(key, value); }
 }
+
+test('a slow target check cannot overwrite a newer panel state', async () => {
+  const pending: Array<(state: any) => void> = [];
+  const messages: any[] = [];
+  const provider = new AgentActivityViewProvider({
+    onDidChange: () => ({ dispose() {} })
+  } as any, {
+    terminalTarget: () => new Promise((resolve) => pending.push(resolve)),
+    refreshTerminalTarget: async () => {}, switchWorkspace: async () => {},
+    openTerminalDirectory: async () => {}, recoverForwarding: async () => {}
+  });
+  provider.resolveWebviewView({
+    webview: { cspSource: 'test', options: {}, html: '', onDidReceiveMessage() {},
+      postMessage: async (message: any) => { messages.push(message); return true; } },
+    onDidDispose() {}
+  } as any);
+  const oldCheck = provider.updateTerminalTarget();
+  const newCheck = provider.updateTerminalTarget();
+  pending[1]({ enabled: true, availability: 'ready', label: 'new target' });
+  await newCheck;
+  pending[0]({ enabled: true, availability: 'error', label: 'old target' });
+  await oldCheck;
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].label, 'new target');
+  provider.dispose();
+});
 
 test('activity summaries retain metadata without file contents or command output', () => {
   const write = summarizeAgentActivityInput('remote_write', {
@@ -99,7 +126,7 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   assert.match(html, /type: 'clear'/);
   assert.match(html, />工作区模式<\/span>/);
   assert.match(html, />终端模式<\/span>/);
-  assert.match(html, />刷新工作区<\/button>/);
+  assert.match(html, />刷新终端目录<\/button>/);
   assert.match(html, /id="switchWorkspace"[^>]*>切换工作区<\/button>/);
   assert.match(html, /type: 'switchWorkspace'/);
   assert.match(html, /id="openTerminalDirectory"[^>]*hidden>打开远程目录<\/button>/);
@@ -115,4 +142,52 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
+});
+
+test('target panel updates mode, capabilities, readiness and recovery actions', () => {
+  const html = activityViewHtml({ cspSource: 'test' } as any);
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)![1];
+  const elements = new Map<string, any>();
+  const messages: any[] = [];
+  let receive: (event: any) => void = () => {};
+  const get = (id: string) => {
+    if (!elements.has(id)) elements.set(id, {
+      hidden: false, disabled: false, textContent: '', listeners: {} as Record<string, () => void>,
+      classList: { toggle() {} },
+      addEventListener(type: string, listener: () => void) { this.listeners[type] = listener; }
+    });
+    return elements.get(id);
+  };
+  runInNewContext(script, {
+    acquireVsCodeApi: () => ({ postMessage: (message: any) => messages.push(message) }),
+    document: { getElementById: get },
+    window: { addEventListener: (_type: string, listener: typeof receive) => { receive = listener; } }
+  });
+  const send = (data: any) => receive({ data: { type: 'terminalTarget', ...data } });
+  const target = '开发机 → root → /srv/project';
+  send({ enabled: true, interface: 'cli', mode: 'terminal', label: target, availability: 'error', detail: 'CLI 需要更新', recoveryLabel: '修复 CLI' });
+  assert.equal(get('statusDetail').textContent, '在 Agent 中输入 /safs-cli');
+  assert.equal(get('agentModeDetail').textContent, target);
+  assert.equal(get('switchWorkspace').hidden, true);
+  assert.equal(get('openTerminalDirectory').hidden, false);
+  assert.equal(get('modeCapabilities').hidden, false);
+  assert.equal(get('forwardingStatus').textContent, '需要恢复 · CLI 需要更新');
+  assert.equal(get('recoverForwarding').textContent, '修复 CLI');
+  get('recoverForwarding').listeners.click();
+  assert.equal(messages.at(-1).type, 'recoverForwarding');
+  assert.equal(get('recoverForwarding').disabled, true);
+  send({ mode: 'terminal', availability: 'checking' });
+  assert.equal(get('forwardingStatus').textContent, '准备中');
+  send({ interface: 'mcp', mode: 'workspace', label: target, availability: 'ready' });
+  assert.equal(get('statusDetail').textContent, '在 Agent 中输入 use safs mcp');
+  assert.equal(get('switchWorkspace').hidden, false);
+  assert.equal(get('openTerminalDirectory').hidden, true);
+  assert.equal(get('modeCapabilities').hidden, true);
+  assert.equal(get('refreshTerminalTarget').hidden, true);
+  assert.equal(get('recoverForwarding').hidden, true);
+  assert.equal(get('forwardingStatus').textContent, '转发就绪');
+  send({ mode: 'workspace', availability: 'disabled', recoveryLabel: '启用 Agent 转发' });
+  assert.equal(get('recoverForwarding').disabled, false);
+  assert.equal(get('recoverForwarding').hidden, false);
+  assert.equal(get('recoverForwarding').textContent, '启用 Agent 转发');
 });

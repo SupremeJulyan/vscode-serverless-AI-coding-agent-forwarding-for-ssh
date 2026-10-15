@@ -335,6 +335,11 @@ export class AgentHttpRouter {
     }
   }
 
+  /** Inspect the authenticated shared router, including a leader in another window. */
+  async healthy(): Promise<boolean> {
+    return this.isExistingRouter().catch(() => false);
+  }
+
   async start(): Promise<void> {
     if (this.httpServer) return;
     const app = express();

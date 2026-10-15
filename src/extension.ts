@@ -54,7 +54,7 @@ import {
 import { AgentMcpServer, AgentToolError } from './agent-mcp';
 import { AgentHttpRouter, agentTaggedMcpUrl } from './agent-http-router';
 import { AgentActivityStore } from './agent-activity';
-import { AgentActivityViewProvider, agentActivityViewId } from './agent-activity-view';
+import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent-activity-view';
 import { normalizeAgentInterface, type AgentInterface } from './agent-interface';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent-discovery';
 import {
@@ -172,6 +172,7 @@ let httpRouterCreation: Promise<AgentHttpRouter> | undefined;
 let httpRouterStart: Promise<AgentHttpRouter> | undefined;
 /** 每个目标 CLI 在本次 Extension Host 生命周期只做一次真实版本检查。 */
 const cliVersionChecks = new Map<string, Promise<void>>();
+let cliSetupError: string | undefined;
 let agentHttpRouterHeartbeat: NodeJS.Timeout | undefined;
 let agentHttpRouterSettingsPromptShown = false;
 let vscodeContext: vscode.ExtensionContext;
@@ -2200,6 +2201,94 @@ function agentCommandTerminalState(): {
 
 async function refreshAgentCommandTerminalState(): Promise<void> {
   await agentActivityView?.updateTerminalTarget();
+}
+
+let forwardingRecoveryRunning = false;
+let forwardingRecoveryError: { mountName: string; message: string } | undefined;
+
+async function activityForwardingState(): Promise<AgentTerminalTargetState> {
+  const terminalState = { ...agentCommandTerminalState(), interface: agentInterface() };
+  const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
+  const terminal = activeAgentCommandTerminal();
+  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+  const mountName = location?.mountName ?? info?.mount.name;
+  if (!mountName) return { ...terminalState, availability: 'disabled', detail: '请打开远程目录或启用终端转发' };
+  const state: AgentTerminalTargetState = { ...terminalState };
+  try {
+    const config = await readConfig();
+    const mount = config.mounts.find((candidate) => candidate.name === mountName);
+    if (!mount) throw new Error('远程连接配置不存在');
+    const host = resolveMount(config, mount).hostConfig;
+    state.label = [config.host_aliases?.[host.ip] ?? host.ip, host.user,
+      location?.remotePath ?? agentCommandTerminalCwd].filter(Boolean).join(' → ');
+    const enabled = vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []).includes(mountName);
+    if (forwardingRecoveryRunning || httpRouterStart || httpRouterCreation) {
+      return { ...state, availability: 'checking', detail: '正在准备 Agent 转发' };
+    }
+    if (!enabled) return { ...state, availability: 'disabled', recoveryLabel: '启用 Agent 转发' };
+    if (forwardingRecoveryError?.mountName === mountName) throw new Error(forwardingRecoveryError.message);
+    if (cliEnabled()) {
+      if (cliSetupError) throw new Error(cliSetupError);
+      const executable = globalNodeCli(os.homedir(), process.platform);
+      const matches = await nodeCliMatchesBundle(
+        executable, process.platform, path.join(vscodeContext.extensionPath, 'dist', 'safs-cli.js')
+      );
+      const skill = globalNodeCliSkill(os.homedir());
+      await Promise.all([
+        access(path.join(skill, 'SKILL.md')), access(path.join(skill, 'references', 'commands.md'))
+      ]).catch(() => { throw new Error('CLI Skill 缺失，请修复 CLI'); });
+      if (!matches) return { ...state, availability: 'error', detail: 'CLI 缺失或版本需要更新', recoveryLabel: '修复 CLI' };
+      const connection = await readFile(nodeCliConnectionPath(executable), 'utf8')
+        .then((content) => {
+          try { return JSON.parse(content); } catch { return undefined; }
+        }).catch(() => undefined);
+      if (connection?.version !== 1 || connection.url !== (httpRouter && cliRouterUrl(httpRouter.url))) {
+        return { ...state, availability: 'error', detail: 'CLI 连接配置需要更新', recoveryLabel: '修复 CLI' };
+      }
+    }
+    if (!mcp?.running || mcp.portUnavailable || mcpBoundMountName !== mountName) {
+      throw new Error('当前窗口的转发服务尚未就绪');
+    }
+    if (!httpRouter || !await httpRouter.healthy()) throw new Error('本地转发连接不可用');
+    return { ...state, availability: 'ready', detail: '本地转发服务正常；远程连接将在操作时验证' };
+  } catch (error) {
+    return { ...state, availability: 'error',
+      detail: redactSensitiveText(error instanceof Error ? error.message : String(error)),
+      recoveryLabel: cliEnabled() ? '修复并重试' : '重试连接' };
+  }
+}
+
+async function recoverActivityForwarding(): Promise<void> {
+  if (forwardingRecoveryRunning) return;
+  const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
+  const terminal = activeAgentCommandTerminal();
+  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+  const mountName = location?.mountName ?? info?.mount.name;
+  if (!mountName) return;
+  forwardingRecoveryRunning = true;
+  forwardingRecoveryError = undefined;
+  try {
+    await refreshAgentCommandTerminalState();
+    const config = await readConfig();
+    const mount = config.mounts.find((candidate) => candidate.name === mountName);
+    if (!mount) throw new Error('远程连接配置不存在');
+    const enabled = vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []).includes(mountName);
+    if (!enabled) {
+      await setAiForwardEnabled(mount, true);
+    } else {
+      await configureAgentInterface(vscodeContext);
+    }
+    await ensureFolder(mount);
+    startAgentHttpRouterLeadership(vscodeContext);
+    await ensureAgentMcpServer(vscodeContext);
+    await publishAgentWorkspace(vscodeContext);
+  } catch (error) {
+    forwardingRecoveryError = { mountName, message: redactSensitiveText(error instanceof Error ? error.message : String(error)) };
+    logAsyncFailure('恢复 Agent 转发失败', error);
+  } finally {
+    forwardingRecoveryRunning = false;
+    await refreshAgentCommandTerminalState();
+  }
 }
 
 async function refreshAgentCommandTerminal(): Promise<void> {
@@ -5441,7 +5530,8 @@ function startAgentWorkspacePublishing(context: vscode.ExtensionContext): void {
   if (agentWorkspaceHeartbeat) clearInterval(agentWorkspaceHeartbeat);
   const refresh = () => void publishAgentWorkspace(context).catch((error) => {
     bridgeOutput?.appendLine(`[Agent discovery] ${error instanceof Error ? error.message : String(error)}`);
-  });
+  }).finally(() => refreshAgentCommandTerminalState()).catch((error) =>
+    logAsyncFailure('刷新 Agent 转发状态失败', error));
   refresh();
   agentWorkspaceHeartbeat = setInterval(refresh, 10_000);
   // 转发状态与聚焦窗口变化（本窗口或其他窗口启用/关闭/发布/聚焦切换）时刷新
@@ -5537,7 +5627,11 @@ async function ensureGlobalCliVersion(
       platform: cliPlatform, installPath: executable, version: extensionVersion,
       home: agentHome
     });
-  })().finally(() => {
+    cliSetupError = undefined;
+  })().catch((error) => {
+    cliSetupError = redactSensitiveText(error instanceof Error ? error.message : String(error));
+    throw error;
+  }).finally(() => {
     cliVersionChecks.delete(checkKey);
   });
   cliVersionChecks.set(checkKey, check);
@@ -5935,9 +6029,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   await agentActivityStore.initialize();
   agentActivityView = new AgentActivityViewProvider(agentActivityStore, {
-    terminalTarget: agentCommandTerminalState,
+    terminalTarget: activityForwardingState,
     refreshTerminalTarget: refreshAgentCommandTerminal,
     openTerminalDirectory: () => guard(openAgentTerminalDirectory),
+    recoverForwarding: recoverActivityForwarding,
     switchWorkspace: async () => {
       await vscode.commands.executeCommand<void>(`${commandPrefix}.switchRemoteDirectory`);
     }
