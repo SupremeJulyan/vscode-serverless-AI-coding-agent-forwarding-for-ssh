@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 修复首次安装 CLI 失败后无法直接重试；启动已启用的 CLI 转发时刷新连接地址、超时和 PATH，并更新其他已安装目录中的 Agent Skill。
 - 修复 CLI 模式升级插件后已安装的 SAFS CLI 仍停留在旧版本的问题：启动时检查并更新现有 CLI 和 Skill，首次安装仍需手动启用 Agent 转发。
 
 ## 2.0.9

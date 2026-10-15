@@ -52,6 +52,20 @@ export function globalNodeCliSkill(
   return path.join(home, directory, 'skills', 'safs-cli');
 }
 
+/** Update only user-level Skill targets that are already installed. */
+export async function updateInstalledNodeCliSkills(
+  home: string, install: (target: NodeCliSkillTarget) => Promise<void>
+): Promise<void> {
+  for (const target of ['agents', 'claude', 'codex', 'copilot'] as const) {
+    const existing = await lstat(path.join(globalNodeCliSkill(home, target), 'SKILL.md'))
+      .catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return undefined;
+      });
+    if (existing) await install(target);
+  }
+}
+
 export async function removeGlobalNodeCliSkill(
   home: string, target: NodeCliSkillTarget = 'agents'
 ): Promise<string> {

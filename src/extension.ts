@@ -13,7 +13,7 @@ import { RemoteGitHistory } from './remote-git-history';
 import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
 import {
   ensureUnixCliPath, globalNodeCli, globalNodeCliSkill, installNodeCli, removeNodeCli,
-  NodeRuntimeUnavailableError, requireNodeRuntime,
+  NodeRuntimeUnavailableError, requireNodeRuntime, updateInstalledNodeCliSkills, NodeCliSkillTarget,
   nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
@@ -5530,6 +5530,15 @@ async function installGlobalCli(
   await ensureGlobalCliVersion(
     context, executable, cliPlatform, agentHome
   );
+  await configureGlobalCliConnection(context, executable, routerUrl);
+  return executable;
+}
+
+async function configureGlobalCliConnection(
+  context: vscode.ExtensionContext, executable: string, routerUrl: string
+): Promise<void> {
+  const agentHome = os.homedir();
+  const cliPlatform = process.platform;
   const forwardingTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
   const cliTimeoutMs = forwardingTimeoutMs > 0 ? forwardingTimeoutMs + 5_000 : 0;
   await writeCliConnectionFile(
@@ -5547,7 +5556,6 @@ async function installGlobalCli(
     process.env.PATH = `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`;
   }
   context.environmentVariableCollection.prepend('PATH', `${binDirectory}${path.delimiter}`);
-  return executable;
 }
 
 async function uninstallGlobalCli(context: vscode.ExtensionContext): Promise<string> {
@@ -5575,10 +5583,11 @@ async function uninstallGlobalCli(context: vscode.ExtensionContext): Promise<str
   return executable;
 }
 
-async function installGlobalCliSkill(executable: string): Promise<void> {
+async function installGlobalCliSkill(executable: string, target: NodeCliSkillTarget = 'agents'): Promise<void> {
   const result = await executeCaptured({
     command: executable,
-    args: ['install', '--skills', '-g']
+    args: target === 'agents' ? ['install', '--skills', '-g']
+      : ['install', `--skills=${target}`, '-g']
   });
   if (result.exitCode !== 0) {
     throw new Error(`SAFS Agent Skill 安装失败：${result.stderr.trim() || `exit ${result.exitCode}`}`);
@@ -5601,6 +5610,9 @@ async function configureAgentInterface(
   try {
     executable = await installGlobalCli(context, cliRouterUrl(router.url));
     await installGlobalCliSkill(executable);
+    await updateInstalledNodeCliSkills(os.homedir(), async (target) => {
+      if (target !== 'agents') await installGlobalCliSkill(executable, target);
+    });
   } catch (error) {
     const detail = redactSensitiveText(error instanceof Error ? error.message : String(error));
     const missingNode = error instanceof NodeRuntimeUnavailableError;
@@ -5685,6 +5697,11 @@ async function updateAiForwardEnabled(
     }
     changed = true;
     shouldInstallIntegration = enabledValue && enabled.size === 0;
+    // Complete installation before persisting the enabled flag so failures
+    // leave this mount available for a direct retry.
+    if (shouldInstallIntegration) {
+      cliExecutable = (await configureAgentInterface(vscodeContext)).cliExecutable;
+    }
     if (enabledValue) enabled.add(mount.name);
     else enabled.delete(mount.name);
     await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
@@ -5706,11 +5723,7 @@ async function updateAiForwardEnabled(
       await prepareAgentCwd(mount);
       agentTrace('Preference', '先启动固定 HTTP 路由，再启动当前窗口服务');
       startAgentHttpRouterLeadership(vscodeContext);
-      if (shouldInstallIntegration) {
-        cliExecutable = (await configureAgentInterface(vscodeContext)).cliExecutable;
-      } else {
-        await ensureAgentHttpRouter(vscodeContext);
-      }
+      await ensureAgentHttpRouter(vscodeContext);
       if (activeMountName === mount.name) {
         const server = await ensureAgentMcpServer(vscodeContext);
         if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
@@ -6462,7 +6475,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (cliExists) {
         try {
           await ensureGlobalCliVersion(context, executable, process.platform, os.homedir());
-          if (skillExists) await installGlobalCliSkill(executable);
+          await updateInstalledNodeCliSkills(os.homedir(), (target) => installGlobalCliSkill(executable, target));
         } catch (error) {
           // A failed update must not prevent existing forwarding from starting.
           logAsyncFailure('启动时更新 SAFS CLI 失败', error);
@@ -6486,7 +6499,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (enabled.size > 0) {
       agentTrace('Activate', '启动或连接固定 HTTP MCP 路由器');
       startAgentHttpRouterLeadership(context);
-      await ensureAgentHttpRouter(context);
+      const router = await ensureAgentHttpRouter(context);
+      if (cliEnabled()) {
+        await configureGlobalCliConnection(
+          context, globalNodeCli(os.homedir(), process.platform), cliRouterUrl(router.url)
+        );
+      }
       if (current && enabled.has(current.mountName)) {
         agentTrace('Activate', `挂载 ${current.mountName} 已启用，启动窗口动态 MCP 后端`);
         const config = await readConfig();

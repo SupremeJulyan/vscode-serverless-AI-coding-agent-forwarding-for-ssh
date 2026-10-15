@@ -8,8 +8,31 @@ import {
   globalNodeCliSkill, nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion, removeGlobalNodeCliSkill, removeNodeCli, withoutSafsPathBlock,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
-  windowsUserPathRemovePlan, windowsUserPathUpdatePlan
+  windowsUserPathRemovePlan, windowsUserPathUpdatePlan, updateInstalledNodeCliSkills
 } from '../src/node-cli-install';
+
+test('updates every installed global Skill target without installing absent targets', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'safs-skill-update-'));
+  try {
+    const updated: string[] = [];
+    await updateInstalledNodeCliSkills(home, async (target) => { updated.push(target); });
+    assert.deepEqual(updated, []);
+    for (const target of ['agents', 'claude', 'codex'] as const) {
+      await mkdir(globalNodeCliSkill(home, target), { recursive: true });
+      await writeFile(join(globalNodeCliSkill(home, target), 'SKILL.md'), 'old');
+    }
+    await updateInstalledNodeCliSkills(home, async (target) => {
+      updated.push(target);
+      await writeFile(join(globalNodeCliSkill(home, target), 'SKILL.md'), 'new');
+    });
+    assert.deepEqual(updated, ['agents', 'claude', 'codex']);
+    for (const target of ['agents', 'claude', 'codex'] as const) {
+      assert.equal(await readFile(join(globalNodeCliSkill(home, target), 'SKILL.md'), 'utf8'), 'new');
+    }
+    await assert.rejects(readFile(join(globalNodeCliSkill(home, 'copilot'), 'SKILL.md')), { code: 'ENOENT' });
+    await assert.rejects(updateInstalledNodeCliSkills(home, async () => { throw new Error('write failed'); }), /write failed/);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
 
 test('parses only the stable Node CLI version output', () => {
   assert.equal(parseNodeCliVersion('safs 1.8.2\n'), '1.8.2');

@@ -197,7 +197,7 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const nodeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
   assert.ok(nodeCliSource.includes('globalNodeCliSkill'));
-  assert.ok(extensionSource.includes("args: ['install', '--skills', '-g']"));
+  assert.ok(extensionSource.includes("['install', '--skills', '-g']"));
   assert.equal(extensionSource.includes('nativeCliUsagePrompt'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
@@ -414,12 +414,15 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.equal(activationSetup.includes('await configureAgentInterface(context)'), false);
   assert.ok(activationSetup.includes('if (cliExists) {'));
   assert.ok(activationSetup.includes('await ensureGlobalCliVersion(context, executable, process.platform, os.homedir())'));
-  assert.ok(activationSetup.includes('if (skillExists) await installGlobalCliSkill(executable)'));
+  assert.ok(activationSetup.includes('await updateInstalledNodeCliSkills(os.homedir()'));
+  assert.ok(activationSetup.includes('await configureGlobalCliConnection('));
+  const enableSetup = extensionSource.slice(extensionSource.indexOf('async function updateAiForwardEnabled('), extensionSource.indexOf('async function setAiForwardEnabled('));
+  assert.ok(enableSetup.indexOf('await configureAgentInterface(vscodeContext)') < enableSetup.indexOf('await vscodeContext.globalState.update(aiForwardMountsKey'));
   assert.ok(extensionSource.includes('let aiForwardUpdate: Promise<void>'));
   assert.ok(extensionSource.includes('if (!changed) return'));
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
   assert.ok(extensionSource.includes('await uninstallGlobalCli(context)'));
-  assert.ok(extensionSource.includes("args: ['install', '--skills', '-g']"));
+  assert.ok(extensionSource.includes("['install', '--skills', '-g']"));
   assert.ok(extensionSource.includes('streamableHttpMcpUninstallPrompt()'));
   assert.ok(extensionSource.includes('卸载提示词'));
   assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
