@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 修复 CLI 模式升级插件后已安装的 SAFS CLI 仍停留在旧版本的问题：启动时检查并更新现有 CLI 和 Skill，首次安装仍需手动启用 Agent 转发。
+
 ## 2.0.9
 
 - Node.js、SAFS CLI 与 Skill 改为首次启用 Agent 转发时再检测和安装，不再在插件安装或激活时主动触发；重装后若 CLI/Skill 已被卸载，会清除遗留的转发开启状态，允许用户重新启用并完成安装。

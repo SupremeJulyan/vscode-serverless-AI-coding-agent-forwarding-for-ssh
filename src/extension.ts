@@ -6450,8 +6450,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       'Activate',
       `当前远程挂载=${current?.mountName ?? '<none>'}，启用列表=${[...enabled].join(',') || '<empty>'}`
     );
-    // Do not probe Node.js or install the CLI during extension activation.
-    // The first explicit Agent-forwarding enable action performs that setup.
+    // Keep an existing CLI current after extension upgrades. Fresh installs
+    // still require an explicit Agent-forwarding enable action.
     if (cliEnabled()) {
       const executable = globalNodeCli(os.homedir(), process.platform);
       const skill = path.join(globalNodeCliSkill(os.homedir()), 'SKILL.md');
@@ -6459,6 +6459,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         access(executable).then(() => true, () => false),
         access(skill).then(() => true, () => false)
       ]);
+      if (cliExists) {
+        try {
+          await ensureGlobalCliVersion(context, executable, process.platform, os.homedir());
+          if (skillExists) await installGlobalCliSkill(executable);
+        } catch (error) {
+          // A failed update must not prevent existing forwarding from starting.
+          logAsyncFailure('启动时更新 SAFS CLI 失败', error);
+        }
+      }
       if (enabled.size > 0 && (!cliExists || !skillExists)) {
         agentTrace(
           'Activate',
@@ -6469,7 +6478,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await context.globalState.update(cliInstallKey, undefined);
         tree.refresh();
       }
-      agentTrace('Activate', `${agentInterface()} 模式已启用，等待用户打开 Agent 转发后检查 Node.js、CLI 与 Skill`);
+      agentTrace('Activate', `${agentInterface()} 模式已启用，已检查现有 CLI；首次安装需打开 Agent 转发`);
     } else {
       agentTrace('Activate', 'MCP 模式已启用，移除互斥的 CLI 和 Agent Skill');
       await uninstallGlobalCli(context);

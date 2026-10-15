@@ -403,7 +403,7 @@ test('installs forwarding only for the globally first enabled mount or an explic
   ));
   assert.ok(extensionSource.includes('enabledValue && enabled.size === 0'));
   assert.ok(extensionSource.includes('if (!shouldInstallIntegration)'));
-  assert.ok(extensionSource.includes('等待用户打开 Agent 转发后检查 Node.js、CLI 与 Skill'));
+  assert.ok(extensionSource.includes('首次安装需打开 Agent 转发'));
   assert.ok(extensionSource.includes('CLI/Skill 已不存在，清除卸载前遗留的 Agent 转发状态'));
   assert.ok(extensionSource.includes("path.join(globalNodeCliSkill(os.homedir()), 'SKILL.md')"));
   assert.ok(extensionSource.includes('await context.globalState.update(aiForwardMountsKey, [])'));
@@ -412,6 +412,9 @@ test('installs forwarding only for the globally first enabled mount or an explic
     extensionSource.indexOf('startAgentWorkspacePublishing(context);')
   );
   assert.equal(activationSetup.includes('await configureAgentInterface(context)'), false);
+  assert.ok(activationSetup.includes('if (cliExists) {'));
+  assert.ok(activationSetup.includes('await ensureGlobalCliVersion(context, executable, process.platform, os.homedir())'));
+  assert.ok(activationSetup.includes('if (skillExists) await installGlobalCliSkill(executable)'));
   assert.ok(extensionSource.includes('let aiForwardUpdate: Promise<void>'));
   assert.ok(extensionSource.includes('if (!changed) return'));
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
