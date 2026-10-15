@@ -403,6 +403,12 @@ test('installs forwarding only for the globally first enabled mount or an explic
   ));
   assert.ok(extensionSource.includes('enabledValue && enabled.size === 0'));
   assert.ok(extensionSource.includes('if (!shouldInstallIntegration)'));
+  assert.ok(extensionSource.includes('等待用户打开 Agent 转发后检查 Node.js 与 CLI'));
+  const activationSetup = extensionSource.slice(
+    extensionSource.indexOf("agentTrace(\n      'Activate',\n      `当前远程挂载="),
+    extensionSource.indexOf('startAgentWorkspacePublishing(context);')
+  );
+  assert.equal(activationSetup.includes('await configureAgentInterface(context)'), false);
   assert.ok(extensionSource.includes('let aiForwardUpdate: Promise<void>'));
   assert.ok(extensionSource.includes('if (!changed) return'));
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));

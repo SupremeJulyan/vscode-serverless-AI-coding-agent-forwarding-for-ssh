@@ -6443,12 +6443,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       'Activate',
       `当前远程挂载=${current?.mountName ?? '<none>'}，启用列表=${[...enabled].join(',') || '<empty>'}`
     );
-    // CLI mode needs the user-level command even before a mount enables
-    // forwarding. This also repairs missing installs on reload.
+    // Do not probe Node.js or install the CLI during extension activation.
+    // The first explicit Agent-forwarding enable action performs that setup.
     if (cliEnabled()) {
-      agentTrace('Activate', `${agentInterface()} 模式已启用，安装或更新用户级全局 safs 命令`);
-      startAgentHttpRouterLeadership(context);
-      await configureAgentInterface(context);
+      agentTrace('Activate', `${agentInterface()} 模式已启用，等待用户打开 Agent 转发后检查 Node.js 与 CLI`);
     } else {
       agentTrace('Activate', 'MCP 模式已启用，移除互斥的 CLI 和 Agent Skill');
       await uninstallGlobalCli(context);
@@ -6470,7 +6468,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         agentTrace('Activate', '当前不是已启用的远程窗口，仅提供固定 HTTP 路由');
       }
     } else {
-      agentTrace('Activate', 'CLI 路由已就绪；当前没有启用 Agent 转发的远程挂载');
+      agentTrace('Activate', '当前没有启用 Agent 转发的远程挂载，不启动路由或检查 Node.js');
     }
   });
   startAgentWorkspacePublishing(context);
