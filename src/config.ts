@@ -122,7 +122,8 @@ export function parseConfig(value: unknown): BridgeConfig {
       for (const [accountIndex, account] of accounts.entries()) {
         if (!account || typeof account !== 'object' || Array.isArray(account)) throw new Error('Invalid account');
         const user = typeof account.user === 'string' ? account.user : '';
-        const name = typeof account.name === 'string' && account.name ? account.name : user ? `${/[^\x00-\x7f]/.test(label) ? ip : label}(${user})` : ip;
+        const name = typeof account.name === 'string' && account.name
+          ? account.name : user ? `${label}(${user})` : ip;
         const location = `hosts[${index}].accounts[${accountIndex}]`;
         const previous = accountLocations.get(name);
         if (previous) {

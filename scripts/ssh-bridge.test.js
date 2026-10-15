@@ -28,21 +28,22 @@ test('password-configured bridge probes need no ASKPASS; logins still require it
       env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 5000
     });
     const account = { user: 'alice', password: 'encrypted:test', port: 2222, vpn: false };
-    for (const config of [
-      [{ ...account, name: '192.0.2.4(alice)', ip: '192.0.2.4' }],
-      { hosts: [{ ip: '192.0.2.4', accounts: [account] }] }
+    for (const [config, destination] of [
+      [[{ ...account, name: '192.0.2.4(alice)', ip: '192.0.2.4' }], '192.0.2.4(alice)'],
+      [{ hosts: [{ ip: '192.0.2.4', accounts: [account] }] }, '192.0.2.4(alice)'],
+      [{ hosts: [{ name: '构建机', ip: '192.0.2.4', accounts: [account] }] }, '构建机(alice)']
     ]) {
       writeFileSync(configPath, JSON.stringify(config));
-      const probe = run(['probe', '192.0.2.4(alice)']);
+      const probe = run(['probe', destination]);
       assert.equal(probe.status, 0, probe.stderr);
       assert.equal(probe.stdout,
         'PROBE_OK [192.0.2.4]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n');
 
-      const login = run(['192.0.2.4(alice)', 'true']);
+      const login = run([destination, 'true']);
       assert.equal(login.status, 1);
       assert.match(login.stderr, /配置包含密码，但扩展未提供 SSH_ASKPASS 凭据/);
 
-      const empty = run(['probe', '192.0.2.4(alice)'], { SAFS_TEST_EMPTY_SCAN: '1' });
+      const empty = run(['probe', destination], { SAFS_TEST_EMPTY_SCAN: '1' });
       assert.equal(empty.status, 1);
       assert.match(empty.stderr, /PROBE_FAIL ssh-keyscan 未返回任何主机密钥/);
     }

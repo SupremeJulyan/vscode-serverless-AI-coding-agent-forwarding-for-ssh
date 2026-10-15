@@ -109,8 +109,6 @@ for host in entries:
                 raise SystemExit("账号配置必须是对象")
             entry = {**account, "ip": host.get("ip")}
             label = str(host.get("name", host.get("ip", "")))
-            if not label.isascii():
-                label = str(host.get("ip", ""))
             entry.setdefault("name", f"{label}({account.get('user', '')})")
             flat_entries.append(entry)
     else:

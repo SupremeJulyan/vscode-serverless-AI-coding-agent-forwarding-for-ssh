@@ -84,8 +84,9 @@ test('locates the correct password in hierarchical accounts without saved accoun
   ] }, null, 2);
   const bob = passwordValueOffset(content, 'dev(bob)');
   assert.equal(content.slice(bob!, bob! + 10), 'bob-secret');
-  const other = passwordValueOffset(content, '10.0.0.2(alice)');
+  const other = passwordValueOffset(content, '构建机(alice)');
   assert.equal(content.slice(other!, other! + 12), 'other-secret');
+  assert.notEqual(configEntryOffset(content, '构建机(alice)'), undefined);
   assert.ok(configEntryOffset(content, 'dev(alice)')! < configEntryOffset(content, 'dev(bob)')!);
   assert.equal(passwordValueOffset(content, 'dev(missing)'), undefined);
 });

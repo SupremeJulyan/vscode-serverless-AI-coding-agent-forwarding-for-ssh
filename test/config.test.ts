@@ -173,7 +173,8 @@ test('hierarchical config groups accounts and preserves credentials, paths and c
   assert.equal(saved.hosts[0].accounts[0].directories, undefined);
   assert.equal(saved.hosts[0].accounts[0].name, undefined);
   const reloaded = parseConfig(saved);
-  assert.equal(reloaded.hosts[0].name, '10.0.0.1(alice)');
+  assert.equal(reloaded.hosts[0].name, '构建机(alice)');
+  assert.equal(reloaded.hosts[1].name, '构建机(bob)');
   assert.equal(reloaded.hosts[0].password, config.hosts[0].password);
   assert.equal(reloaded.hosts[1].port, 2222);
 });

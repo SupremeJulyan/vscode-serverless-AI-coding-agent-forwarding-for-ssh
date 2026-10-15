@@ -3272,7 +3272,7 @@ async function addHostCredentials(
     throw new Error(`主机 ${host.ip} 下已存在账号 '${normalizedUser}'，请编辑已有账号。`);
   }
   const targetHost = index >= 0 ? config.hosts[index] : host;
-  // 配置名是 `主机名(账号)`：主机名取 ASCII 别名，别名是中文或没配时退回 IP。
+  // 配置名是 `主机名(账号)`：主机名取配置的别名（支持中文），没配时退回 IP。
   const generatedName = mountNameFor({ ...host, user: normalizedUser }, config.host_aliases);
   const nameConflict = config.hosts.findIndex((candidate, candidateIndex) =>
     candidate.name === generatedName && candidateIndex !== index
@@ -4556,8 +4556,8 @@ async function normalizeHierarchicalConfigNames(
   const claimed = new Set<string>();
 
   for (const host of config.hosts) {
-    // 配置名是 `主机名(账号)`：主机名取 ASCII 别名（如 `ws1`），别名是中文或没配时
-    // 退回 IP；和界面上的主机节点 + 账号节点一一对应。
+    // 配置名是 `主机名(账号)`：主机名取配置的别名（支持中文），没配时退回 IP；
+    // 和界面上的主机节点 + 账号节点一一对应。
     const baseName = host.user.trim() ? mountNameFor(host, config.host_aliases) : host.ip;
     let nextName = baseName;
     let suffix = 2;

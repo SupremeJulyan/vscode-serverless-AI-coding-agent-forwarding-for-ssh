@@ -12,10 +12,9 @@ const host = (overrides: Partial<HostConfig> = {}): HostConfig => ({
   ...overrides
 });
 
-test('uses an ASCII alias as the host label and falls back to the IP', () => {
+test('uses any configured alias as the host label and falls back to the IP', () => {
   assert.equal(hierarchicalHostName(host(), { '192.0.2.10': 'devbox' }), 'devbox');
-  // 非 ASCII 别名只做展示，回退 IP。
-  assert.equal(hierarchicalHostName(host(), { '192.0.2.10': '测试主机' }), '192.0.2.10');
+  assert.equal(hierarchicalHostName(host(), { '192.0.2.10': '测试主机' }), '测试主机');
   assert.equal(hierarchicalHostName(host()), '192.0.2.10');
 });
 
@@ -26,10 +25,11 @@ test('lists the config names older releases could have generated', () => {
     'devbox@dev_alice',
     '192.0.2.10@dev_alice'
   ]);
-  // 中文别名：主机名回退 IP，但中文别名本身也拼进过旧配置名。
+  // 中文别名同样成为当前主机名；IP 形式仍作为旧配置名保留。
   assert.deepEqual(legacyMountNames(host(), { '192.0.2.10': '测试主机' }), [
-    'dev_alice_192.0.2.10',
     'dev_alice_测试主机',
+    'dev_alice_192.0.2.10',
+    '测试主机@dev_alice',
     '192.0.2.10@dev_alice'
   ]);
 });
@@ -42,10 +42,9 @@ test('never lists the current config name as a legacy alias', () => {
   );
 });
 
-test('names the config as alias(account), falling back to the IP', () => {
+test('names the config as alias(account), including Unicode aliases', () => {
   assert.equal(mountNameFor(host(), { '192.0.2.10': 'devbox' }), 'devbox(dev_alice)');
-  // 别名是中文：退回 IP。
-  assert.equal(mountNameFor(host(), { '192.0.2.10': '测试主机' }), '192.0.2.10(dev_alice)');
+  assert.equal(mountNameFor(host(), { '192.0.2.10': '测试主机' }), '测试主机(dev_alice)');
   // 没配别名：也是 IP。
   assert.equal(mountNameFor(host()), '192.0.2.10(dev_alice)');
   // 同名账号换人时只用新账号名。
@@ -69,4 +68,10 @@ test('lists every name an already-saved URI could carry for that host', () => {
   }
   // 候选里不会有当前名字自己（那是真实配置名，不需要别名）。
   assert.equal(candidates.includes('devbox(dev_alice)'), false);
+});
+
+test('keeps the former IP name as an alias after adopting a Unicode host name', () => {
+  const candidates = mountAliasCandidates(host(), { '192.0.2.10': '测试主机' });
+  assert.equal(candidates.includes('192.0.2.10(dev_alice)'), true);
+  assert.equal(candidates.includes('测试主机(dev_alice)'), false);
 });
