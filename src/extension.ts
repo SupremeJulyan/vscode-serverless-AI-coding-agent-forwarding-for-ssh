@@ -2209,6 +2209,30 @@ async function refreshAgentCommandTerminal(): Promise<void> {
   await enableAgentCommandTerminal(terminal, info, true);
 }
 
+async function openAgentTerminalDirectory(): Promise<void> {
+  const terminal = activeAgentCommandTerminal();
+  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+  if (!terminal || !info) return;
+  const cwd = liveAgentCommandTerminalCwd(terminal, info);
+  if (!cwd) throw new Error('无法获取转发终端所在的远程目录');
+  const folder = await ensureFolder(info.mount);
+  const session = await pool.get(folder.hostName);
+  const resolved = await session.realpath(cwd);
+  if (!isRemotePathInsideRoot(folder.remoteRoot, resolved)) {
+    throw new Error(`远程目录必须位于挂载根目录 ${folder.remoteRoot} 内`);
+  }
+  if ((await session.stat(resolved)).type !== 'directory') {
+    throw new Error(`远程路径不是目录：${resolved}`);
+  }
+  const localRoot = localRootForFolder(folder);
+  await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, resolved);
+  await writeLastRemoteDirectory(localRoot, folder.remoteRoot, resolved);
+  await recordDirectoryHistory(vscodeContext, info.mount.name, resolved);
+  await vscode.commands.executeCommand(
+    'vscode.openFolder', vscode.Uri.parse(folderUri(folder, resolved)), { forceReuseWindow: true }
+  );
+}
+
 async function applyAgentCommandTerminalCwd(
   terminal: vscode.Terminal, cwd: string, forcePublish = false
 ): Promise<void> {
@@ -5913,6 +5937,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   agentActivityView = new AgentActivityViewProvider(agentActivityStore, {
     terminalTarget: agentCommandTerminalState,
     refreshTerminalTarget: refreshAgentCommandTerminal,
+    openTerminalDirectory: () => guard(openAgentTerminalDirectory),
     switchWorkspace: async () => {
       await vscode.commands.executeCommand<void>(`${commandPrefix}.switchRemoteDirectory`);
     }

@@ -14,6 +14,7 @@ export interface AgentActivityViewActions {
   terminalTarget(): AgentTerminalTargetState;
   refreshTerminalTarget(): Promise<void>;
   switchWorkspace(): Promise<void>;
+  openTerminalDirectory(): Promise<void>;
 }
 
 export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -55,6 +56,8 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
         await this.actions?.refreshTerminalTarget();
       } else if (type === 'switchWorkspace') {
         await this.actions?.switchWorkspace();
+      } else if (type === 'openTerminalDirectory') {
+        await this.actions?.openTerminalDirectory();
       }
     });
   }
@@ -200,6 +203,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       <span id="terminalModeLabel" class="mode-label" hidden>终端模式</span>
       <button id="refreshTerminalTarget" type="button" hidden>刷新工作区</button>
       <button id="switchWorkspace" type="button" title="在当前窗口选择并打开远程目录">切换工作区</button>
+      <button id="openTerminalDirectory" type="button" title="在当前窗口打开转发终端所在的远程目录" hidden>打开远程目录</button>
     </div>
     <div id="agentModeDetail" class="agent-mode-detail">使用当前远程工作区</div>
   </section>
@@ -228,6 +232,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const terminalModeLabel = document.getElementById('terminalModeLabel');
     const refreshTerminalTarget = document.getElementById('refreshTerminalTarget');
     const switchWorkspace = document.getElementById('switchWorkspace');
+    const openTerminalDirectory = document.getElementById('openTerminalDirectory');
     const agentMode = document.getElementById('agentMode');
     const agentModeDetail = document.getElementById('agentModeDetail');
     let events = [];
@@ -405,6 +410,8 @@ export function activityViewHtml(webview: vscode.Webview): string {
         workspaceModeLabel.hidden = mode !== 'workspace';
         terminalModeLabel.hidden = mode !== 'terminal';
         refreshTerminalTarget.hidden = mode !== 'terminal';
+        switchWorkspace.hidden = mode === 'terminal';
+        openTerminalDirectory.hidden = mode !== 'terminal';
         workspaceModeLabel.classList.toggle('active', mode === 'workspace');
         terminalModeLabel.classList.toggle('active', enabled);
         agentModeDetail.textContent = mode === 'terminal'
@@ -420,6 +427,9 @@ export function activityViewHtml(webview: vscode.Webview): string {
     });
     switchWorkspace.addEventListener('click', function() {
       vscode.postMessage({ type: 'switchWorkspace' });
+    });
+    openTerminalDirectory.addEventListener('click', function() {
+      vscode.postMessage({ type: 'openTerminalDirectory' });
     });
     vscode.postMessage({ type: 'ready' });
   </script>

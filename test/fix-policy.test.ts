@@ -2,6 +2,18 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+test('terminal directory opens its live target directly in the current window', async () => {
+  const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function openAgentTerminalDirectory()');
+  const body = source.slice(start, source.indexOf('async function applyAgentCommandTerminalCwd', start));
+  assert.ok(body.includes('activeAgentCommandTerminal()'));
+  assert.ok(body.includes('liveAgentCommandTerminalCwd(terminal, info)'));
+  assert.ok(body.includes('ensureFolder(info.mount)'));
+  assert.ok(body.includes('isRemotePathInsideRoot(folder.remoteRoot, resolved)'));
+  assert.equal(body.includes('selectRemoteDirectory'), false);
+  assert.match(body, /'vscode\.openFolder',\s*vscode\.Uri\.parse\(folderUri\(folder, resolved\)\), \{ forceReuseWindow: true \}/);
+});
+
 test('mount parent opens the login home within the root mount without recording it as history', async () => {
   const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const start = source.indexOf('async function openDirectoryItem');
