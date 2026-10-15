@@ -91,7 +91,15 @@ test('relay rejects branch changes during transfer and cleans failed downloads',
 
 test('relay never force pushes over divergent upstream history', async t => {
   const { source, destination, storagePath, git, local } = await fixture(t);
-  const push = async () => pushThroughLocalGit({ storagePath, local, target: { ...await resolvePushTarget(git), url: destination },
+  let pushRejected = false;
+  const relayLocal: typeof local = async (...args) => {
+    try { return await local(...args); }
+    catch (error) {
+      if (args[0].includes('push')) pushRejected = true;
+      throw error;
+    }
+  };
+  const push = async () => pushThroughLocalGit({ storagePath, local: relayLocal, target: { ...await resolvePushTarget(git), url: destination },
     downloadBundle: async file => { await git.run(['bundle', 'create', file, 'refs/heads/topic']); } });
   await push();
   const first = (await git.run(['rev-parse', 'HEAD'])).trim();
@@ -100,7 +108,9 @@ test('relay never force pushes over divergent upstream history', async t => {
   const upstream = (await git.run(['rev-parse', 'HEAD'])).trim();
   await git.run(['reset', '--hard', first]);
   await writeFile(path.join(source, 'file.txt'), 'divergent'); await git.run(['add', '.']); await git.commit('divergent');
-  await assert.rejects(push(), /rejected|failed/);
+  // Git translates stderr; verify the failing command and unchanged ref instead.
+  await assert.rejects(push());
+  assert.equal(pushRejected, true, 'the rejection must come from git push');
   assert.equal((await local(['-C', destination, 'rev-parse', 'refs/heads/topic'])).trim(), upstream);
   assert.deepEqual(await readdir(storagePath), []);
 });
