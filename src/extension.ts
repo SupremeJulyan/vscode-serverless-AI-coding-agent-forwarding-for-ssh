@@ -939,7 +939,7 @@ async function selectRemoteDirectory(
   if (!mount) return undefined;
   const folder = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `SAFS：正在${action}远程目录`,
+    title: action === '打开' ? 'SAFS：正在打开远程目录' : 'SAFS：正在切换远程目录',
     cancellable: false
   }, async (progress) => {
     progress.report({ message: '正在连接并验证远程目录…' });
