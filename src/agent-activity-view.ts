@@ -272,7 +272,6 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const agentMode = document.getElementById('agentMode');
     const agentModeDetail = document.getElementById('agentModeDetail');
     let events = [];
-    let statusKind = 'idle';
     let idleHint = '当前远程窗口';
     let targetActionBusy = false;
     let targetChecking = false;
@@ -417,11 +416,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
       });
     }
     function setStatus(kind, title, detail) {
-      statusKind = kind;
       clearTimeout(statusTimer);
       statusCard.className = 'status ' + kind;
       statusTitle.textContent = title;
-      statusDetail.textContent = kind === 'idle' ? idleHint : detail || '当前远程窗口';
+      statusDetail.textContent = detail || '当前远程窗口';
       orb.setAttribute('aria-label', kind === 'running' ? '执行中' : kind === 'success' ? '成功' : kind === 'error' ? '失败' : '空闲');
       if (kind === 'success' || kind === 'error') {
         statusTimer = setTimeout(function() { setStatus('idle', '等待 Agent 操作', '当前远程窗口'); }, 2000);
@@ -472,7 +470,6 @@ export function activityViewHtml(webview: vscode.Webview): string {
           idleHint = event.data.interface === 'cli'
             ? '提示：在 Agent 中输入 /safs-cli'
             : '提示：在 Agent 中输入 use safs mcp';
-          if (statusKind === 'idle') statusDetail.textContent = idleHint;
           if (!events.length) render();
         }
         const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'

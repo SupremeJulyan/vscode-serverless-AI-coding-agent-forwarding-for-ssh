@@ -169,7 +169,8 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   const send = (data: any) => receive({ data: { type: 'terminalTarget', ...data } });
   const target = '开发机 → root → /srv/project';
   send({ enabled: true, interface: 'cli', mode: 'terminal', label: target, availability: 'error', detail: 'CLI 需要更新', recoveryLabel: '修复 CLI' });
-  assert.equal(get('statusDetail').textContent, '提示：在 Agent 中输入 /safs-cli');
+  assert.equal(get('statusDetail').textContent, '');
+  assert.equal(get('timeline').children[0].textContent, '暂无 Agent 远程操作。提示：在 Agent 中输入 /safs-cli');
   assert.equal(get('agentModeDetail').textContent, target);
   assert.equal(get('switchWorkspace').hidden, true);
   assert.equal(get('openTerminalDirectory').hidden, false);
@@ -182,7 +183,8 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   send({ mode: 'terminal', availability: 'checking' });
   assert.equal(get('forwardingStatus').textContent, '准备中');
   send({ interface: 'mcp', mode: 'workspace', label: target, availability: 'ready' });
-  assert.equal(get('statusDetail').textContent, '提示：在 Agent 中输入 use safs mcp');
+  assert.equal(get('statusDetail').textContent, '');
+  assert.equal(get('timeline').children[0].textContent, '暂无 Agent 远程操作。提示：在 Agent 中输入 use safs mcp');
   assert.equal(get('switchWorkspace').hidden, false);
   assert.equal(get('openTerminalDirectory').hidden, true);
   assert.equal(get('modeCapabilities').hidden, true);
