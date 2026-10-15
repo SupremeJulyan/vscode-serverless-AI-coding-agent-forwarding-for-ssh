@@ -105,10 +105,10 @@ test('remote directory commands can select a connection from a local or empty wi
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes('mount = await selectMount(mountPlaceHolder)'));
   assert.ok(extensionSource.includes(
-    "selectRemoteDirectory('选择要打开的远程连接')"
+    "selectRemoteDirectory('选择要打开的远程连接', '打开')"
   ));
   assert.ok(extensionSource.includes(
-    "selectRemoteDirectory('选择要切换的远程连接')"
+    "selectRemoteDirectory('选择要切换的远程连接', '切换')"
   ));
 });
 
@@ -389,8 +389,8 @@ test('installs forwarding only for the globally first enabled mount or an explic
   const install = commands.find((item) => item.command === 'safs.installAgentForwarding');
   const uninstall = commands.find((item) => item.command === 'safs.uninstallAgentForwarding');
   const installCli = commands.find((item) => item.command === 'safs.installCli');
-  assert.equal(install?.title, 'SAFS: 为我的Agent安装转发功能');
-  assert.equal(uninstall?.title, 'SAFS: 为我的Agent卸载转发功能');
+  assert.equal(install?.title, 'SAFS：为我的Agent安装转发功能');
+  assert.equal(uninstall?.title, 'SAFS：为我的Agent卸载转发功能');
   assert.equal(installCli, undefined);
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.installAgentForwarding'));
   assert.ok(manifest.activationEvents?.includes('onCommand:safs.uninstallAgentForwarding'));

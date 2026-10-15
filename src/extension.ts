@@ -33,7 +33,7 @@ import {
   parseSshLogin, removeMountConfig, resolveMount, saveConfig
 } from './config';
 import {
-  hierarchicalHostName, mountAliasCandidates, mountNameFor
+  hierarchicalHostName, mountAliasCandidates, mountConnectionLabel, mountNameFor
 } from './mount-aliases';
 import { ConfigFocus, isConfigFocus } from './config-focus';
 import { accountTargetIndex } from './host-accounts';
@@ -558,11 +558,14 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
       [addSshConfigAction]
     );
   }
-  const picked = await vscode.window.showQuickPick(config.mounts.map((mount) => ({
-    label: mount.name,
-    description: `${mount.host}: ${mount.remote_path}`,
-    mount
-  })), { placeHolder });
+  const picked = await vscode.window.showQuickPick(config.mounts.map((mount) => {
+    const host = resolveMount(config, mount).hostConfig;
+    return {
+      label: mountConnectionLabel(host, config.host_aliases),
+      description: mount.remote_path === '.' ? undefined : mount.remote_path,
+      mount
+    };
+  }), { placeHolder });
   return picked?.mount;
 }
 
@@ -921,12 +924,13 @@ interface SelectedRemoteDirectory {
  * choose a configured connection first.
  */
 async function selectRemoteDirectory(
-  mountPlaceHolder: string
+  mountPlaceHolder: string,
+  action: '打开' | '切换'
 ): Promise<SelectedRemoteDirectory | undefined> {
+  const config = await readConfig();
   const location = currentRemoteLocation();
   let mount: MountConfig | undefined;
   if (location) {
-    const config = await readConfig();
     mount = config.mounts.find((candidate) => candidate.name === location.mountName);
     if (!mount) throw new Error(`远程目录配置不存在：${location.mountName}`);
   } else {
@@ -935,7 +939,7 @@ async function selectRemoteDirectory(
   if (!mount) return undefined;
   const folder = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: 'SAFS：正在打开远程目录',
+    title: `SAFS：正在${action}远程目录`,
     cancellable: false
   }, async (progress) => {
     progress.report({ message: '正在连接并验证远程目录…' });
@@ -946,7 +950,8 @@ async function selectRemoteDirectory(
     ? location.remotePath
     : folder.defaultRemotePath ?? folder.remoteRoot;
   const requested = await promptRemoteDirectory(
-    session, folder.remoteRoot, currentPath, mount.name
+    session, folder.remoteRoot, currentPath,
+    `${action}远程目录：${mountConnectionLabel(resolveMount(config, mount).hostConfig, config.host_aliases)}`
   );
   if (requested === undefined) return undefined;
   const candidate = requested.trim().startsWith('/')
@@ -966,7 +971,7 @@ async function selectRemoteDirectory(
 }
 
 async function openRemoteDirectory(): Promise<void> {
-  const selected = await selectRemoteDirectory('选择要打开的远程连接');
+  const selected = await selectRemoteDirectory('选择要打开的远程连接', '打开');
   if (!selected) return;
   const { mount, folder, resolved } = selected;
   const forwarding = vscodeContext.globalState
@@ -987,7 +992,7 @@ async function openRemoteDirectory(): Promise<void> {
 }
 
 async function switchRemoteDirectory(): Promise<void> {
-  const selected = await selectRemoteDirectory('选择要切换的远程连接');
+  const selected = await selectRemoteDirectory('选择要切换的远程连接', '切换');
   if (!selected) return;
   const { mount, folder, resolved, previousPath } = selected;
   const localRoot = localRootForFolder(folder);
@@ -1018,13 +1023,13 @@ async function cloneGitRepository(): Promise<void> {
     validateInput: required('Git 仓库地址')
   });
   if (repositoryUrl === undefined) return;
-  const mount = await selectMount('选择要上传到的远程挂载');
+  const mount = await selectMount('选择要克隆到的远程连接');
   if (!mount) return;
   const folder = await ensureFolder(mount);
   const session = await pool.get(folder.hostName);
   const defaultDirectory = await session.realpath('.');
   const picked = await promptRemoteDirectory(
-    session, folder.remoteRoot, defaultDirectory, mount.name,
+    session, folder.remoteRoot, defaultDirectory,
     '克隆 Git 仓库：选择远程目标父目录'
   );
   if (!picked) return;
@@ -1090,8 +1095,7 @@ async function promptRemoteDirectory(
   session: import('./sftp/session').SftpSession,
   remoteRoot: string,
   currentPath: string,
-  mountName: string,
-  title = `打开远程目录：${mountName}`
+  title: string
 ): Promise<string | undefined> {
   const picker = vscode.window.createQuickPick<vscode.QuickPickItem>();
   picker.title = title;
@@ -1460,14 +1464,14 @@ async function syncToRemote(uri?: vscode.Uri): Promise<void> {
     return;
   }
   const config = await readConfig();
-  const mount = await selectMount('选择要同步到的远程挂载');
+  const mount = await selectMount('选择要同步到的远程连接');
   if (!mount) return;
   const resolved = resolveMount(config, mount);
   requireConfiguredHostLogin(resolved.hostConfig);
   const session = await pool.get(resolved.hostConfig.name);
   const defaultDirectory = await session.realpath('.');
   const picked = await promptRemoteDirectory(
-    session, '/', defaultDirectory, mount.name,
+    session, '/', defaultDirectory,
     `同步到远程：选择 "${path.basename(localFolder)}" 上传到的远程目录`
   );
   if (!picked) return;
@@ -2027,7 +2031,7 @@ async function visualUpload(
   const config = await readConfig();
   const mount = forcedMountName
     ? config.mounts.find((candidate) => candidate.name === forcedMountName)
-    : await selectMount('选择要上传到的远程挂载');
+    : await selectMount('选择要上传到的远程连接');
   if (forcedMountName && !mount) throw new Error(`远程目录不存在：${forcedMountName}`);
   if (!mount) return false;
   const resolved = resolveMount(config, mount);
@@ -2037,7 +2041,10 @@ async function visualUpload(
   const defaultDirectory = await session.realpath('.');
   // 第二步：选择/输入远程目标目录（Tab 补全、回车确认）。
   const picked = forcedTargetDir
-    ?? await promptRemoteDirectory(session, remoteRoot, defaultDirectory, mount.name);
+    ?? await promptRemoteDirectory(
+      session, remoteRoot, defaultDirectory,
+      `上传文件：选择远程目标目录（${mountConnectionLabel(resolved.hostConfig, config.host_aliases)}）`
+    );
   if (!picked) return false;
   const targetDir = picked.startsWith('/') ? picked : path.posix.join(defaultDirectory, picked);
   bridgeOutput?.info(`[上传] mount=${mount.name}；target=${targetDir}`);
@@ -2781,7 +2788,7 @@ async function openTerminal(
   const location = requestedMount ? undefined : currentRemoteLocation();
   const mount = requestedMount
     ?? config.mounts.find((candidate) => candidate.name === location?.mountName)
-    ?? await selectMount('Select a remote terminal');
+    ?? await selectMount('选择要打开终端的远程连接');
   if (!mount) return undefined;
   const folder = await ensureFolder(mount);
   // Use the server-resolved root. Configured roots such as "." are relative

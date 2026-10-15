@@ -69,22 +69,22 @@
     "commands": [
       {
         "command": "safs.openFolder",
-        "title": "SAFS: 打开远程目录",
+        "title": "SAFS：打开远程目录",
         "icon": "$(remote-explorer)"
       },
       {
         "command": "safs.switchRemoteDirectory",
-        "title": "SAFS: 切换远程目录",
+        "title": "SAFS：切换远程目录",
         "icon": "$(folder-opened)"
       },
       {
         "command": "safs.openTerminal",
-        "title": "SAFS: 打开远程终端",
+        "title": "SAFS：打开远程终端",
         "icon": "$(terminal)"
       },
       {
         "command": "safs.close",
-        "title": "SAFS: 断开 SFTP 连接"
+        "title": "SAFS：断开 SFTP 连接"
       },
       {
         "command": "safs.status",
@@ -96,7 +96,7 @@
       },
       {
         "command": "safs.addSshConfig",
-        "title": "SAFS: 添加 SSH 配置",
+        "title": "SAFS：添加 SSH 配置",
         "icon": "$(add)"
       },
       {
@@ -121,19 +121,19 @@
       },
       {
         "command": "safs.copyStreamableHttpUrl",
-        "title": "SAFS: 复制 Streamable HTTP URL"
+        "title": "SAFS：复制 Streamable HTTP URL"
       },
       {
         "command": "safs.testLocalProxy",
-        "title": "SAFS: 测试本机代理连接"
+        "title": "SAFS：测试本机代理连接"
       },
       {
         "command": "safs.installAgentForwarding",
-        "title": "SAFS: 为我的Agent安装转发功能"
+        "title": "SAFS：为我的Agent安装转发功能"
       },
       {
         "command": "safs.uninstallAgentForwarding",
-        "title": "SAFS: 为我的Agent卸载转发功能"
+        "title": "SAFS：为我的Agent卸载转发功能"
       },
       {
         "command": "safs.refreshExplorer",
@@ -227,7 +227,7 @@
       },
       {
         "command": "safs.mounts.focus",
-        "title": "SAFS: 聚焦远程目录"
+        "title": "SAFS：聚焦远程目录"
       },
       {
         "command": "safs.git.refresh",

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  hierarchicalHostName, legacyMountNames, mountAliasCandidates, mountNameFor
+  hierarchicalHostName, legacyMountNames, mountAliasCandidates, mountConnectionLabel, mountNameFor
 } from '../src/mount-aliases';
 import { HostConfig } from '../src/config';
 
@@ -16,6 +16,17 @@ test('uses any configured alias as the host label and falls back to the IP', () 
   assert.equal(hierarchicalHostName(host(), { '192.0.2.10': 'devbox' }), 'devbox');
   assert.equal(hierarchicalHostName(host(), { '192.0.2.10': '测试主机' }), '测试主机');
   assert.equal(hierarchicalHostName(host()), '192.0.2.10');
+});
+
+test('formats connection choices as host to account without repeating the mount name', () => {
+  assert.equal(
+    mountConnectionLabel(host(), { '192.0.2.10': '测试主机' }),
+    '测试主机 → dev_alice'
+  );
+  assert.equal(
+    mountConnectionLabel(host({ user: '' }), { '192.0.2.10': '测试主机' }),
+    '测试主机 → 未配置账号'
+  );
 });
 
 test('lists the config names older releases could have generated', () => {

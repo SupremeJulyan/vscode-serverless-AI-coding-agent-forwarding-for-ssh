@@ -15,6 +15,13 @@ export function hierarchicalHostName(
   return alias || host.ip;
 }
 
+/** 连接选择框使用层级语义展示主机与账号，避免重复显示内部挂载标识。 */
+export function mountConnectionLabel(
+  host: HostConfig, aliases?: Record<string, string>
+): string {
+  return `${hierarchicalHostName(host, aliases)} → ${host.user || '未配置账号'}`;
+}
+
 /**
  * 配置名：`主机名(账号)`，主机名取配置的别名，没配别名时用 IP。
  *

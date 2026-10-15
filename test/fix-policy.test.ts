@@ -25,6 +25,9 @@ test('opening a remote directory in a new window preserves the source window ter
 
   const switchInCurrentWindow = source.slice(end, source.indexOf('async function promptRemoteDirectory', end));
   assert.equal(switchInCurrentWindow.includes('setAgentCommandTerminalMode(false)'), false);
+  assert.ok(switchInCurrentWindow.includes("selectRemoteDirectory('选择要切换的远程连接', '切换')"));
+  assert.ok(openInNewWindow.includes("selectRemoteDirectory('选择要打开的远程连接', '打开')"));
+  assert.ok(source.includes('`${action}远程目录：${mountConnectionLabel('));
   assert.match(switchInCurrentWindow, /'vscode\.openFolder',\s*vscode\.Uri\.parse\(folderUri\(folder, resolved\)\)/);
   assert.ok(source.includes('if (hasRemoteWorkspaceContext() && agentCommandTerminal)'));
 });
