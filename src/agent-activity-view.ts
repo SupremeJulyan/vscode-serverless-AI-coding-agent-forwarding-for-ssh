@@ -16,6 +16,7 @@ export interface AgentTerminalTargetState {
 
 export interface AgentActivityViewActions {
   terminalTarget(): AgentTerminalTargetState | Promise<AgentTerminalTargetState>;
+  initialTerminalTarget?(): AgentTerminalTargetState;
   refreshTerminalTarget(): Promise<void>;
   switchWorkspace(): Promise<void>;
   openTerminalDirectory(): Promise<void>;
@@ -25,6 +26,8 @@ export interface AgentActivityViewActions {
 export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private targetRevision = 0;
+  private actionRunning = false;
+  private previewKey: string | undefined;
   private readonly changeSubscription: { dispose(): void };
 
   constructor(
@@ -39,6 +42,7 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     view.webview.options = { enableScripts: true };
+    this.previewKey = undefined;
     view.webview.html = activityViewHtml(view.webview);
     view.onDidDispose(() => {
       if (this.view === view) this.view = undefined;
@@ -58,17 +62,17 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
           '清空'
         );
         if (selected === '清空') await this.store.clear();
-      } else if (type === 'refreshTerminalTarget') {
-        await this.actions?.refreshTerminalTarget();
-      } else if (type === 'switchWorkspace') {
-        await this.actions?.switchWorkspace();
-      } else if (type === 'openTerminalDirectory') {
-        await this.actions?.openTerminalDirectory();
-      } else if (type === 'recoverForwarding') {
+      } else if (type === 'refreshTerminalTarget' || type === 'switchWorkspace'
+          || type === 'openTerminalDirectory' || type === 'recoverForwarding') {
+        if (this.actionRunning) return;
+        this.actionRunning = true;
         try {
-          await this.actions?.recoverForwarding();
+          await view.webview.postMessage({ type: 'actionState', action: type, busy: true });
+          await this.actions?.[type]();
         } finally {
-          await this.updateTerminalTarget();
+          this.actionRunning = false;
+          try { await this.updateTerminalTarget(); }
+          finally { await view.webview.postMessage({ type: 'actionState', busy: false }); }
         }
       }
     });
@@ -78,6 +82,14 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
     const revision = ++this.targetRevision;
     const view = this.view;
     if (!view) return;
+    const initial = this.actions?.initialTerminalTarget?.();
+    if (initial) {
+      const key = JSON.stringify([initial.label, initial.mode, initial.interface]);
+      if (key !== this.previewKey) {
+        this.previewKey = key;
+        await view.webview.postMessage({ type: 'terminalTarget', ...initial });
+      }
+    }
     const state = await this.actions?.terminalTarget() ?? { enabled: false };
     if (revision !== this.targetRevision || view !== this.view) return;
     await view.webview.postMessage({
@@ -262,6 +274,15 @@ export function activityViewHtml(webview: vscode.Webview): string {
     let events = [];
     let statusKind = 'idle';
     let idleHint = '当前远程窗口';
+    let targetActionBusy = false;
+    let targetChecking = false;
+    let recoveryText = '重试连接';
+    function updateActionButtons() {
+      refreshTerminalTarget.disabled = targetActionBusy;
+      switchWorkspace.disabled = targetActionBusy;
+      openTerminalDirectory.disabled = targetActionBusy;
+      recoverForwarding.disabled = targetActionBusy || targetChecking;
+    }
     let statusTimer;
     const seenStatus = new Map();
     const labels = {
@@ -367,7 +388,17 @@ export function activityViewHtml(webview: vscode.Webview): string {
       timeline.replaceChildren();
       const values = filtered();
       if (!values.length) {
-        timeline.appendChild(textElement('div', 'empty-state', events.length ? '当前筛选条件下没有活动' : '暂无 Agent 远程操作。启用转发后，MCP 和 CLI 操作会显示在这里。'));
+        timeline.appendChild(textElement('div', 'empty-state', events.length ? '当前筛选条件下没有活动' : '暂无 Agent 远程操作。' + idleHint));
+        if (events.length) {
+          const reset = textElement('button', '', '清除筛选');
+          reset.type = 'button';
+          reset.addEventListener('click', function() {
+            categoryFilter.value = 'all';
+            statusFilter.value = 'all';
+            render();
+          });
+          timeline.appendChild(reset);
+        }
         return;
       }
       groups(values).forEach(function(group) {
@@ -427,13 +458,22 @@ export function activityViewHtml(webview: vscode.Webview): string {
     }
     window.addEventListener('message', function(event) {
       if (!event.data) return;
+      if (event.data.type === 'actionState') {
+        targetActionBusy = event.data.busy === true;
+        refreshTerminalTarget.textContent = targetActionBusy && event.data.action === 'refreshTerminalTarget' ? '正在刷新…' : '刷新终端目录';
+        switchWorkspace.textContent = targetActionBusy && event.data.action === 'switchWorkspace' ? '正在切换…' : '切换工作区';
+        openTerminalDirectory.textContent = targetActionBusy && event.data.action === 'openTerminalDirectory' ? '正在打开…' : '打开远程目录';
+        recoverForwarding.textContent = targetActionBusy && event.data.action === 'recoverForwarding' ? '正在处理…' : recoveryText;
+        updateActionButtons();
+      }
       if (event.data.type === 'state') acceptState(event.data);
       if (event.data.type === 'terminalTarget') {
         if (event.data.interface === 'cli' || event.data.interface === 'mcp') {
           idleHint = event.data.interface === 'cli'
-            ? '在 Agent 中输入 /safs-cli'
-            : '在 Agent 中输入 use safs mcp';
+            ? '提示：在 Agent 中输入 /safs-cli'
+            : '提示：在 Agent 中输入 use safs mcp';
           if (statusKind === 'idle') statusDetail.textContent = idleHint;
+          if (!events.length) render();
         }
         const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'
           ? event.data.mode
@@ -453,8 +493,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
         const statusLabel = { disabled: '未启用', checking: '准备中', ready: '转发就绪', error: '需要恢复' }[availability] || '';
         forwardingStatus.textContent = statusLabel + (event.data.detail ? ' · ' + event.data.detail : '');
         recoverForwarding.hidden = !event.data.recoveryLabel;
-        recoverForwarding.disabled = availability === 'checking';
-        recoverForwarding.textContent = event.data.recoveryLabel || '重试连接';
+        targetChecking = availability === 'checking';
+        recoveryText = event.data.recoveryLabel || '重试连接';
+        if (!targetActionBusy) recoverForwarding.textContent = recoveryText;
+        updateActionButtons();
       }
     });
     categoryFilter.addEventListener('change', render);

@@ -154,19 +154,22 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
     if (!elements.has(id)) elements.set(id, {
       hidden: false, disabled: false, textContent: '', listeners: {} as Record<string, () => void>,
       classList: { toggle() {} },
+      children: [] as any[],
+      replaceChildren() { this.children = []; },
+      appendChild(child: any) { this.children.push(child); },
       addEventListener(type: string, listener: () => void) { this.listeners[type] = listener; }
     });
     return elements.get(id);
   };
   runInNewContext(script, {
     acquireVsCodeApi: () => ({ postMessage: (message: any) => messages.push(message) }),
-    document: { getElementById: get },
+    document: { getElementById: get, createElement: () => get('element-' + elements.size) },
     window: { addEventListener: (_type: string, listener: typeof receive) => { receive = listener; } }
   });
   const send = (data: any) => receive({ data: { type: 'terminalTarget', ...data } });
   const target = '开发机 → root → /srv/project';
   send({ enabled: true, interface: 'cli', mode: 'terminal', label: target, availability: 'error', detail: 'CLI 需要更新', recoveryLabel: '修复 CLI' });
-  assert.equal(get('statusDetail').textContent, '在 Agent 中输入 /safs-cli');
+  assert.equal(get('statusDetail').textContent, '提示：在 Agent 中输入 /safs-cli');
   assert.equal(get('agentModeDetail').textContent, target);
   assert.equal(get('switchWorkspace').hidden, true);
   assert.equal(get('openTerminalDirectory').hidden, false);
@@ -179,7 +182,7 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   send({ mode: 'terminal', availability: 'checking' });
   assert.equal(get('forwardingStatus').textContent, '准备中');
   send({ interface: 'mcp', mode: 'workspace', label: target, availability: 'ready' });
-  assert.equal(get('statusDetail').textContent, '在 Agent 中输入 use safs mcp');
+  assert.equal(get('statusDetail').textContent, '提示：在 Agent 中输入 use safs mcp');
   assert.equal(get('switchWorkspace').hidden, false);
   assert.equal(get('openTerminalDirectory').hidden, true);
   assert.equal(get('modeCapabilities').hidden, true);
@@ -190,4 +193,21 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('recoverForwarding').disabled, false);
   assert.equal(get('recoverForwarding').hidden, false);
   assert.equal(get('recoverForwarding').textContent, '启用 Agent 转发');
+  get('category').value = 'read';
+  get('eventStatus').value = 'error';
+  receive({ data: { type: 'state', initial: true, events: [{ id: 'one', category: 'read', status: 'success', source: 'cli', toolName: 'remote_read', startedAt: new Date().toISOString() }] } });
+  assert.equal(get('timeline').children[0].textContent, '当前筛选条件下没有活动');
+  const reset = get('timeline').children[1];
+  assert.equal(reset.textContent, '清除筛选');
+  reset.listeners.click();
+  assert.equal(get('category').value, 'all');
+  assert.equal(get('eventStatus').value, 'all');
+  assert.equal(get('timeline').children[0].className, 'event success');
+  receive({ data: { type: 'actionState', action: 'refreshTerminalTarget', busy: true } });
+  assert.equal(get('refreshTerminalTarget').disabled, true);
+  assert.equal(get('refreshTerminalTarget').textContent, '正在刷新…');
+  assert.equal(get('switchWorkspace').disabled, true);
+  receive({ data: { type: 'actionState', busy: false } });
+  assert.equal(get('refreshTerminalTarget').disabled, false);
+  assert.equal(get('refreshTerminalTarget').textContent, '刷新终端目录');
 });

@@ -1,4 +1,5 @@
 import { operationMetric } from './operation-metric';
+import { untilCancelled, UiOperationGate } from './ui-operation';
 import { registerConfigDiagnostics } from './config-diagnostics';
 import { createRemoteGitBundle } from './remote-git-bundle';
 import {
@@ -898,11 +899,12 @@ async function openDirectoryItem(requested: MountConfig): Promise<void> {
   const folder = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: 'SAFS：正在连接远程目录',
-    cancellable: false
-  }, async (progress) => {
+    cancellable: true
+  }, async (progress, token) => {
     progress.report({ message: '正在验证远程目录…' });
-    return ensureFolder(requested);
+    return untilCancelled(token, () => ensureFolder(requested));
   });
+  if (!folder) return;
   const remoteDirectory = folder.defaultRemotePath ?? folder.remoteRoot;
   await showRemoteShortcutHintOnce(vscodeContext);
   agentTrace('Open', `创建新窗口，workspace=${folderUri(folder, remoteDirectory)}`);
@@ -941,11 +943,12 @@ async function selectRemoteDirectory(
   const folder = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: action === '打开' ? 'SAFS：正在打开远程目录' : 'SAFS：正在切换远程目录',
-    cancellable: false
-  }, async (progress) => {
+    cancellable: true
+  }, async (progress, token) => {
     progress.report({ message: '正在连接并验证远程目录…' });
-    return ensureFolder(mount!);
+    return untilCancelled(token, () => ensureFolder(mount!));
   });
+  if (!folder) return undefined;
   const session = await pool.get(folder.hostName);
   const currentPath = location?.mountName === mount.name
     ? location.remotePath
@@ -2206,6 +2209,20 @@ async function refreshAgentCommandTerminalState(): Promise<void> {
 let forwardingRecoveryRunning = false;
 let forwardingRecoveryError: { mountName: string; message: string } | undefined;
 
+function activityForwardingPreview(): AgentTerminalTargetState {
+  const state = { ...agentCommandTerminalState(), interface: agentInterface() };
+  const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
+  const terminal = activeAgentCommandTerminal();
+  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+  const mountName = location?.mountName ?? info?.mount.name;
+  if (!mountName) return { ...state, availability: 'disabled', detail: '请打开远程目录或启用终端转发' };
+  const mount = lastReadConfig?.mounts.find((candidate) => candidate.name === mountName);
+  const host = mount && lastReadConfig ? resolveMount(lastReadConfig, mount).hostConfig : undefined;
+  const label = [host ? lastReadConfig?.host_aliases?.[host.ip] ?? host.ip : mountName,
+    host?.user, location?.remotePath ?? agentCommandTerminalCwd].filter(Boolean).join(' → ');
+  return { ...state, label, availability: 'checking', detail: '正在检查转发状态' };
+}
+
 async function activityForwardingState(): Promise<AgentTerminalTargetState> {
   const terminalState = { ...agentCommandTerminalState(), interface: agentInterface() };
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
@@ -2359,7 +2376,7 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     await refreshAgentCommandTerminalState();
     await publishAgentWorkspace(vscodeContext);
     bridgeOutput?.info(`[Agent 终端转发] 已停止使用 ${name}`);
-    void vscode.window.showInformationMessage('SAFS：已切换到工作区模式，Agent 工具已恢复。');
+    bridgeOutput?.info('[Agent 转发] 已切换到工作区模式，Agent 工具已恢复。');
     return;
   }
   const terminal = vscode.window.activeTerminal;
@@ -5855,6 +5872,7 @@ async function updateAiForwardEnabled(
   if (enabledValue) {
     if (!shouldInstallIntegration) {
       agentTrace('Preference', '已有其他挂载启用，跳过重复 Agent 集成安装');
+      notifyAgentForwardingEnabled(mount);
       return;
     }
     if (cliExecutable) {
@@ -5863,17 +5881,31 @@ async function updateAiForwardEnabled(
     // Install once for the globally first enabled mount. Further mounts only
     // publish another workspace until every forwarding switch is disabled again.
     await installAgentForwardingIntegration(vscodeContext, cliExecutable);
+    notifyAgentForwardingEnabled(mount);
     return;
   }
   const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
   bridgeOutput?.info(
     `[Agent 转发] 已关闭 ${mount.name}；剩余=${[...enabled].join(',') || '<empty>'}`
   );
-  void vscode.window.showInformationMessage(
-    enabled.size === 0
-      ? 'SAFS：所有 Agent 转发已关闭。'
-      : 'SAFS：Agent 转发已关闭，其他挂载不受影响。'
-  );
+  await refreshAgentCommandTerminalState();
+}
+
+function notifyAgentForwardingEnabled(mount: MountConfig): void {
+  void guard(async () => {
+    const config = await readConfig();
+    const label = mountConnectionLabel(resolveMount(config, mount).hostConfig, config.host_aliases);
+    const selected = await vscode.window.showInformationMessage(
+      `SAFS：已为“${label}”启用 Agent 转发。需要打开对应的远程目录或远程终端，Agent 才能操作该远程目标。`,
+      '打开远程目录', '打开远程终端'
+    );
+    // Use the mount that was enabled, rather than the currently focused target.
+    if (selected === '打开远程目录') {
+      await openDirectoryItem(mount);
+    } else if (selected === '打开远程终端') {
+      await openTerminal(vscodeContext, mount);
+    }
+  });
 }
 
 async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): Promise<void> {
@@ -5881,7 +5913,8 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
     () => updateAiForwardEnabled(mount, enabledValue)
   );
   aiForwardUpdate = operation;
-  await operation;
+  try { await operation; }
+  finally { await refreshAgentCommandTerminalState(); }
 }
 
 async function prepareAgentCwd(mount: MountConfig): Promise<void> {
@@ -6030,7 +6063,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await agentActivityStore.initialize();
   agentActivityView = new AgentActivityViewProvider(agentActivityStore, {
     terminalTarget: activityForwardingState,
-    refreshTerminalTarget: refreshAgentCommandTerminal,
+    initialTerminalTarget: activityForwardingPreview,
+    refreshTerminalTarget: () => guard(refreshAgentCommandTerminal),
     openTerminalDirectory: () => guard(openAgentTerminalDirectory),
     recoverForwarding: recoverActivityForwarding,
     switchWorkspace: async () => {
@@ -6120,6 +6154,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => {
       refreshTree();
       refreshSafsEntryLabel();
+      void refreshAgentCommandTerminalState().catch((error) => logAsyncFailure('刷新连接状态失败', error));
     }
   );
   // 回收空闲 SFTP 连接（safs.sftp.idleConnectionTtl 秒，0 关闭），避免多主机
@@ -6229,10 +6264,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: () => { void pool.close(); syncManager?.dispose(); } }
   );
 
+  const uiOperations = new UiOperationGate();
   const command = (name: string, callback: (...args: never[]) => Promise<unknown>) => {
     context.subscriptions.push(vscode.commands.registerCommand(
       `${commandPrefix}.${name}`,
-      (...args: never[]) => guard(() => callback(...args))
+      (...args: never[]) => {
+        const directoryAction = ['openFolder', 'openFolderItem', 'switchRemoteDirectory'].includes(name);
+        const guardedAction = directoryAction || ['openTerminal', 'openTerminalItem', 'installAgentForwarding'].includes(name);
+        return guardedAction
+          ? uiOperations.run(directoryAction ? 'openDirectory' : name, () => guard(() => callback(...args)))
+          : guard(() => callback(...args));
+      }
     ));
   };
   command('openFolder', async () => {
@@ -6564,6 +6606,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration('safs.agentInterface')) return;
     void guard(async () => {
+      await refreshAgentCommandTerminalState();
       startAgentHttpRouterLeadership(context);
       const result = await configureAgentInterface(context);
       if (result.cliExecutable) {
@@ -6572,6 +6615,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else {
         void vscode.window.showInformationMessage('SAFS：CLI 和 Skill 已移除。');
       }
+      await refreshAgentCommandTerminalState();
     });
   }));
   // Agent MCP: keep one in-extension fixed HTTP router alive, then start the
