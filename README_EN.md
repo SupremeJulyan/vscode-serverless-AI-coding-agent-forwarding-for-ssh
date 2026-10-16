@@ -43,6 +43,8 @@ Restart VS Code, run `safs --version` to check installation, then enter `/safs-c
 
 For **MCP mode**, first set `safs.agentInterface` to `mcp`:
 
+Switching from CLI automatically asks for the Agent name and copies the installation prompt in the window where you changed the setting. If you cancel, use the installation command below to retry.
+
 1. Click **Enable Agent Forwarding** beside a parent connection node in the SAFS view. You can also run `SAFS: Install Agent Forwarding for My Agent` to repair the integration.
 2. Enter the Agent name when prompted. The extension copies an English installation prompt containing the local Streamable HTTP URL.
 3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself.

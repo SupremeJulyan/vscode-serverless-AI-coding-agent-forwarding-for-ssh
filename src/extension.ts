@@ -6747,18 +6747,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const copyMcpUninstallPrompt = shouldCopyMcpUninstallPrompt(
       previousAgentInterface, currentAgentInterface, vscode.window.state.focused
     );
+    const copyMcpInstallPrompt = currentAgentInterface === 'mcp' && vscode.window.state.focused;
     previousAgentInterface = currentAgentInterface;
     void guard(async () => {
       await refreshAgentCommandTerminalState();
       startAgentHttpRouterLeadership(context);
       const result = await configureAgentInterface(context);
+      if (agentInterface() !== currentAgentInterface) return;
       if (result.cliExecutable) {
         bridgeOutput?.info(`[Agent CLI] 接口准备完成：${result.cliExecutable}`);
         if (copyMcpUninstallPrompt) {
           await installAgentForwardingIntegration(context, result.cliExecutable, true);
         }
-      } else {
-        void vscode.window.showInformationMessage('SAFS：CLI 和 Skill 已移除。');
+      } else if (copyMcpInstallPrompt) {
+        await uiOperations.run('installAgentForwarding', () =>
+          installAgentForwardingIntegration(context)
+        );
       }
       await refreshAgentCommandTerminalState();
     });

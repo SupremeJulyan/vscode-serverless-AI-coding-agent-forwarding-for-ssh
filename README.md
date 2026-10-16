@@ -66,6 +66,7 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 重启 VS Code，在终端运行 `safs --version` 检查安装，然后在 Agent 中输入 `/safs-cli`，选择远程工作区。
 
 如需 **MCP 模式**，先将 `safs.agentInterface` 设置为 `mcp`：
+从 CLI 切换时，当前操作窗口会自动提示输入 Agent 名称并复制安装提示词；取消后可通过下述安装命令重试。
 (1) 在 SAFS 视图中点击连接父节点旁的 **启用 Agent 转发**。也可以主动运行 `SAFS: 为我的Agent安装转发功能` 进行修复。
 (2) 按提示输入 Agent 名称，扩展会复制一段包含本机 Streamable HTTP URL 的英文安装提示词。
 (3) 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。
