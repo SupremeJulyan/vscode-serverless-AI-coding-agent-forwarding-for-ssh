@@ -43,6 +43,7 @@
     "onView:safs.agentActivity",
     "onCommand:safs.openFolder",
     "onCommand:safs.switchRemoteDirectory",
+    "onCommand:safs.searchRemoteDirectory",
     "onCommand:safs.openTerminal",
     "onCommand:safs.close",
     "onCommand:safs.status",
@@ -81,6 +82,11 @@
         "command": "safs.openTerminal",
         "title": "SAFS：打开远程终端",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "safs.searchRemoteDirectory",
+        "title": "SAFS：在此目录中搜索",
+        "icon": "$(search)"
       },
       {
         "command": "safs.close",
@@ -359,6 +365,9 @@
           "command": "safs.switchRemoteDirectory"
         },
         {
+          "command": "safs.searchRemoteDirectory"
+        },
+        {
           "command": "safs.openTerminal"
         },
         {
@@ -527,6 +536,11 @@
         }
       ],
       "explorer/context": [
+        {
+          "command": "safs.searchRemoteDirectory",
+          "when": "resourceScheme == safs && explorerResourceIsFolder",
+          "group": "safs@0"
+        },
         {
           "command": "safs.syncToLocal",
           "when": "resourceScheme == safs",

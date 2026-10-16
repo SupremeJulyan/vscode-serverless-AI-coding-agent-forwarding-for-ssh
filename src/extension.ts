@@ -4325,7 +4325,7 @@ async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pr
 
 async function remoteSearch(input: RemoteSearchOptions & {
   mountName: string; agentName?: string; captureForMcp?: boolean;
-}): Promise<unknown> {
+}, token?: vscode.CancellationToken): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const requestedPath = resolveRemotePath(folder, input.path);
   const searchPath = await (await pool.get(folder.hostName)).realpath(requestedPath);
@@ -4337,9 +4337,106 @@ async function remoteSearch(input: RemoteSearchOptions & {
     agentName: input.agentName,
     captureForMcp: input.captureForMcp,
     command: search.command
-  });
+  }, token);
   const { remoteCwd: _remoteCwd, ...publicResult } = result;
   return { ...searchResult(publicResult, search.mode), mode: search.mode };
+}
+
+interface RemoteSearchQuickPickItem extends vscode.QuickPickItem {
+  uri: vscode.Uri;
+  line: number;
+  column: number;
+}
+
+function parseRemoteSearchLines(
+  stdout: string, folder: RemoteFolder, searchRoot: string, query: string
+): RemoteSearchQuickPickItem[] {
+  const items: RemoteSearchQuickPickItem[] = [];
+  for (const line of stdout.split('\n')) {
+    if (!line) continue;
+    const match = /^(.*?):(\d+):(.*)$/.exec(line);
+    if (!match) continue;
+    const remotePath = path.posix.normalize(match[1]);
+    const lineNumber = Math.max(0, Number(match[2]) - 1);
+    const matchedText = match[3];
+    const text = matchedText.trim();
+    const column = Math.max(0, matchedText.indexOf(query));
+    const relative = path.posix.relative(searchRoot, remotePath) || path.posix.basename(remotePath);
+    items.push({
+      label: `${relative}:${lineNumber + 1}`,
+      description: text,
+      detail: remotePath,
+      uri: vscode.Uri.parse(folderUri(folder, remotePath)),
+      line: lineNumber,
+      column
+    });
+    if (items.length === 500) break;
+  }
+  return items;
+}
+
+async function searchRemoteDirectory(resource?: vscode.Uri): Promise<void> {
+  let mountName: string;
+  let searchRoot: string;
+  if (resource?.scheme === remoteFileSystemScheme) {
+    const location = parseRemoteUri(resource.toString());
+    const { folder } = await mountAndFolder(location.mountName);
+    mountName = location.mountName;
+    searchRoot = remotePathForUri(folder, location.remotePath);
+  } else {
+    const location = currentRemoteLocation();
+    if (!location) throw new Error('请先打开 SAFS 远程目录，或在远程文件夹上右键搜索。');
+    mountName = location.mountName;
+    searchRoot = location.remotePath;
+  }
+
+  const query = await vscode.window.showInputBox({
+    title: `在此目录中搜索：${searchRoot}`,
+    prompt: '输入要在远程文件内容中查找的文本',
+    placeHolder: '搜索文本',
+    ignoreFocusOut: true,
+    validateInput: (value) => value.trim() ? undefined : '请输入搜索文本'
+  });
+  if (!query?.trim()) return;
+
+  const result = await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: 'SAFS：正在搜索远程目录',
+    cancellable: true
+  }, (_progress, token) => remoteSearch({
+    mountName,
+    path: searchRoot,
+    query: query.trim(),
+    mode: 'content',
+    fixedStrings: true,
+    captureForMcp: true
+  }, token)) as Record<string, unknown>;
+
+  if (result.status === 'error') {
+    throw new Error(typeof result.stderr === 'string' && result.stderr.trim()
+      ? result.stderr.trim() : '远程搜索失败。');
+  }
+  const { folder } = await mountAndFolder(mountName);
+  const items = parseRemoteSearchLines(
+    typeof result.stdout === 'string' ? result.stdout : '', folder, searchRoot, query.trim()
+  );
+  if (items.length === 0) {
+    void vscode.window.showInformationMessage(`SAFS：未找到“${query.trim()}”。`);
+    return;
+  }
+  const truncated = items.length === 500 || result.truncated === true;
+  const selected = await vscode.window.showQuickPick(items, {
+    title: `搜索结果：${query.trim()}${truncated ? '（仅显示前 500 条）' : ''}`,
+    placeHolder: `在 ${searchRoot} 中找到 ${items.length}${truncated ? '+' : ''} 条结果`,
+    matchOnDescription: true,
+    matchOnDetail: true
+  });
+  if (!selected) return;
+  const document = await vscode.workspace.openTextDocument(selected.uri);
+  const editor = await vscode.window.showTextDocument(document);
+  const position = new vscode.Position(selected.line, selected.column);
+  editor.selection = new vscode.Selection(position, position);
+  editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
 
 // ---- Tree View ----
@@ -6281,6 +6378,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tree.refresh();
   });
   command('switchRemoteDirectory', switchRemoteDirectory);
+  command('searchRemoteDirectory', (uri) => searchRemoteDirectory(uri as vscode.Uri | undefined));
   command('cloneGitRepository', cloneGitRepository);
   command('completeRemoteDirectory', completeRemoteDirectory);
   command('syncToLocal', (uri) => syncToLocal(uri as vscode.Uri | undefined));

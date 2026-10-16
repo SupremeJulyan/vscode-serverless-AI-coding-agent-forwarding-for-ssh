@@ -88,6 +88,19 @@ test('contributes a remote-directory switch command instead of relying on the lo
   assert.ok(commands.some((item) => item.command === 'safs.switchRemoteDirectory'));
 });
 
+test('contributes remote content search for SAFS explorer directories', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  assert.ok(manifest.activationEvents?.includes('onCommand:safs.searchRemoteDirectory'));
+  assert.ok(manifest.contributes?.commands?.some(
+    (item) => item.command === 'safs.searchRemoteDirectory'
+  ));
+  const explorer = manifest.contributes?.menus?.['explorer/context'] ?? [];
+  assert.ok(explorer.some((item) => item.command === 'safs.searchRemoteDirectory'
+    && item.when === 'resourceScheme == safs && explorerResourceIsFolder'));
+});
+
 test('the empty remote Git panel offers adding or cloning a repository', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
