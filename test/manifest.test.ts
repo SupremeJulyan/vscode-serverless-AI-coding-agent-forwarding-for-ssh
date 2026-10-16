@@ -88,7 +88,7 @@ test('contributes a remote-directory switch command instead of relying on the lo
   assert.ok(commands.some((item) => item.command === 'safs.switchRemoteDirectory'));
 });
 
-test('contributes remote content search for SAFS explorer directories', async () => {
+test('contributes SAFS navigation and filename search to remote explorer menus', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
@@ -97,6 +97,12 @@ test('contributes remote content search for SAFS explorer directories', async ()
     (item) => item.command === 'safs.searchRemoteDirectory'
   ));
   const explorer = manifest.contributes?.menus?.['explorer/context'] ?? [];
+  for (const command of [
+    'safs.openFolder', 'safs.switchRemoteDirectory', 'safs.openTerminal'
+  ]) {
+    assert.ok(explorer.some((item) => item.command === command
+      && item.when === 'resourceScheme == safs'));
+  }
   assert.ok(explorer.some((item) => item.command === 'safs.searchRemoteDirectory'
     && item.when === 'resourceScheme == safs && explorerResourceIsFolder'));
 });

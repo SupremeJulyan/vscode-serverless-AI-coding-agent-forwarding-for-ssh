@@ -537,19 +537,34 @@
       ],
       "explorer/context": [
         {
-          "command": "safs.searchRemoteDirectory",
-          "when": "resourceScheme == safs && explorerResourceIsFolder",
+          "command": "safs.openFolder",
+          "when": "resourceScheme == safs",
           "group": "safs@0"
         },
         {
-          "command": "safs.syncToLocal",
+          "command": "safs.switchRemoteDirectory",
           "when": "resourceScheme == safs",
           "group": "safs@1"
         },
         {
-          "command": "safs.visualDownload",
+          "command": "safs.openTerminal",
           "when": "resourceScheme == safs",
           "group": "safs@2"
+        },
+        {
+          "command": "safs.searchRemoteDirectory",
+          "when": "resourceScheme == safs && explorerResourceIsFolder",
+          "group": "safs@3"
+        },
+        {
+          "command": "safs.syncToLocal",
+          "when": "resourceScheme == safs",
+          "group": "safs@4"
+        },
+        {
+          "command": "safs.visualDownload",
+          "when": "resourceScheme == safs",
+          "group": "safs@5"
         },
         {
           "command": "safs.visualUpload",
