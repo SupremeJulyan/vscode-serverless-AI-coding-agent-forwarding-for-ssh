@@ -7,7 +7,10 @@ import {
   pushThroughLocalGit, resolvePushTarget, resolveShallowBoundaries,
   successfulPushReceipt, SuccessfulPushReceipt
 } from './local-git-push';
-import { pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget } from './local-git-pull';
+import {
+  pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget,
+  localGitAuthenticationError, LocalGitAuthenticationError
+} from './local-git-pull';
 import { RemoteGit } from './remote-git';
 import { RemoteGitScm } from './remote-git-scm';
 import { RemoteGitHistory } from './remote-git-history';
@@ -1056,7 +1059,14 @@ async function cloneGitRepository(): Promise<void> {
       const cancelled = token.onCancellationRequested(() => controller.abort());
       try {
         progress.report({ message: repositoryUrl.trim() });
-        await localGitRunner()(['clone', '--', repositoryUrl.trim(), localRepository], controller.signal);
+        try {
+          await localGitRunner()(
+            ['clone', '--', repositoryUrl.trim(), localRepository], controller.signal
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw localGitAuthenticationError(repositoryUrl, redactSensitiveText(message)) ?? error;
+        }
       } finally {
         cancelled.dispose();
       }
@@ -6046,6 +6056,13 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
       } else if (selected === addSshConfigAction) {
         await vscode.commands.executeCommand(`${commandPrefix}.addSshConfig`);
       }
+      return;
+    }
+    if (error instanceof LocalGitAuthenticationError) {
+      const selected = await vscode.window.showErrorMessage(
+        error.userMessage, viewSafsLogAction
+      );
+      if (selected === viewSafsLogAction) bridgeOutput?.show(true);
       return;
     }
     const missingCommand = missingExecutableName(error);

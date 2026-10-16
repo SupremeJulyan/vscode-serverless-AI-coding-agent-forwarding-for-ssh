@@ -6,7 +6,10 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { RemoteGit, GitRunner } from '../src/remote-git';
 import { localGitRunner, resolveShallowBoundaries, validateFetchUrl } from '../src/local-git-push';
-import { describeFetchFailure, fetchThroughLocalGit, pullThroughLocalGit, resolveFetchTarget, resolvePullTarget } from '../src/local-git-pull';
+import {
+  describeFetchFailure, fetchThroughLocalGit, localGitAuthenticationError,
+  pullThroughLocalGit, resolveFetchTarget, resolvePullTarget
+} from '../src/local-git-pull';
 
 import { execGitFixture as exec } from './git-fixture-exec';
 
@@ -161,6 +164,25 @@ test('fetch failures name the local credential problem', () => {
     assert.throws(() => validateFetchUrl(url));
   }
   for (const url of ['https://host/repo', 'ssh://user@host:2222/repo', 'git@host:repo.git']) validateFetchUrl(url);
+});
+
+test('HTTPS clone authentication failures provide actionable GitHub guidance', () => {
+  const github = localGitAuthenticationError(
+    'https://github.com/owner/private.git',
+    "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+  );
+  assert.match(github?.userMessage ?? '', /gh auth login/);
+  assert.match(github?.userMessage ?? '', /gh auth setup-git/);
+  assert.match(github?.message ?? '', /terminal prompts disabled/);
+  assert.match(
+    localGitAuthenticationError(
+      'https://git.example.test/private.git',
+      'fatal: Cannot prompt because user interactivity has been disabled.'
+    )?.userMessage ?? '',
+    /credential helper/
+  );
+  assert.equal(localGitAuthenticationError('git@github.com:owner/private.git', 'Authentication failed'), undefined);
+  assert.equal(localGitAuthenticationError('https://github.com/owner/public.git', 'network unreachable'), undefined);
 });
 
 /** 复刻扩展在远端做的那几步（bundle 走本地文件，其余与 extension.ts 相同）。 */

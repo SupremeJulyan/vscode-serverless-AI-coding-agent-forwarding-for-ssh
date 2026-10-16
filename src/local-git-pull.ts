@@ -21,6 +21,31 @@ export interface PullTarget {
   objectFormat: 'sha1' | 'sha256';
 }
 
+export class LocalGitAuthenticationError extends Error {
+  readonly userMessage: string;
+
+  constructor(url: string, detail: string) {
+    const github = /^https?:\/\/github\.com(?:\/|$)/i.test(url.trim());
+    const guidance = github
+      ? '请先运行 gh auth login 和 gh auth setup-git，或改用 SSH 仓库地址。'
+      : '请先配置本地 Git credential helper，或改用已配置凭据的 SSH 仓库地址。';
+    const userMessage = `SAFS：本地 Git 尚未配置 HTTPS 凭据。${guidance}`;
+    super(`${userMessage} 原始错误：${detail}`);
+    this.name = 'LocalGitAuthenticationError';
+    this.userMessage = userMessage;
+  }
+}
+
+export function localGitAuthenticationError(
+  url: string, message: string
+): LocalGitAuthenticationError | undefined {
+  if (!/^https?:\/\//i.test(url.trim())) return undefined;
+  if (!/could not read Username|terminal prompts disabled|Authentication failed|Cannot prompt because user interactivity has been disabled/i.test(message)) {
+    return undefined;
+  }
+  return new LocalGitAuthenticationError(url, message);
+}
+
 /**
  * 解析拉取目标：与 `git pull` 一致，当前分支必须有上游
  * （`branch.<name>.remote` + `branch.<name>.merge`），否则宁可不做。
@@ -56,7 +81,12 @@ export async function resolvePullTarget(git: RemoteGit): Promise<PullTarget> {
 
 /** 本地凭据缺失时的提示：中转拉取的取新提交发生在本地，这是最常见的失败。 */
 export function describeFetchFailure(url: string, message: string): string {
-  if (/could not read Username|terminal prompts disabled|Authentication failed|Permission denied \(publickey\)/i.test(message)) {
+  const authenticationError = localGitAuthenticationError(url, message);
+  if (authenticationError) {
+    return `本地 Git 无法认证 ${url}：请先在本地配置凭据（credential helper），或改用本地可达的 SSH 地址`
+      + `（如 git@host:path，或用 url.<base>.insteadOf 重写）。原始错误：${message}`;
+  }
+  if (/Permission denied \(publickey\)/i.test(message)) {
     return `本地 Git 无法认证 ${url}：请先在本地配置凭据（credential helper），或改用本地可达的 SSH 地址`
       + `（如 git@host:path，或用 url.<base>.insteadOf 重写）。原始错误：${message}`;
   }
