@@ -5,9 +5,9 @@ export function normalizeAgentInterface(value: unknown): AgentInterface {
 }
 
 export function shouldCopyMcpUninstallPrompt(
-  previous: AgentInterface, current: AgentInterface
+  previous: AgentInterface, current: AgentInterface, windowFocused: boolean
 ): boolean {
-  return previous === 'mcp' && current === 'cli';
+  return windowFocused && previous === 'mcp' && current === 'cli';
 }
 
 export function recordedMcpAgentNames(value: unknown): string[] {

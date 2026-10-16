@@ -427,6 +427,7 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.ok(extensionSource.includes(
     'await installAgentForwardingIntegration(context, result.cliExecutable, true)'
   ));
+  assert.match(extensionSource, /shouldCopyMcpUninstallPrompt\(\s*previousAgentInterface, currentAgentInterface, vscode\.window\.state\.focused\s*\)/);
   assert.ok(extensionSource.includes('enabledValue && enabled.size === 0'));
   assert.ok(extensionSource.includes('if (!shouldInstallIntegration)'));
   assert.ok(extensionSource.includes('首次安装需打开 Agent 转发'));

@@ -155,6 +155,7 @@ const mcpInstalledAgentsKey = platformStateKey('mcpInstalledAgentsV1');
 const gitPushReceiptsKey = platformStateKey('gitPushReceiptsV1');
 /** Serialize all mount toggles so only the first globally enabled mount installs integration. */
 let aiForwardUpdate: Promise<void> = Promise.resolve();
+const mcpUninstallPrompts = new UiOperationGate();
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
 const addSshConfigAction = 'Add SSH Config';
@@ -5893,24 +5894,26 @@ async function recordInstalledMcpAgent(
   );
 }
 
-async function copyMcpUninstallPromptAndNotify(
+function copyMcpUninstallPromptAndNotify(
   context: vscode.ExtensionContext
 ): Promise<void> {
-  await vscode.env.clipboard.writeText(streamableHttpMcpUninstallPrompt());
-  const agents = installedMcpAgentNames(context);
-  const action = await vscode.window.showInformationMessage(
-    'SAFS：MCP 卸载提示已复制。',
-    {
-      modal: true,
-      detail: agents.length > 0
-        ? `请分别粘贴到以下 Agent 执行：${agents.join('、')}`
-        : '未记录具体 Agent；请粘贴到此前安装过 SAFS MCP 的 Agent 执行。'
-    },
-    '已全部卸载'
-  );
-  if (action === '已全部卸载') {
-    await context.globalState.update(mcpInstalledAgentsKey, []);
-  }
+  return mcpUninstallPrompts.run('mcpUninstallPrompt', async () => {
+    await vscode.env.clipboard.writeText(streamableHttpMcpUninstallPrompt());
+    const agents = installedMcpAgentNames(context);
+    const action = await vscode.window.showInformationMessage(
+      'SAFS：MCP 卸载提示已复制。',
+      {
+        modal: true,
+        detail: agents.length > 0
+          ? `请分别粘贴到以下 Agent 执行：${agents.join('、')}`
+          : '未记录具体 Agent；请粘贴到此前安装过 SAFS MCP 的 Agent 执行。'
+      },
+      '已全部卸载'
+    );
+    if (action === '已全部卸载') {
+      await context.globalState.update(mcpInstalledAgentsKey, []);
+    }
+  });
 }
 
 async function installAgentForwardingIntegration(
@@ -6742,7 +6745,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const currentAgentInterface = agentInterface();
     if (currentAgentInterface === previousAgentInterface) return;
     const copyMcpUninstallPrompt = shouldCopyMcpUninstallPrompt(
-      previousAgentInterface, currentAgentInterface
+      previousAgentInterface, currentAgentInterface, vscode.window.state.focused
     );
     previousAgentInterface = currentAgentInterface;
     void guard(async () => {
