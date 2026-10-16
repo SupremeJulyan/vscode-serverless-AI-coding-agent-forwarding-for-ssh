@@ -118,6 +118,8 @@ test('the empty remote Git panel offers adding or cloning a repository', async (
   const welcome = manifest.contributes?.viewsWelcome?.find(item => item.view === 'safs.gitHistory');
   assert.match(welcome?.contents ?? '', /\[添加远程 Git 目录\]\(command:safs\.addRemoteDirectory\)/);
   assert.match(welcome?.contents ?? '', /\[克隆 Git 仓库\]\(command:safs\.cloneGitRepository\)/);
+  assert.ok((welcome?.contents.indexOf('[克隆 Git 仓库]') ?? -1)
+    < (welcome?.contents.indexOf('[添加远程 Git 目录]') ?? -1));
 });
 
 test('remote directory commands can select a connection from a local or empty window', async () => {
