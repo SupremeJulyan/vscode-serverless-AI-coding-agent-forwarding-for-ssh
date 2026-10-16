@@ -3,7 +3,7 @@ import { shellQuote } from './shell-quote';
 export interface RemoteSearchOptions {
   query: string; path?: string; mode?: 'content' | 'files' | 'count' | 'names';
   fixedStrings?: boolean; ignoreCase?: boolean; contextLines?: number;
-  include?: string[]; excludeDirs?: string[];
+  include?: string[]; excludeDirs?: string[]; maxResults?: number;
 }
 export const defaultSearchExcludes = ['.git', 'node_modules', 'dist', 'build', 'out', 'target',
   '.venv', 'venv', '__pycache__', '.next', '.cache', 'coverage', 'vendor', '.tox',
@@ -22,8 +22,9 @@ export function searchCommand(searchPath: string, input: RemoteSearchOptions) {
     const includeFilter = input.include?.length
       ? ` \\( ${input.include.map(glob => `${nameOperator} ${shellQuote(glob)}`).join(' -o ')} \\)`
       : '';
+    const command = `find ${shellQuote(searchPath)} ${excludedDirectories}-type f ${nameOperator} ${shellQuote(input.query)}${includeFilter} -print`;
     return {
-      command: `find ${shellQuote(searchPath)} ${excludedDirectories}-type f ${nameOperator} ${shellQuote(input.query)}${includeFilter} -print`,
+      command: limitSearchOutput(command, input.maxResults),
       mode, excludeDirs: excludes
     };
   }
@@ -34,6 +35,20 @@ export function searchCommand(searchPath: string, input: RemoteSearchOptions) {
   if (input.contextLines) flags.push(`-C ${input.contextLines}`);
   const filters = [...excludes.map(dir => `--exclude-dir=${shellQuote(dir)}`),
     ...(input.include ?? []).map(glob => `--include=${shellQuote(glob)}`)];
-  return { command: `grep ${[...flags, ...filters].join(' ')} -- ${shellQuote(input.query)} ${shellQuote(searchPath)}`,
+  const command = `grep ${[...flags, ...filters].join(' ')} -- ${shellQuote(input.query)} ${shellQuote(searchPath)}`;
+  return { command: limitSearchOutput(command, input.maxResults),
     mode, excludeDirs: excludes };
+}
+
+/**
+ * The UI only renders a bounded result list. Asking for one extra line lets it
+ * report truncation, while `head` closes the pipe as soon as that limit is met
+ * so recursive grep/find do not keep walking a high-match tree unnecessarily.
+ */
+function limitSearchOutput(command: string, maxResults?: number): string {
+  if (maxResults === undefined) return command;
+  if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 10_000) {
+    throw new Error('maxResults must be an integer between 1 and 10000.');
+  }
+  return `${command} | head -n ${maxResults + 1}`;
 }

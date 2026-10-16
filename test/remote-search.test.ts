@@ -30,6 +30,10 @@ test('search executes content and filename modes without hiding errors', {
     assert.equal((await run({ query: '*.TS', mode: 'names', ignoreCase: true })).stdout.trim(), join(root, 'a.ts'));
     assert.equal((await run({ query: 'c.ts', mode: 'names' })).stdout, '');
     assert.match((await run({ query: 'c.ts', mode: 'names', excludeDirs: [] })).stdout, /dist\/c.ts/);
+    await writeFile(join(root, 'many.txt'), 'hello\nhello\nhello\n');
+    const limited = await run({ query: 'hello', fixedStrings: true, maxResults: 2 });
+    assert.equal(limited.stdout.trim().split('\n').length, 3);
+    assert.throws(() => searchCommand(root, { query: 'hello', maxResults: 0 }), /maxResults/);
     assert.throws(
       () => searchCommand(root, { query: '*.ts', mode: 'names', fixedStrings: true }),
       /fixedStrings is not valid/u

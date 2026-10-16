@@ -59,7 +59,10 @@ import { AgentMcpServer, AgentToolError } from './agent-mcp';
 import { AgentHttpRouter, agentTaggedMcpUrl } from './agent-http-router';
 import { AgentActivityStore } from './agent-activity';
 import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent-activity-view';
-import { normalizeAgentInterface, type AgentInterface } from './agent-interface';
+import {
+  addRecordedMcpAgentName, normalizeAgentInterface, recordedMcpAgentNames,
+  shouldCopyMcpUninstallPrompt, type AgentInterface
+} from './agent-interface';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent-discovery';
 import {
   ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory,
@@ -148,6 +151,7 @@ const mountRenames = new Map<string, string>();
 const cliInstallKey = platformStateKey('cliInstall');
 const proxyEnvironmentCheckKey = platformStateKey('proxyEnvironmentCheckV1');
 const agentForwardingHintKey = platformStateKey('agentForwardingHintV1');
+const mcpInstalledAgentsKey = platformStateKey('mcpInstalledAgentsV1');
 const gitPushReceiptsKey = platformStateKey('gitPushReceiptsV1');
 /** Serialize all mount toggles so only the first globally enabled mount installs integration. */
 let aiForwardUpdate: Promise<void> = Promise.resolve();
@@ -4354,31 +4358,22 @@ async function remoteSearch(input: RemoteSearchOptions & {
 
 interface RemoteSearchQuickPickItem extends vscode.QuickPickItem {
   uri: vscode.Uri;
-  line: number;
-  column: number;
 }
 
-function parseRemoteSearchLines(
-  stdout: string, folder: RemoteFolder, searchRoot: string, query: string
+function parseRemoteFileNameSearchLines(
+  stdout: string, folder: RemoteFolder, searchRoot: string
 ): RemoteSearchQuickPickItem[] {
   const items: RemoteSearchQuickPickItem[] = [];
   for (const line of stdout.split('\n')) {
     if (!line) continue;
-    const match = /^(.*?):(\d+):(.*)$/.exec(line);
-    if (!match) continue;
-    const remotePath = path.posix.normalize(match[1]);
-    const lineNumber = Math.max(0, Number(match[2]) - 1);
-    const matchedText = match[3];
-    const text = matchedText.trim();
-    const column = Math.max(0, matchedText.indexOf(query));
+    const remotePath = path.posix.normalize(line);
     const relative = path.posix.relative(searchRoot, remotePath) || path.posix.basename(remotePath);
+    const relativeDirectory = path.posix.dirname(relative);
     items.push({
-      label: `${relative}:${lineNumber + 1}`,
-      description: text,
+      label: path.posix.basename(remotePath),
+      description: relativeDirectory === '.' ? undefined : relativeDirectory,
       detail: remotePath,
-      uri: vscode.Uri.parse(folderUri(folder, remotePath)),
-      line: lineNumber,
-      column
+      uri: vscode.Uri.parse(folderUri(folder, remotePath))
     });
     if (items.length === 500) break;
   }
@@ -4401,40 +4396,43 @@ async function searchRemoteDirectory(resource?: vscode.Uri): Promise<void> {
   }
 
   const query = await vscode.window.showInputBox({
-    title: `在此目录中搜索：${searchRoot}`,
-    prompt: '输入要在远程文件内容中查找的文本',
-    placeHolder: '搜索文本',
+    title: `在此目录中搜索文件：${searchRoot}`,
+    prompt: '输入文件名关键词或通配符',
+    placeHolder: '例如 package 或 *.ts',
     ignoreFocusOut: true,
     validateInput: (value) => value.trim() ? undefined : '请输入搜索文本'
   });
   if (!query?.trim()) return;
+  const namePattern = /[*?[\]]/.test(query.trim()) ? query.trim() : `*${query.trim()}*`;
 
   const result = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: 'SAFS：正在搜索远程目录',
+    title: 'SAFS：正在搜索远程文件名',
     cancellable: true
   }, (_progress, token) => remoteSearch({
     mountName,
     path: searchRoot,
-    query: query.trim(),
-    mode: 'content',
-    fixedStrings: true,
+    query: namePattern,
+    mode: 'names',
+    ignoreCase: true,
+    maxResults: 500,
     captureForMcp: true
   }, token)) as Record<string, unknown>;
 
-  if (result.status === 'error') {
+  if (result.status === 'error'
+      || (!result.stdout && typeof result.stderr === 'string' && result.stderr.trim())) {
     throw new Error(typeof result.stderr === 'string' && result.stderr.trim()
       ? result.stderr.trim() : '远程搜索失败。');
   }
   const { folder } = await mountAndFolder(mountName);
-  const items = parseRemoteSearchLines(
-    typeof result.stdout === 'string' ? result.stdout : '', folder, searchRoot, query.trim()
+  const items = parseRemoteFileNameSearchLines(
+    typeof result.stdout === 'string' ? result.stdout : '', folder, searchRoot
   );
   if (items.length === 0) {
     void vscode.window.showInformationMessage(`SAFS：未找到“${query.trim()}”。`);
     return;
   }
-  const truncated = items.length === 500 || result.truncated === true;
+  const truncated = Number(result.returnedLineCount) > 500 || result.truncated === true;
   const selected = await vscode.window.showQuickPick(items, {
     title: `搜索结果：${query.trim()}${truncated ? '（仅显示前 500 条）' : ''}`,
     placeHolder: `在 ${searchRoot} 中找到 ${items.length}${truncated ? '+' : ''} 条结果`,
@@ -4443,10 +4441,7 @@ async function searchRemoteDirectory(resource?: vscode.Uri): Promise<void> {
   });
   if (!selected) return;
   const document = await vscode.workspace.openTextDocument(selected.uri);
-  const editor = await vscode.window.showTextDocument(document);
-  const position = new vscode.Position(selected.line, selected.column);
-  editor.selection = new vscode.Selection(position, position);
-  editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  await vscode.window.showTextDocument(document);
 }
 
 // ---- Tree View ----
@@ -5885,15 +5880,47 @@ async function askAgentName(title: string): Promise<string | undefined> {
   return agentName.trim();
 }
 
+function installedMcpAgentNames(context: vscode.ExtensionContext): string[] {
+  return recordedMcpAgentNames(context.globalState.get<unknown>(mcpInstalledAgentsKey));
+}
+
+async function recordInstalledMcpAgent(
+  context: vscode.ExtensionContext, agentName: string
+): Promise<void> {
+  await context.globalState.update(
+    mcpInstalledAgentsKey,
+    addRecordedMcpAgentName(installedMcpAgentNames(context), agentName)
+  );
+}
+
+async function copyMcpUninstallPromptAndNotify(
+  context: vscode.ExtensionContext
+): Promise<void> {
+  await vscode.env.clipboard.writeText(streamableHttpMcpUninstallPrompt());
+  const agents = installedMcpAgentNames(context);
+  const action = await vscode.window.showInformationMessage(
+    'SAFS：MCP 卸载提示已复制。',
+    {
+      modal: true,
+      detail: agents.length > 0
+        ? `请分别粘贴到以下 Agent 执行：${agents.join('、')}`
+        : '未记录具体 Agent；请粘贴到此前安装过 SAFS MCP 的 Agent 执行。'
+    },
+    '已全部卸载'
+  );
+  if (action === '已全部卸载') {
+    await context.globalState.update(mcpInstalledAgentsKey, []);
+  }
+}
+
 async function installAgentForwardingIntegration(
-  context: vscode.ExtensionContext, cliExecutable?: string
+  context: vscode.ExtensionContext, cliExecutable?: string,
+  copyMcpUninstallPrompt = false
 ): Promise<void> {
   if (agentInterface() === 'cli') {
+    if (!copyMcpUninstallPrompt) return;
     if (!cliExecutable) throw new Error('SAFS CLI 尚未安装');
-    await vscode.env.clipboard.writeText(streamableHttpMcpUninstallPrompt());
-    void vscode.window.showInformationMessage(
-      'SAFS：MCP 卸载提示已复制，请粘贴到 Agent。'
-    );
+    await copyMcpUninstallPromptAndNotify(context);
     return;
   }
   const agentName = await askAgentName('SAFS：为我的Agent安装转发功能');
@@ -5901,6 +5928,7 @@ async function installAgentForwardingIntegration(
   const router = await ensureAgentHttpRouter(context);
   const url = agentTaggedMcpUrl(router.url, agentName);
   await vscode.env.clipboard.writeText(streamableHttpMcpInstallPrompt(url));
+  await recordInstalledMcpAgent(context, agentName);
   void vscode.window.showInformationMessage(
     'SAFS：安装提示词已复制，请粘贴到 Agent。'
   );
@@ -5974,8 +6002,8 @@ async function updateAiForwardEnabled(
     if (cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
     }
-    // Install once for the globally first enabled mount. Further mounts only
-    // publish another workspace until every forwarding switch is disabled again.
+    // MCP needs an Agent-side registration prompt. CLI installation is already
+    // complete above; its MCP removal prompt is reserved for an MCP -> CLI switch.
     await installAgentForwardingIntegration(vscodeContext, cliExecutable);
     notifyAgentForwardingEnabled(mount);
     return;
@@ -6460,8 +6488,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage('SAFS：URL 已复制。');
   });
   command('installAgentForwarding', async () => {
-    // This explicit command prepares the selected interface. MCP mode copies its
-    // install prompt; CLI mode copies the mutually exclusive MCP removal prompt.
+    // This explicit command prepares the selected interface. MCP mode still
+    // needs its install prompt; CLI mode installs locally without assuming that
+    // an Agent-side MCP entry previously existed.
     startAgentHttpRouterLeadership(context);
     const result = await configureAgentInterface(context);
     if (result.cliExecutable) {
@@ -6479,11 +6508,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
     // 与安装对称：复制一段提示词让 Agent 自己删除名为 safs 的用户级 MCP。
-    const promptText = streamableHttpMcpUninstallPrompt();
-    await vscode.env.clipboard.writeText(promptText);
-    void vscode.window.showInformationMessage(
-      'SAFS：卸载提示词已复制，请粘贴到 Agent。'
-    );
+    await copyMcpUninstallPromptAndNotify(context);
   });
   command('refreshExplorer', async () => tree.refresh());
   command('deleteConfigItem', async (mount) => {
@@ -6711,15 +6736,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // MCP and CLI are mutually exclusive. Only explicit mode changes prompt the
   // user to remove the Agent-side registration; startup repair stays silent.
+  let previousAgentInterface = agentInterface();
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration('safs.agentInterface')) return;
+    const currentAgentInterface = agentInterface();
+    if (currentAgentInterface === previousAgentInterface) return;
+    const copyMcpUninstallPrompt = shouldCopyMcpUninstallPrompt(
+      previousAgentInterface, currentAgentInterface
+    );
+    previousAgentInterface = currentAgentInterface;
     void guard(async () => {
       await refreshAgentCommandTerminalState();
       startAgentHttpRouterLeadership(context);
       const result = await configureAgentInterface(context);
       if (result.cliExecutable) {
         bridgeOutput?.info(`[Agent CLI] 接口准备完成：${result.cliExecutable}`);
-        await installAgentForwardingIntegration(context, result.cliExecutable);
+        if (copyMcpUninstallPrompt) {
+          await installAgentForwardingIntegration(context, result.cliExecutable, true);
+        }
       } else {
         void vscode.window.showInformationMessage('SAFS：CLI 和 Skill 已移除。');
       }

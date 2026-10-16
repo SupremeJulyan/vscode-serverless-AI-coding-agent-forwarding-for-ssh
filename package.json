@@ -85,7 +85,7 @@
       },
       {
         "command": "safs.searchRemoteDirectory",
-        "title": "SAFS：在此目录中搜索",
+        "title": "SAFS：在此目录中搜索文件名",
         "icon": "$(search)"
       },
       {

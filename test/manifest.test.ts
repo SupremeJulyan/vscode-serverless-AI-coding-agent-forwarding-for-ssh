@@ -416,6 +416,9 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.ok(extensionSource.includes(
     'await installAgentForwardingIntegration(vscodeContext, cliExecutable)'
   ));
+  assert.ok(extensionSource.includes(
+    'await installAgentForwardingIntegration(context, result.cliExecutable, true)'
+  ));
   assert.ok(extensionSource.includes('enabledValue && enabled.size === 0'));
   assert.ok(extensionSource.includes('if (!shouldInstallIntegration)'));
   assert.ok(extensionSource.includes('首次安装需打开 Agent 转发'));
@@ -439,7 +442,9 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.ok(extensionSource.includes('await uninstallGlobalCli(context)'));
   assert.ok(extensionSource.includes("['install', '--skills', '-g']"));
   assert.ok(extensionSource.includes('streamableHttpMcpUninstallPrompt()'));
-  assert.ok(extensionSource.includes('卸载提示词'));
+  assert.ok(extensionSource.includes('MCP 卸载提示已复制'));
+  assert.ok(extensionSource.includes('mcpInstalledAgentsV1'));
+  assert.ok(extensionSource.includes("action === '已全部卸载'"));
   assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
   assert.equal(extensionSource.includes('legacyAgentInterfaceMigrationTarget'), false);
   assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
