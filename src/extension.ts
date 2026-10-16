@@ -144,7 +144,7 @@ const mountRenames = new Map<string, string>();
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
 const proxyEnvironmentCheckKey = platformStateKey('proxyEnvironmentCheckV1');
-const remoteShortcutHintKey = platformStateKey('remoteShortcutHintV1');
+const agentForwardingHintKey = platformStateKey('agentForwardingHintV1');
 const gitPushReceiptsKey = platformStateKey('gitPushReceiptsV1');
 /** Serialize all mount toggles so only the first globally enabled mount installs integration. */
 let aiForwardUpdate: Promise<void> = Promise.resolve();
@@ -878,16 +878,6 @@ function localRootForFolder(folder: RemoteFolder): string {
   return vscode.Uri.from({ scheme: 'file', path: folder.workspaceRoot }).fsPath;
 }
 
-async function showRemoteShortcutHintOnce(context: vscode.ExtensionContext): Promise<void> {
-  if (context.globalState.get<boolean>(remoteShortcutHintKey, false)) return;
-  await context.globalState.update(remoteShortcutHintKey, true);
-  const shortcuts = remoteShortcutKeys(platformAdapter.kind);
-  await vscode.window.showInformationMessage(
-    `SAFS：下次可使用 ${shortcuts.openFolder} / ${shortcuts.openTerminal} 打开远程目录 / 终端。`,
-    { modal: true }
-  );
-}
-
 async function openDirectoryItem(requested: MountConfig): Promise<void> {
   const forwarding = vscodeContext.globalState
     .get<string[]>(aiForwardMountsKey, []).includes(requested.name);
@@ -906,7 +896,6 @@ async function openDirectoryItem(requested: MountConfig): Promise<void> {
   });
   if (!folder) return;
   const remoteDirectory = folder.defaultRemotePath ?? folder.remoteRoot;
-  await showRemoteShortcutHintOnce(vscodeContext);
   agentTrace('Open', `创建新窗口，workspace=${folderUri(folder, remoteDirectory)}`);
   await vscode.commands.executeCommand(
     'vscode.openFolder',
@@ -5893,17 +5882,21 @@ async function updateAiForwardEnabled(
 
 function notifyAgentForwardingEnabled(mount: MountConfig): void {
   void guard(async () => {
+    if (vscodeContext.globalState.get<boolean>(agentForwardingHintKey, false)) return;
     const config = await readConfig();
     const label = mountConnectionLabel(resolveMount(config, mount).hostConfig, config.host_aliases);
+    const shortcuts = remoteShortcutKeys(platformAdapter.kind);
     const selected = await vscode.window.showInformationMessage(
-      `SAFS：已为“${label}”启用 Agent 转发。需要打开对应的远程目录或远程终端，Agent 才能操作该远程目标。`,
-      '打开远程目录', '打开远程终端'
+      `SAFS：已为“${label}”启用 Agent 转发。请打开对应的远程目录或远程终端，Agent 才能操作该远程目标。快捷键：${shortcuts.openFolder} / ${shortcuts.openTerminal}。`,
+      '打开远程目录', '打开远程终端', '我知道了'
     );
     // Use the mount that was enabled, rather than the currently focused target.
     if (selected === '打开远程目录') {
       await openDirectoryItem(mount);
     } else if (selected === '打开远程终端') {
       await openTerminal(vscodeContext, mount);
+    } else if (selected === '我知道了') {
+      await vscodeContext.globalState.update(agentForwardingHintKey, true);
     }
   });
 }

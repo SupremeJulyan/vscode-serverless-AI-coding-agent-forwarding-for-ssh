@@ -147,8 +147,10 @@ test('uses distinct conflict-resistant shortcuts on each desktop platform', asyn
     command: 'safs.openTerminal'
   });
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extensionSource.includes('showRemoteShortcutHintOnce(vscodeContext)'));
-  assert.ok(extensionSource.includes("platformStateKey('remoteShortcutHintV1')"));
+  assert.equal(extensionSource.includes('showRemoteShortcutHintOnce(vscodeContext)'), false);
+  assert.ok(extensionSource.includes("platformStateKey('agentForwardingHintV1')"));
+  assert.ok(extensionSource.includes("'打开远程目录', '打开远程终端', '我知道了'"));
+  assert.ok(extensionSource.includes('globalState.update(agentForwardingHintKey, true)'));
 });
 
 test('shows separate Agent forwarding actions for enabled and disabled mounts', async () => {
