@@ -13,13 +13,14 @@ export type SftpConnector = (hostName: string, signal?: AbortSignal) => Promise<
 /** 连接级错误：远端重置/半开连接/网络抖动等瞬时故障，值得失效会话并重连重试一次。 */
 export function isConnectionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
+  if (/permission denied|authentication failed|host.?key verification failed|已拒绝接受|host denied|abort|cancel|subsystem request failed/i.test(error.message)) return false;
   const code = (error as NodeJS.ErrnoException).code;
   if (code === 'ECONNRESET' || code === 'EPIPE' || code === 'ECONNABORTED'
     || code === 'ETIMEDOUT' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH'
     || code === 'ECONNREFUSED') {
     return true;
   }
-  return /\b(?:ECONNRESET|EPIPE|ECONNABORTED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ECONNREFUSED)\b|socket hang up|connection (?:reset|closed|terminated)/i
+  return /\b(?:ECONNRESET|EPIPE|ECONNABORTED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ECONNREFUSED)\b|socket hang up|connection (?:reset|closed|terminated|timed out)|network is unreachable|no route to host|no response from server|system sftp closed|sftp.*(?:timeout|timed out)|ssh-keyscan 未返回|OpenSSH 未返回主机密钥|ssh-bridge probe 未返回/i
     .test(error.message);
 }
 

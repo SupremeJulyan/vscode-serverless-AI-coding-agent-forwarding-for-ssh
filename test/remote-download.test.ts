@@ -222,9 +222,9 @@ test('remote executable bits carry over without touching local read/write bits',
 
   const script = (await stat(path.join(localRoot, 'run.sh'))).mode & 0o777;
   const data = (await stat(path.join(localRoot, 'data.txt'))).mode & 0o777;
-  // 残片是按本地 umask 建的：不补权限位的话 0755 的脚本下载回来是 0644，
-  // `./run.sh` 直接 Permission denied。
-  assert.equal(script & 0o111, 0o111);
+  // 只为本地可读的类别补执行位：umask 022 得到 0755，077 得到 0700。
+  // 不应为组/其他人补出超出本地读取范围的执行权限。
+  assert.equal(script & 0o111, (data & 0o444) >> 2);
   assert.equal(data & 0o111, 0);
   // 读写范围仍由本地 umask 决定：远端 0600 不该把本地文件收窄成只有属主可读。
   assert.equal(script & 0o666, data & 0o666);

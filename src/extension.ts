@@ -34,7 +34,7 @@ import { createReadStream } from 'node:fs';
 import * as vscode from 'vscode';
 import {
   BridgeConfig, deriveMounts, ensureConfigFile, expandHome, HostConfig, loadConfig, MountConfig,
-  parseSshLogin, removeMountConfig, resolveMount, saveConfig
+  parseSshLogin, removeAccountConfig, removeMountConfig, resolveMount, saveConfig
 } from './config';
 import {
   hierarchicalHostName, mountAliasCandidates, mountConnectionLabel, mountNameFor
@@ -79,7 +79,7 @@ import { downloadRemoteDirectoryTree } from './remote-download';
 import { sameResumePrefix } from './resume-checksum';
 import { uploadRemoteTree } from './remote-upload';
 import { defaultSshClientIdent, ensureSshCapabilities } from './ssh-algorithms';
-import { SftpConnectionPool } from './sftp/connection-pool';
+import { isConnectionError, SftpConnectionPool } from './sftp/connection-pool';
 import { RemoteSyncManager, RemoteSyncTask } from './remote-sync';
 import { scanRemote } from './sync-diff';
 import { SyncCoordinator } from './sync-coordination';
@@ -167,8 +167,8 @@ const terminalCredentialTtlMs = 5 * 60 * 1000;
 const logClearIntervalMs = 24 * 60 * 60 * 1000;
 /** 普通退出只恢复一次，避免认证失败等永久错误触发反复登录。 */
 const maxTerminalAutoReconnectAttempts = 1;
-/** 握手丢失、连接重置等瞬时网络错误允许有限退避重试。 */
-const maxTransientTerminalAutoReconnectAttempts = 3;
+/** 明确的瞬时网络错误持续退避重试，直到网络恢复或用户手动关闭终端。 */
+const maxTransientTerminalAutoReconnectAttempts = Number.POSITIVE_INFINITY;
 /** 存活达到该时长的终端视为稳定连接，后续断开重新从第 1 次重连计数。 */
 const terminalAutoReconnectStableMs = 60_000;
 
@@ -2883,7 +2883,7 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
     const delayMs = terminalReconnectDelayMs(fails);
     bridgeOutput?.info(
       `[终端] 安排自动重连；mount=${reopen.mount.name}；cwd=${remoteCwd}；` +
-      `attempt=${fails}/${maxAttempts}；delay=${delayMs}ms`
+      `attempt=${fails}/${Number.isFinite(maxAttempts) ? maxAttempts : '∞'}；delay=${delayMs}ms`
     );
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     await openTerminal(
@@ -3317,12 +3317,9 @@ async function addSshConfig(context: vscode.ExtensionContext): Promise<void> {
   void vscode.window.showInformationMessage('SAFS：SFTP 配置已保存。');
 }
 
-/**
- * Create the host part of a remote-folder entry. Login credentials are filled
- * from the host node's '+' action in the hierarchical view.
- */
-async function addRemoteDirectoryConfig(): Promise<void> {
-  const title = '添加远程目录';
+/** 新增一条完整配置；主机节点旁的 + 仍只负责为已有主机追加账号。 */
+async function addRemoteDirectoryConfig(context: vscode.ExtensionContext): Promise<void> {
+  const title = '新增配置';
   await ensureConfigFile(configPath());
   const config = await loadConfig(configPath());
   const name = await input({
@@ -3340,23 +3337,63 @@ async function addRemoteDirectoryConfig(): Promise<void> {
   });
   if (ip === undefined) return;
 
+  const portText = await input({
+    title, prompt: '端口', value: '22',
+    validateInput: value => {
+      const port = Number(value.trim());
+      return Number.isInteger(port) && port >= 1 && port <= 65535
+        ? undefined : '端口必须是 1 到 65535 之间的整数';
+    }
+  });
+  if (portText === undefined) return;
+  const user = await input({
+    title, prompt: '账号', value: os.userInfo().username, validateInput: required('账号')
+  });
+  if (user === undefined) return;
+  const password = await input({
+    title, prompt: '密码（留空则使用私钥）',
+    placeHolder: '输入密码，或留空后按 Enter', password: true
+  });
+  if (password === undefined) return;
+  let encryptedPassword: string | undefined;
+  let privateKeyPath: string | undefined;
+  if (password) {
+    encryptedPassword = await encryptPassword(
+      password, await promptMasterPassword(context, true)
+    );
+  } else {
+    privateKeyPath = await input({
+      title, prompt: 'SSH 私钥路径', value: '~/.ssh/id_ed25519',
+      placeHolder: '例如 ~/.ssh/id_ed25519', validateInput: required('私钥路径')
+    });
+    if (privateKeyPath === undefined) return;
+  }
+
   const normalizedName = name.trim();
   const normalizedIp = ip.trim();
+  const normalizedUser = user.trim();
   const existing = config.hosts.find((host) => host.ip === normalizedIp);
   if (existing) throw new Error('该主机 IP 已存在，请在已有主机节点下添加账号。');
   const aliases = { ...(config.host_aliases ?? {}) };
-  config.hosts.push({ name: normalizedIp, ip: normalizedIp, user: '' });
   if (normalizedName === normalizedIp) delete aliases[normalizedIp];
   else aliases[normalizedIp] = normalizedName;
   if (Object.keys(aliases).length > 0) config.host_aliases = aliases;
   else delete config.host_aliases;
+  const host: HostConfig = {
+    name: normalizedIp, ip: normalizedIp, port: Number(portText.trim()), user: normalizedUser,
+    ...(encryptedPassword ? { password: encryptedPassword } : {}),
+    ...(privateKeyPath ? { private_key_path: privateKeyPath.trim() } : {})
+  };
+  host.name = mountNameFor(host, config.host_aliases);
+  config.hosts.push(host);
   config.mounts = deriveMounts(config.hosts);
+  config.encrypt_passwords = true;
   await saveConfig(configPath(), config);
   // 同步内存里的当前配置：别名解析要据此让真实存在的名字优先。
   lastReadConfig = config;
-  bridgeOutput?.info(`[配置] 已保存远程目录主机 ${normalizedName}`);
+  bridgeOutput?.info(`[配置] 已保存主机 ${normalizedName} 的账号 ${normalizedUser}`);
   void vscode.window.showInformationMessage(
-    `SAFS：已登记主机"${normalizedName}"，请在新视图中点击主机旁的 + 补充账号。`
+    `SAFS：配置"${host.name}"已保存。`
   );
 }
 
@@ -5008,8 +5045,15 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     treeItem.iconPath = new vscode.ThemeIcon('account');
     treeItem.tooltip = item.user
       ? `SSH 账号：${item.user}\n配置：${item.hostName}`
-      : '尚未配置 SSH 账号；请点击主机旁的 +。';
-    treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+      : '点击新增账号，也可点击主机旁的 +。';
+    if (!item.user.trim()) {
+      const host = lastReadConfig?.hosts.find(candidate => candidate.name === item.hostName);
+      treeItem.command = {
+        command: 'safs.addHostCredentials', title: '新增账号', arguments: [host]
+      };
+    }
+    treeItem.collapsibleState = item.user.trim()
+      ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
     return treeItem;
   }
 
@@ -5127,7 +5171,11 @@ async function restoreSyncedLocalWorkspaceTerminal(): Promise<void> {
   await openTerminal(vscodeContext, mount, task.remotePath);
 }
 
-async function preloadRemoteWorkspaces(): Promise<void> {
+const workspaceRecoveryBlocked = new Set<string>();
+const workspaceRecoveryPending = new Set<string>();
+let restoringRemoteWorkspaces = false;
+
+async function preloadRemoteWorkspaces(force = false): Promise<void> {
   const workspaces = vscode.workspace.workspaceFolders?.filter(
     (folder) => folder.uri.scheme === remoteFileSystemScheme
   ) ?? [];
@@ -5138,8 +5186,21 @@ async function preloadRemoteWorkspaces(): Promise<void> {
       const location = parseRemoteUri(workspace.uri.toString());
       const mount = config.mounts.find((candidate) => candidate.name === location.mountName);
       if (!mount) continue;
+      if (!force && (workspaceRecoveryBlocked.has(mount.name)
+        || (registry.get(mount.name) && pool.state(mount.host) === 'connected'))) continue;
+      const recovering = workspaceRecoveryPending.has(mount.name);
       await ensureFolder(mount);
+      workspaceRecoveryBlocked.delete(mount.name);
+      workspaceRecoveryPending.delete(mount.name);
+      provider?.refresh(workspace.uri);
+      if (recovering && mount.remote_terminal === 'open') {
+        const remotePath = remotePathForUri(registry.get(mount.name)!, location.remotePath);
+        await openTerminal(vscodeContext, mount, remotePath);
+      }
     } catch (error) {
+      const mountName = parseRemoteUri(workspace.uri.toString()).mountName;
+      if (isConnectionError(error)) workspaceRecoveryPending.add(mountName);
+      else workspaceRecoveryBlocked.add(mountName);
       // A broken/stale workspace folder must not block the rest of the
       // window or pop an error dialog on every startup.
       const detail = error instanceof Error ? error.message : String(error);
@@ -5202,7 +5263,7 @@ async function deleteConfig(mount: MountConfig): Promise<void> {
   ) !== confirmButton) return;
   if (connected) await disconnect(mount);
   const config = await readConfig();
-  removeMountConfig(config, mount.name);
+  removeAccountConfig(config, mount.name);
   await saveConfig(configPath(), config);
   const enabled = new Set(
     vscodeContext.globalState.get<string[]>(aiForwardMountsKey, [])
@@ -6373,8 +6434,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     registry,
     settings().get<number>('sftp.cacheTtl', 30) * 1000,
     settings().get<number>('sftp.watchInterval', 5) * 1000,
-    (uri, kind, targetUri) => void syncManager?.notifyRemoteChange(uri, kind, targetUri)
+    (uri, kind, targetUri) => void syncManager?.notifyRemoteChange(uri, kind, targetUri),
+    async mountName => {
+      if (workspaceRecoveryBlocked.has(mountName)) return undefined;
+      const config = await readConfig();
+      const mount = config.mounts.find(candidate => candidate.name === mountName);
+      return mount ? ensureFolder(mount) : undefined;
+    }
   );
+  const recoveryTimer = setInterval(() => {
+    if (restoringRemoteWorkspaces) return;
+    restoringRemoteWorkspaces = true;
+    void preloadRemoteWorkspaces()
+      .catch(error => logAsyncFailure('恢复远程工作区失败', error))
+      .finally(() => { restoringRemoteWorkspaces = false; });
+  }, 10_000);
+  recoveryTimer.unref?.();
+  context.subscriptions.push({ dispose: () => clearInterval(recoveryTimer) });
 
   const tree = new RemoteFoldersProvider(context);
   refreshTree = () => tree.refresh();
@@ -6466,7 +6542,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('openConfig', (argument) => openConfig(configFocusForArgument(argument)));
   command('addRemoteDirectory', async () => {
-    await addRemoteDirectoryConfig();
+    await addRemoteDirectoryConfig(context);
     tree.refresh();
   });
   command('addSshConfig', async () => {
@@ -6513,7 +6589,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // 与安装对称：复制一段提示词让 Agent 自己删除名为 safs 的用户级 MCP。
     await copyMcpUninstallPromptAndNotify(context);
   });
-  command('refreshExplorer', async () => tree.refresh());
+  command('refreshExplorer', async () => {
+    const config = await readConfig();
+    const activeHosts = new Set((vscode.workspace.workspaceFolders ?? [])
+      .filter(workspace => workspace.uri.scheme === remoteFileSystemScheme)
+      .map(workspace => {
+        const name = parseRemoteUri(workspace.uri.toString()).mountName;
+        return config.mounts.find(mount => mount.name === name)?.host;
+      }).filter((host): host is string => !!host));
+    await Promise.all([...activeHosts].map(host => pool.disconnect(host)));
+    await preloadRemoteWorkspaces(true);
+    for (const workspace of vscode.workspace.workspaceFolders ?? []) {
+      if (workspace.uri.scheme === remoteFileSystemScheme) provider.refresh(workspace.uri);
+    }
+    tree.refresh();
+  });
   command('deleteConfigItem', async (mount) => {
     await deleteConfigItem(mount as MountConfig | HostConfig | UserItem);
     tree.refresh();

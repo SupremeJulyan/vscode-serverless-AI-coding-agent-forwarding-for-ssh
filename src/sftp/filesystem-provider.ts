@@ -155,10 +155,17 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
     watchIntervalMs: number,
     private readonly onMutation?: (
       uri: vscode.Uri, kind: 'write' | 'delete' | 'rename' | 'mkdir', targetUri?: vscode.Uri
-    ) => void
+    ) => void,
+    private readonly recoverFolder?: (mountName: string) => Promise<RemoteFolder | undefined>
   ) {
     this.watchTimer = setInterval(() => void this.pollWatches(), watchIntervalMs);
     this.watchTimer.unref();
+  }
+
+  refresh(uri: vscode.Uri): void {
+    this.statCache.clear();
+    this.directoryCache.clear();
+    this.changes.fire([{ type: vscode.FileChangeType.Changed, uri }]);
   }
 
   private async resolveBase(uri: vscode.Uri): Promise<{
@@ -170,7 +177,8 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
       throw vscode.FileSystemError.Unavailable(`Unsupported URI scheme: ${uri.scheme}`);
     }
     const location = parseRemoteUri(uri.toString());
-    const folder = this.registry.get(location.mountName);
+    const folder = this.registry.get(location.mountName)
+      ?? await this.recoverFolder?.(location.mountName);
     if (!folder) throw vscode.FileSystemError.Unavailable(`Unknown remote folder: ${location.mountName}`);
     if (!isWorkspaceUriPath(folder, location.remotePath)) {
       throw vscode.FileSystemError.NoPermissions(
@@ -448,16 +456,20 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
       try {
         const stat = await this.stat(watched.uri);
         const snapshot = `${stat.type}:${stat.mtime}:${stat.size}`;
-        if (watched.snapshot !== undefined && watched.snapshot !== snapshot) {
+        if (watched.snapshot !== snapshot) {
           this.invalidate(watched.uri);
           this.changes.fire([{ type: vscode.FileChangeType.Changed, uri: watched.uri }]);
         }
         watched.snapshot = snapshot;
-      } catch {
+      } catch (error) {
+        const missing = ['FileNotFound', 'EntryNotFound', 'ENOENT'].includes(String(errorCode(error)))
+          || errorCode(error) === 2;
         if (watched.snapshot !== undefined) {
           watched.snapshot = undefined;
           this.invalidate(watched.uri);
-          this.changes.fire([{ type: vscode.FileChangeType.Deleted, uri: watched.uri }]);
+          if (missing) {
+            this.changes.fire([{ type: vscode.FileChangeType.Deleted, uri: watched.uri }]);
+          }
         }
       }
     }));

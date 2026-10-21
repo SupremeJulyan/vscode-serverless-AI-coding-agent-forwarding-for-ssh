@@ -133,6 +133,22 @@ test('remote directory commands can select a connection from a local or empty wi
   ));
 });
 
+test('new configuration collects host, port and credentials in one flow', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as ExtensionManifest;
+  assert.equal(
+    manifest.contributes?.commands?.find(item => item.command === 'safs.addRemoteDirectory')?.title,
+    '新增配置'
+  );
+  const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function addRemoteDirectoryConfig(');
+  const body = source.slice(start, source.indexOf('\nasync function addHostCredentials', start));
+  for (const prompt of ["prompt: '主机名'", "prompt: 'IP 地址或主机名'", "prompt: '端口'", "prompt: '账号'", "prompt: '密码（留空则使用私钥）'"]) {
+    assert.ok(body.includes(prompt), prompt);
+  }
+});
+
 test('declares every command referenced by a menu contribution', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')

@@ -46,6 +46,23 @@ export function removeMountConfig(config: BridgeConfig, mountName: string): Moun
   return removed;
 }
 
+/** 删除最后一个账号时保留主机地址，供界面直接重新添加账号。 */
+export function removeAccountConfig(config: BridgeConfig, mountName: string): MountConfig {
+  const mount = config.mounts.find(candidate => candidate.name === mountName);
+  const host = mount && config.hosts.find(candidate => candidate.name === mount.host);
+  const removed = removeMountConfig(config, mountName);
+  if (host && !config.hosts.some(candidate => candidate.ip === host.ip)) {
+    const placeholder: HostConfig = {
+      name: host.ip, ip: host.ip, user: '',
+      ...(host.port === undefined ? {} : { port: host.port }),
+      ...(host.vpn === undefined ? {} : { vpn: host.vpn })
+    };
+    config.hosts.push(placeholder);
+    config.mounts.push(...deriveMounts([placeholder]));
+  }
+  return removed;
+}
+
 export interface ResolvedMount extends MountConfig {
   hostConfig: HostConfig;
 }

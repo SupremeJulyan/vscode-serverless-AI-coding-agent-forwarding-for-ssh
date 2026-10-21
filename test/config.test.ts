@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   ensureConfigFile, expandHome, parseConfig, parseSshLogin, resolveMount, saveConfig,
-  removeMountConfig
+  removeAccountConfig, removeMountConfig
 } from '../src/config';
 
 test('parses and resolves a mount through its host reference', () => {
@@ -226,4 +226,32 @@ test('saving conflicting generated identifiers preserves the existing config', a
   ], host_aliases: { '192.0.2.1': 'dev', '192.0.2.2': 'dev' } });
   await assert.rejects(saveConfig(configPath, config), /连接标识.*冲突/);
   assert.equal(await readFile(configPath, 'utf8'), original);
+});
+
+test('deleting the final account preserves an empty host with its alias and port', async () => {
+  const config = parseConfig({ hosts: [{ name: '开发机', ip: 'dev', accounts: [
+    { user: 'alice', port: 2200, password: 'secret', private_key_path: '/key' }
+  ] }] });
+  removeAccountConfig(config, config.mounts[0].name);
+  assert.deepEqual(config.hosts, [{ name: 'dev', ip: 'dev', user: '', port: 2200 }]);
+  assert.equal(config.host_aliases?.dev, '开发机');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-empty-host-'));
+  try {
+    const file = path.join(directory, 'config.json');
+    await saveConfig(file, config);
+    const restored = parseConfig(JSON.parse(await readFile(file, 'utf8')));
+    assert.equal(restored.hosts[0].user, '');
+    assert.equal(restored.hosts[0].port, 2200);
+    assert.equal(restored.host_aliases?.dev, '开发机');
+  } finally {
+    await (await import('node:fs/promises')).rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('deleting one account leaves sibling accounts without a placeholder', () => {
+  const config = parseConfig({ hosts: [{
+    name: 'dev', ip: 'host', accounts: [{ user: 'alice' }, { user: 'bob' }]
+  }] });
+  removeAccountConfig(config, config.mounts[0].name);
+  assert.deepEqual(config.hosts.map(host => host.user), ['bob']);
 });

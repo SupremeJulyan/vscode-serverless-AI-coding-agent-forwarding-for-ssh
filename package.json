@@ -107,7 +107,7 @@
       },
       {
         "command": "safs.addRemoteDirectory",
-        "title": "添加远程目录",
+        "title": "新增配置",
         "icon": "$(add)"
       },
       {
@@ -352,7 +352,7 @@
       },
       {
         "view": "safs.mounts",
-        "contents": "尚未配置远程目录。\n[添加远程目录](command:safs.addRemoteDirectory)\n[打开配置](command:safs.openConfig)",
+        "contents": "尚未配置远程目录。\n[新增配置](command:safs.addRemoteDirectory)\n[打开配置](command:safs.openConfig)",
         "when": "safs.hasNoMounts"
       }
     ],
@@ -943,7 +943,7 @@
         "safs.terminalAutoReconnect": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "远程终端进程结束后自动重连（默认 `true`）。稳定运行超过 `60` 秒的终端结束时会重开同一目录；普通错误在重连后再次退出即停止，握手丢失、连接重置或超时等瞬时网络错误最多退避重试 `3` 次。手动在 VS Code 中关闭终端或窗口不会触发重连。"
+          "markdownDescription": "远程终端进程结束后自动重连（默认 `true`）。稳定运行超过 `60` 秒的终端结束时会重开同一目录；普通错误在重连后再次退出即停止，握手丢失、连接重置或超时等明确的瞬时网络错误会持续退避重试，直到网络恢复。手动在 VS Code 中关闭终端或窗口不会触发重连。"
         },
         "safs.git.localPath": {
           "type": "string",
