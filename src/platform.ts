@@ -137,7 +137,7 @@ function sshArgs(
   // direct connection when the control socket cannot be used.
   args.push(...connectionReuseArgs(options));
   if (host.private_key_path) {
-    args.push('-i', host.private_key_path);
+    args.push('-o', 'IdentitiesOnly=yes', '-i', host.private_key_path);
   }
   if (remoteCwd) args.push('-t');
   args.push(`${host.user}@${host.ip}`);

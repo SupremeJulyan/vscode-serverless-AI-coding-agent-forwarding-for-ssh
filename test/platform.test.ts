@@ -48,6 +48,19 @@ test('native remote execution supports OpenSSH connection reuse', () => {
   assert.match(plan.args.at(-1) ?? '', /npm test/);
 });
 
+test('an explicit private key limits native SSH to configured identities', () => {
+  for (const kind of ['linux', 'macos', 'windows'] as const) {
+    const adapter = createPlatformAdapter(kind);
+    for (const plan of [adapter.terminal(host), adapter.exec(host, '/', 'pwd')]) {
+      assert.ok(plan.args.includes('IdentitiesOnly=yes'));
+      assert.ok(plan.args.includes('-i'));
+    }
+    const noKey = { ...host, private_key_path: undefined };
+    assert.equal(adapter.terminal(noKey).args.includes('IdentitiesOnly=yes'), false);
+    assert.equal(adapter.exec(noKey, '/', 'pwd').args.includes('IdentitiesOnly=yes'), false);
+  }
+});
+
 test('remote execution prints and tracks an output marker before the requested command', () => {
   const marker = '__SAFS_COMMAND_OUTPUT_test__';
   for (const kind of ['linux', 'macos', 'windows', 'wsl'] as const) {
@@ -95,6 +108,7 @@ test('WSL bridge pins direct and relayed SSH identities', () => {
   assert.match(source, /-o "HostKeyAlias=\$host_key_alias"/);
   assert.match(source, /-o CanonicalizeHostname=no/);
   assert.match(source, /-o CheckHostIP=no/);
+  assert.match(source, /ssh_options\+=\(-o IdentitiesOnly=yes -i "\$private_key_path"\)/);
 });
 
 test('WSL enables connection reuse for terminals and background commands', () => {

@@ -295,7 +295,7 @@ if [[ "$force_tty" == true ]] || [[ -n "${SSH_BRIDGE_MOUNT_NAME:-}" && ${#remote
 fi
 if [[ -n "$private_key_path" ]]; then
   [[ -r "$private_key_path" ]] || die "私钥不可读: $private_key_path"
-  ssh_options+=(-i "$private_key_path")
+  ssh_options+=(-o IdentitiesOnly=yes -i "$private_key_path")
 fi
 
 ssh_command=(ssh)

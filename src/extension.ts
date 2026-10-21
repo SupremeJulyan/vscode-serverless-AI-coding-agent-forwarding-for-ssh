@@ -3055,7 +3055,7 @@ async function openTerminal(
       ? (() => {
         let created!: vscode.Terminal;
         const pty = new Ssh2Terminal(
-          resolved.hostConfig, resolved.hostConfig.password!, remoteCwd,
+          resolved.hostConfig, resolved.hostConfig.password, remoteCwd,
           (error) => {
             bridgeOutput?.error(
               `[终端] 内置 ssh2 终端 ${mount.name} 失败：${error.stack ?? error.message}`

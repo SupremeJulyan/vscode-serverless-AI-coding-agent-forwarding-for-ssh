@@ -20,7 +20,7 @@ import {
 } from './terminal-command-forwarding';
 
 async function connectConfig(
-  host: HostConfig, password?: string
+  host: HostConfig, password?: string, log?: (message: string) => void
 ): Promise<ConnectConfig> {
   return {
     host: host.ip,
@@ -36,7 +36,7 @@ async function connectConfig(
     keepaliveInterval: 15_000,
     keepaliveCountMax: 3,
     algorithms: { serverHostKey: serverHostKeyAlgorithms },
-    hostVerifier: hostVerifierFor(host)
+    hostVerifier: hostVerifierFor(host, log)
   };
 }
 
@@ -229,6 +229,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   private dimensions: vscode.TerminalDimensions = { columns: 80, rows: 24 };
   private password?: string;
   private closed = false;
+  private closeRequested = false;
   /** 远端已通过 SSH 协议上报 shell 进程退出（exit-status/exit-signal），
    *  即用户输入 exit / 远端主动结束会话；连接中断不会触发 exit 事件。 */
   private exitStatusReceived = false;
@@ -253,7 +254,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
 
   constructor(
     private readonly host: HostConfig,
-    password: string,
+    password?: string,
     private readonly remoteCwd?: string,
     private readonly onFailed?: (error: Error) => void,
     private readonly log?: (message: string) => void,
@@ -267,20 +268,6 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     if (initialDimensions) this.dimensions = initialDimensions;
     const hint = this.connectionHint ? `（${this.connectionHint}）` : '';
     this.writeEmitter.fire(`SAFS: 正在连接 ${this.host.name}…${hint}\r\n`);
-    const config: ConnectConfig = {
-      host: this.host.ip,
-      port: this.host.port ?? 22,
-      username: this.host.user,
-      password: this.password,
-      tryKeyboard: true,
-      ident: vscode.workspace.getConfiguration('safs')
-        .get<string>('sshClientIdent', defaultSshClientIdent),
-      readyTimeout: 20_000,
-      keepaliveInterval: 15_000,
-      keepaliveCountMax: 3,
-      algorithms: { serverHostKey: serverHostKeyAlgorithms },
-      hostVerifier: hostVerifierFor(this.host, this.log)
-    };
     this.client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
       const replies = this.password
         ? keyboardInteractivePasswordReplies(prompts, this.password)
@@ -288,11 +275,22 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
       finish(replies ?? []);
     });
     this.client.once('ready', () => {
+      if (this.closed || this.closeRequested) return;
       this.password = undefined;
       void this.openRemoteShell();
     });
     this.client.once('error', (error) => this.fail(error));
-    this.client.connect(config);
+    void this.connect();
+  }
+
+  private async connect(): Promise<void> {
+    try {
+      const config = await connectConfig(this.host, this.password, this.log);
+      if (this.closed || this.closeRequested) return;
+      this.client.connect(config);
+    } catch (error) {
+      this.fail(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   private async openRemoteShell(): Promise<void> {
@@ -488,6 +486,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   }
 
   close(): void {
+    this.closeRequested = true;
     if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
     this.shellOpenTimer = undefined;
     this.password = undefined;
@@ -496,6 +495,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   }
 
   private fail(error: Error): void {
+    if (this.closed || this.closeRequested) return;
     this.onFailed?.(error);
     this.writeEmitter.fire(`\r\nSAFS: ${error.message}\r\n`);
     this.finish(1);
