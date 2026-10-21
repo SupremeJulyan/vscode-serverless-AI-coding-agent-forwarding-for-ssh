@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# Shared, reference-counted Windows relay pool for the bundled ssh-bridge.
+set -Eeuo pipefail
+
+VPN_TOOLKIT_DIR="${VPN_TOOLKIT_DIR:-${BUNDLE_ROOT:-$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")}}"
+VPN_POOL_DIR="${XDG_RUNTIME_DIR:-/tmp}/vpn-relay-pool-${UID}"
+
+vpn_secure_pool_dir() {
+  local owner expected_owner
+  expected_owner="$(id -u)" || return 1
+  if [[ -L "$VPN_POOL_DIR" ]]; then
+    printf '不安全的中继状态目录（符号链接）: %s\n' "$VPN_POOL_DIR" >&2
+    return 1
+  fi
+  if [[ ! -e "$VPN_POOL_DIR" ]]; then
+    mkdir -m 700 -- "$VPN_POOL_DIR" || return 1
+  fi
+  if [[ ! -d "$VPN_POOL_DIR" || -L "$VPN_POOL_DIR" ]]; then
+    printf '中继状态路径不是安全目录: %s\n' "$VPN_POOL_DIR" >&2
+    return 1
+  fi
+  owner="$(stat -c %u -- "$VPN_POOL_DIR")" || return 1
+  if [[ "$owner" != "$expected_owner" ]]; then
+    printf '中继状态目录不属于当前用户: %s\n' "$VPN_POOL_DIR" >&2
+    return 1
+  fi
+  chmod 700 -- "$VPN_POOL_DIR"
+}
+
+vpn_powershell() {
+  (cd -- "$VPN_TOOLKIT_DIR" && powershell.exe "$@")
+}
+
+# 将 WSL 路径转换为 Windows 可访问路径。wslpath 缺失时（精简 WSL 发行版）
+# 手工构造 \\wsl$\\<发行版>\\... 形式。
+vpn_wsl_path() {
+  local distro
+  if command -v wslpath >/dev/null 2>&1; then
+    wslpath -w "$1"
+    return 0
+  fi
+  distro="$(wsl.exe -l -q 2>/dev/null | tr -d '\0\r ' | grep -v '^$' | head -1)"
+  if [[ -z "$distro" ]]; then
+    printf '缺少命令: wslpath 且无法解析 WSL 发行版名\n' >&2
+    return 1
+  fi
+  printf '\\\\wsl$\\%s\\%s\n' "$distro" "${1#/}"
+}
+
+# 中继池锁：优先 flock；缺失时用 mkdir 互斥 + 过期 pid 检测兜底。
+vpn_lock_fd=""
+vpn_lock_dir=""
+vpn_lock() {
+  local target="$1" deadline pid
+  if command -v flock >/dev/null 2>&1; then
+    exec {vpn_lock_fd}>"$target"
+    flock "$vpn_lock_fd"
+    return 0
+  fi
+  vpn_lock_dir="$target.dir"
+  deadline=$((SECONDS + 15))
+  while ! mkdir "$vpn_lock_dir" 2>/dev/null; do
+    if [[ -f "$vpn_lock_dir/pid" ]] \
+      && ! kill -0 "$(cat "$vpn_lock_dir/pid" 2>/dev/null)" 2>/dev/null; then
+      rm -rf -- "$vpn_lock_dir" 2>/dev/null
+      continue
+    fi
+    if (( SECONDS >= deadline )); then
+      printf '中继锁等待超时: %s\n' "$target" >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+  printf '%s\n' "$$" >"$vpn_lock_dir/pid"
+  return 0
+}
+
+vpn_unlock() {
+  if [[ -n "$vpn_lock_fd" ]]; then
+    flock -u "$vpn_lock_fd" 2>/dev/null || true
+    exec {vpn_lock_fd}>&-
+    vpn_lock_fd=""
+  elif [[ -n "$vpn_lock_dir" ]]; then
+    rm -f -- "$vpn_lock_dir/pid"
+    rmdir "$vpn_lock_dir" 2>/dev/null || true
+    vpn_lock_dir=""
+  fi
+}
+
+vpn_hash() {
+  python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:24])' "$1"
+}
+
+vpn_process_valid() {
+  local pid="$1" port="$2"
+  vpn_powershell -NoProfile -Command \
+    "\$p=Get-CimInstance Win32_Process -Filter 'ProcessId=$pid' -ErrorAction SilentlyContinue; \$l=Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Where-Object OwningProcess -eq $pid; if(\$p.CommandLine -like '*start-vpn-relay.ps1*' -and \$p.CommandLine -like '*-RunRelay*' -and \$l){'true'}else{'false'}" \
+    </dev/null 2>/dev/null | tr -d '\r'
+}
+
+vpn_stop_process() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  vpn_powershell -NoProfile -Command \
+    "\$p=Get-CimInstance Win32_Process -Filter 'ProcessId=$pid' -ErrorAction SilentlyContinue; if(\$p.CommandLine -like '*start-vpn-relay.ps1*' -and \$p.CommandLine -like '*-RunRelay*'){Stop-Process -Id $pid -Force; Wait-Process -Id $pid -Timeout 5 -ErrorAction SilentlyContinue}" \
+    </dev/null >/dev/null 2>&1 || true
+}
+
+# Prints: <windows_pid> <local_port> <created|reused>
+vpn_relay_acquire() {
+  local target_host="$1" target_port="$2" holder="$3"
+  local key holder_key state_file lease_dir lock_file
+  local relay_pid="" local_port="" saved_host="" saved_port="" relay_status="reused"
+  local relay_json starter_win valid="false"
+  local lock_fd
+
+  for command in python3 powershell.exe stat; do
+    command -v "$command" >/dev/null 2>&1 \
+      || { printf '缺少命令: %s\n' "$command" >&2; return 1; }
+  done
+  key="$(vpn_hash "$target_host:$target_port")"
+  holder_key="$(vpn_hash "$holder")"
+  vpn_secure_pool_dir || return 1
+  state_file="$VPN_POOL_DIR/$key.state"
+  lease_dir="$VPN_POOL_DIR/$key.leases"
+  lock_file="$VPN_POOL_DIR/$key.lock"
+  vpn_lock "$lock_file" || return 1
+
+  if [[ -r "$state_file" ]]; then
+    {
+      IFS= read -r relay_pid || true
+      IFS= read -r local_port || true
+      IFS= read -r saved_host || true
+      IFS= read -r saved_port || true
+    } <"$state_file"
+    if [[ "$relay_pid" =~ ^[0-9]+$ && "$local_port" =~ ^[0-9]+$ \
+      && "$saved_host" == "$target_host" && "$saved_port" == "$target_port" ]]; then
+      valid="$(vpn_process_valid "$relay_pid" "$local_port")"
+    fi
+  fi
+
+  if [[ "$valid" != true ]]; then
+    [[ "$relay_pid" =~ ^[0-9]+$ ]] && vpn_stop_process "$relay_pid"
+    rm -f -- "$state_file"
+    rm -rf -- "$lease_dir"
+    starter_win="$(vpn_wsl_path "$VPN_TOOLKIT_DIR/start-vpn-relay.ps1")" || { vpn_unlock; return 1; }
+    relay_json="$({
+      vpn_powershell -NoProfile -ExecutionPolicy Bypass -File "$starter_win" \
+        -TargetHost "$target_host" \
+        -TargetPort "$target_port" \
+        -IdleExitSeconds 30 </dev/null
+    } | tr -d '\r')" || return 1
+    read -r relay_pid local_port < <(
+      python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["pid"], d["port"])' \
+        <<<"$relay_json"
+    )
+    printf '%s\n%s\n%s\n%s\n' \
+      "$relay_pid" "$local_port" "$target_host" "$target_port" >"$state_file"
+    chmod 600 -- "$state_file"
+    relay_status="created"
+  fi
+
+  mkdir -m 700 -p -- "$lease_dir"
+  chmod 700 -- "$lease_dir"
+  printf '%s\n' "$holder" >"$lease_dir/$holder_key"
+  chmod 600 -- "$lease_dir/$holder_key"
+  printf '%s %s %s\n' "$relay_pid" "$local_port" "$relay_status"
+  vpn_unlock
+}
+
+vpn_relay_release() {
+  local target_host="$1" target_port="$2" holder="$3"
+  local key holder_key state_file lease_dir lock_file relay_pid=""
+  [[ -e "$VPN_POOL_DIR" || -L "$VPN_POOL_DIR" ]] || return 0
+  vpn_secure_pool_dir || return 1
+  key="$(vpn_hash "$target_host:$target_port")"
+  holder_key="$(vpn_hash "$holder")"
+  state_file="$VPN_POOL_DIR/$key.state"
+  lease_dir="$VPN_POOL_DIR/$key.leases"
+  lock_file="$VPN_POOL_DIR/$key.lock"
+  [[ -e "$state_file" || -d "$lease_dir" ]] || return 0
+  vpn_lock "$lock_file" || return 1
+  rm -f -- "$lease_dir/$holder_key"
+  if [[ ! -d "$lease_dir" ]] || ! find "$lease_dir" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .; then
+    [[ -r "$state_file" ]] && IFS= read -r relay_pid <"$state_file" || true
+    vpn_stop_process "$relay_pid"
+    rm -f -- "$state_file"
+    rmdir "$lease_dir" 2>/dev/null || true
+  fi
+  vpn_unlock
+}
