@@ -108,7 +108,8 @@ test('WSL bridge pins direct and relayed SSH identities', () => {
   assert.match(source, /-o "HostKeyAlias=\$host_key_alias"/);
   assert.match(source, /-o CanonicalizeHostname=no/);
   assert.match(source, /-o CheckHostIP=no/);
-  assert.match(source, /ssh_options\+=\(-o IdentitiesOnly=yes -i "\$private_key_path"\)/);
+  assert.match(source, /WSL_VPN_RESPECT_SSH_CONFIG.*!= 1[\s\S]*ssh_options\+=\(-o IdentitiesOnly=yes\)/);
+  assert.match(source, /ssh_options\+=\(-i "\$private_key_path"\)/);
 });
 
 test('WSL enables connection reuse for terminals and background commands', () => {

@@ -172,7 +172,14 @@ export function mountAuthorityAlias(mountName: string): string | undefined {
 }
 
 export function parseRemoteUri(value: string): RemoteUriLocation {
-  const parsed = new URL(value);
+  // VS Code serializes custom authorities with literal square brackets,
+  // including display labels such as "ls [SSH]". WHATWG URL treats those
+  // brackets as IPv6 syntax. SAFS authorities are opaque identifiers; restore
+  // their escaping before parsing, without changing path/query encoding.
+  const normalized = value.replace(/^(safs:\/\/)([^/?#]*)/i, (_match, prefix, authority: string) =>
+    prefix + authority.replace(/[\[\]\s]/g, character => encodeURIComponent(character))
+  );
+  const parsed = new URL(normalized);
   if (parsed.protocol !== `${remoteFileSystemScheme}:`) {
     throw new Error(`Unsupported remote URI scheme: ${parsed.protocol.slice(0, -1)}`);
   }

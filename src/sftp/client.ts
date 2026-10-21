@@ -141,9 +141,16 @@ export class Ssh2SftpSession implements SftpSession {
       signal,
       sftpControlTimeoutMs
     );
-    return entries.map((entry) => {
-      assertSafeRemoteEntryName(entry.filename);
-      return { name: entry.filename, ...fileStat(entry.attrs) };
+    return entries.flatMap((entry) => {
+      try {
+        assertSafeRemoteEntryName(entry.filename);
+      } catch {
+        console.warn(
+          `[SAFS SFTP] ${this.hostName}: skipped unsafe directory entry ${JSON.stringify(entry.filename)}`
+        );
+        return [];
+      }
+      return [{ name: entry.filename, ...fileStat(entry.attrs) }];
     });
   }
 

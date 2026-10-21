@@ -197,3 +197,14 @@ test('host-only URIs preserve literal query characters and tolerate malformed pr
     assert.equal(parseRemoteUri(url.toString()).mountName, name);
   }
 });
+
+test('restores VS Code authorities containing literal SSH label brackets', () => {
+  const saved = 'safs://ls%20[ssh]/home/share/zhuyuan?mount%3Dls%20%5BSSH%5D%28zhuyuan%29%26hostLabel%3D1';
+  assert.deepEqual(parseRemoteUri(saved), {
+    mountName: 'ls [SSH](zhuyuan)', remotePath: '/home/share/zhuyuan'
+  });
+  const generated = remoteUri('ls [SSH](zhuyuan)', '/home/share/zhuyuan', 'ls [SSH]');
+  assert.deepEqual(parseRemoteUri(generated.replace(/%5B/gi, '[').replace(/%5D/gi, ']')),
+    { mountName: 'ls [SSH](zhuyuan)', remotePath: '/home/share/zhuyuan' });
+  assert.throws(() => parseRemoteUri('safs://user@ls%20[ssh]/srv'), /Invalid remote workspace URI/);
+});

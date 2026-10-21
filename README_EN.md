@@ -21,9 +21,11 @@ SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote
 
 1. Install and enable the SAFS extension.
 2. Click the **SAFS** icon in the Activity Bar.
-3. Click **+** in the upper-right corner of the Remote Folders view and enter a host name (such as `dev`) and IP address.
-4. Click **+** beside the host name and enter the account and password. Passwords are saved using the configuration encryption master password when needed; private-key authentication is also supported.
+3. Click **+** in the Remote Folders view and enter the host name, address, port, and account credentials in one flow.
+4. Click **+** beside an existing host to add another account.
 5. On the first connection, verify and accept the server's host-key fingerprint.
+
+SAFS automatically scans `~/.ssh/config` and its `Include` files, importing the alias, account, port, and identity of literal `Host` entries. Connections using `ProxyJump`, `ProxyCommand`, certificates, SSH agents, or other OpenSSH-specific settings use system OpenSSH consistently for remote folders, terminals, and commands. Wildcard `Host` entries remain configuration rules and are not listed as separate SAFS hosts.
 
 ### 2. Open and edit a remote directory
 
@@ -39,7 +41,7 @@ The first time you open the configured remote home from a parent connection node
 
 **CLI mode** is the default and requires local **Node.js 18+**. The extension installs the global `safs` command and Skill. If Node.js is missing, the dialog offers an [installation link](https://nodejs.org/zh-cn) or a switch to MCP mode.
 
-Restart VS Code, run `safs --version` to check installation, then enter `/safs-cli` in your Agent and select a remote workspace.
+After installing Node.js, fully quit all VS Code windows and reopen VS Code so it picks up the updated PATH; reloading the window is insufficient. Run `safs --version` to check installation, then enter `/safs-cli` in your Agent and select a remote workspace.
 
 For **MCP mode**, first set `safs.agentInterface` to `mcp`:
 

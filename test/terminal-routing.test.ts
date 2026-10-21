@@ -42,12 +42,13 @@ test('WSL VPN relay and explicit fallback keep system SSH', () => {
   }), false);
 });
 
-test('falls back to system SSH for ssh2 handshake, reset, and channel failures', () => {
+test('falls back to system SSH for setup, authentication, and channel failures', () => {
   assert.equal(shouldFallbackToSystemSsh(new Error('Connection lost before handshake')), true);
   assert.equal(shouldFallbackToSystemSsh(new Error('read ECONNRESET')), true);
   assert.equal(shouldFallbackToSystemSsh(new Error('Unable to open shell channel')), true);
   assert.equal(shouldFallbackToSystemSsh(new Error('Timed out while waiting for handshake')), true);
   assert.equal(shouldFallbackToSystemSsh(new Error('Connection closed during readyTimeout')), true);
   assert.equal(shouldFallbackToSystemSsh(new Error('socket hang up')), true);
-  assert.equal(shouldFallbackToSystemSsh(new Error('All configured authentication methods failed')), false);
+  assert.equal(shouldFallbackToSystemSsh(new Error('All configured authentication methods failed')), true);
+  assert.equal(shouldFallbackToSystemSsh(new Error('Host key verification failed')), false);
 });

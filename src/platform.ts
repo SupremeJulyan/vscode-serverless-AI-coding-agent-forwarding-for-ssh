@@ -1,4 +1,5 @@
 import * as os from 'node:os';
+import { isIP } from 'node:net';
 import { HostConfig } from './config';
 import { hostEntryName } from './host-key';
 import { shellQuote } from './shell-quote';
@@ -31,6 +32,8 @@ export interface CommandPlan {
 }
 
 export interface ConnectionOptions {
+  /** 使用 OpenSSH 解析 Host/Include/ProxyJump 等用户配置。 */
+  respectSshConfig?: boolean;
   reuseSshConnection?: boolean;
   bridgeMasterPassword?: string;
   bridgeConfigPath?: string;
@@ -108,6 +111,15 @@ function connectionReuseArgs(options?: ConnectionOptions): string[] {
       ];
 }
 
+/** 防止用户 SSH config 的交互选项污染程序化命令会话。 */
+function commandSessionArgs(): string[] {
+  return [
+    '-T', '-o', 'IgnoreUnknown=RemoteCommand,SessionType,StdinNull,ForkAfterAuthentication',
+    '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', '-o', 'SessionType=default',
+    '-o', 'StdinNull=no', '-o', 'ForkAfterAuthentication=no', '-o', 'ClearAllForwardings=yes'
+  ];
+}
+
 function sshArgs(
   kind: PlatformKind, host: HostConfig, remoteCwd?: string, options?: ConnectionOptions
 ): string[] {
@@ -119,7 +131,7 @@ function sshArgs(
     // Pin the actual destination and known_hosts identity to the endpoint
     // verified by the extension. Command-line options take precedence over
     // ~/.ssh/config HostName / HostKeyAlias / canonicalization directives.
-    '-o', `HostName=${host.ip}`,
+    ...(isIP(host.ip) ? ['-o', `HostName=${host.ip}`] : []),
     '-o', `HostKeyAlias=${hostEntryName(host)}`,
     '-o', 'CanonicalizeHostname=no',
     '-o', 'CheckHostIP=no',
@@ -129,17 +141,24 @@ function sshArgs(
   // rejects them by default, so re-enable them explicitly. The exact flags
   // are adapted to the installed client (see ssh-algorithms.ts), because old
   // OpenSSH rejects PubkeyAcceptedAlgorithms and OpenSSH 10+ rejects ssh-dss.
-  args.push(...legacySshAlgorithmArgs());
+  if (!options?.respectSshConfig) args.push(...legacySshAlgorithmArgs());
   // An explicit KexAlgorithms list suppresses OpenSSH 10+'s post-quantum
   // warning that otherwise spams the terminal on legacy servers.
-  args.push(...kexAlgorithmsArgs());
+  if (!options?.respectSshConfig) args.push(...kexAlgorithmsArgs());
   // ControlMaster=auto reuses a healthy master and lets OpenSSH fall back to a
   // direct connection when the control socket cannot be used.
   args.push(...connectionReuseArgs(options));
   if (host.private_key_path) {
-    args.push('-o', 'IdentitiesOnly=yes', '-i', host.private_key_path);
+    if (!options?.respectSshConfig) args.push('-o', 'IdentitiesOnly=yes');
+    args.push('-i', host.private_key_path);
   }
-  if (remoteCwd) args.push('-t');
+  if (remoteCwd) {
+    args.push(
+      '-t', '-o', 'IgnoreUnknown=RemoteCommand,SessionType,StdinNull,ForkAfterAuthentication',
+      '-o', 'RemoteCommand=none', '-o', 'SessionType=default', '-o', 'StdinNull=no',
+      '-o', 'ForkAfterAuthentication=no'
+    );
+  }
   args.push(`${host.user}@${host.ip}`);
   if (remoteCwd) {
     args.push(`cd -- ${shellQuote(remoteCwd)} && exec "\${SHELL:-/bin/sh}" -l`);
@@ -167,6 +186,7 @@ class UnixAdapter implements PlatformAdapter {
 
   exec(host: HostConfig, remoteCwd: string, command: string, options?: ConnectionOptions): CommandPlan {
     const args = sshArgs(this.kind, host, undefined, options);
+    args.unshift(...commandSessionArgs());
     args.push(remoteExecCommand(remoteCwd, command, options?.outputMarker));
     return { command: 'ssh', args, stdoutMarker: options?.outputMarker };
   }
@@ -184,6 +204,7 @@ class WslAdapter implements PlatformAdapter {
       args,
       env: {
         WSL_VPN_SSH_CONNECTION_REUSE: options?.reuseSshConnection === false ? '0' : '1',
+        WSL_VPN_RESPECT_SSH_CONFIG: options?.respectSshConfig ? '1' : '0',
         WSL_VPN_STRICT_HOST_KEY: hostKeyStrictValue(options?.hostKeyPolicy),
         ...(options?.hostKeyPolicy === 'prompt' && options?.userKnownHostsFile
           ? { WSL_VPN_KNOWN_HOSTS_FILE: options.userKnownHostsFile }
@@ -204,7 +225,9 @@ class WslAdapter implements PlatformAdapter {
       args: [host.name, remoteExecCommand(remoteCwd, command, options?.outputMarker)],
       stdoutMarker: options?.outputMarker,
       env: {
+        WSL_VPN_SSH_EXEC: '1',
         WSL_VPN_SSH_CONNECTION_REUSE: options?.reuseSshConnection === false ? '0' : '1',
+        WSL_VPN_RESPECT_SSH_CONFIG: options?.respectSshConfig ? '1' : '0',
         WSL_VPN_STRICT_HOST_KEY: hostKeyStrictValue(options?.hostKeyPolicy),
         ...(options?.hostKeyPolicy === 'prompt' && options?.userKnownHostsFile
           ? { WSL_VPN_KNOWN_HOSTS_FILE: options.userKnownHostsFile }
@@ -226,6 +249,7 @@ class WindowsAdapter implements PlatformAdapter {
 
   exec(host: HostConfig, remoteCwd: string, command: string, options?: ConnectionOptions): CommandPlan {
     const args = sshArgs('windows', host, undefined, options);
+    args.unshift(...commandSessionArgs());
     args.push(remoteExecCommand(remoteCwd, command, options?.outputMarker));
     return { command: 'ssh', args, stdoutMarker: options?.outputMarker };
   }

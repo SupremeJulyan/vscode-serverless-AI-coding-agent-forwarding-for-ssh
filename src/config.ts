@@ -7,6 +7,7 @@ export interface HostConfig {
   name: string;
   ip: string;
   user: string;
+  source?: 'ssh-config';
   port?: number;
   vpn?: boolean;
   private_key_path?: string;
@@ -181,7 +182,12 @@ export function parseConfig(value: unknown): BridgeConfig {
     // The host can be created from the Remote Folders '+' action before its
     // login credentials are filled in from the hierarchical view.
     const user = typeof host.user === 'string' ? host.user : '';
-    return { name, ip, user, port: host.port, vpn: host.vpn, private_key_path: host.private_key_path, password: host.password } as HostConfig;
+    return {
+      name, ip, user,
+      ...(host.source === 'ssh-config' ? { source: 'ssh-config' as const } : {}),
+      port: host.port, vpn: host.vpn,
+      private_key_path: host.private_key_path, password: host.password
+    } as HostConfig;
   });
 
   const hostNames = new Set<string>();

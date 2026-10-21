@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-test('remote folders fall back from ssh2 to the system OpenSSH SCP session', async () => {
+test('remote folders use system SFTP and fall back to SCP when the subsystem is unavailable', async () => {
   const extension = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.match(extension, /session = await connectSftp\(/);
-  assert.match(extension, /session = await connectSystemScp\(/);
-  assert.match(extension, /ssh2 连接失败，静默回退系统 SSH\/SCP/);
+  assert.match(extension, /return await connectSystemSftp\(/);
+  assert.match(extension, /return connectSystemScp\(/);
+  assert.match(extension, /SFTP 子系统不可用，回退 SCP/);
 });
 
 test('system fallback reuses ScpSession semantics over a system ssh facade', async () => {

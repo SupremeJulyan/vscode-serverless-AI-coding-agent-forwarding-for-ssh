@@ -178,6 +178,11 @@
         "password": {
           "type": "string",
           "description": "SSH 密码；使用私钥时无需填写，避免提交到版本库。"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["ssh-config"],
+          "description": "由 SSH 配置自动导入；删除 SAFS 配置不会修改 SSH 配置，后续扫描可能重新导入。"
         }
       },
       "additionalProperties": false
@@ -236,6 +241,11 @@
             },
             "additionalProperties": false
           }
+        },
+        "source": {
+          "type": "string",
+          "enum": ["ssh-config"],
+          "description": "由 SSH 配置自动导入；删除 SAFS 配置不会修改 SSH 配置，后续扫描可能重新导入。"
         }
       },
       "additionalProperties": false

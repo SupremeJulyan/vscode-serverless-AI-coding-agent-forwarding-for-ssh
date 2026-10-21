@@ -1,6 +1,7 @@
 import { operationMetric } from './operation-metric';
 import { untilCancelled, UiOperationGate } from './ui-operation';
 import { registerConfigDiagnostics } from './config-diagnostics';
+import { startSshConfigImport } from './ssh-config-import';
 import { createRemoteGitBundle } from './remote-git-bundle';
 import {
   applySuccessfulPushReceipt, recordSuccessfulPush, localGitRunner, pushReceiptKey,
@@ -50,7 +51,8 @@ import {
 } from './platform';
 import { executeCaptured, missingExecutableName, resolveExecutable } from './process';
 import {
-  closeSsh2ExecSessions, executeSsh2Command, type Ssh2CommandResult, Ssh2Terminal
+  closeSsh2ExecSessions, executeSsh2Command, Ssh2ConnectionError,
+  type Ssh2CommandResult, Ssh2Terminal
 } from './ssh2-terminal';
 import {
   configEntryOffset, passwordValueOffset
@@ -70,6 +72,7 @@ import {
 } from './agent-cwd';
 import { connectSftp } from './sftp/client';
 import { connectSystemScp } from './sftp/system-session';
+import { connectSystemSftp } from './sftp/system-sftp';
 import { SftpSession } from './sftp/session';
 import { writeStreamToFile, pipeStreams } from './stream-file';
 import {
@@ -96,7 +99,7 @@ import { setRemoteShellIntegrationBundlePath } from './remote-shell-integration'
 import { hostVerifierFor, setKnownHostsFilePath } from './host-key';
 import {
   isOpenSshHostKeyVerificationFailure, maxOpenSshHostKeyRetries,
-  runWithOpenSshHostKeyRetry, verifySystemSshHostKey
+  runWithOpenSshHostKeyRetry, verifySystemSshHostKey, systemSshUsesConfiguredRoute
 } from './system-ssh-host-key';
 import {
   hasRequiredWslDependencies, installWslDependencies
@@ -127,8 +130,9 @@ import {
   terminalReconnectDelayMs
 } from './terminal-diagnostics';
 import {
-  shouldFallbackToSystemSsh, shouldUseBuiltinSshTerminal
+  isSshAuthenticationFailure, shouldFallbackToSystemSsh, shouldUseBuiltinSshTerminal
 } from './terminal-routing';
+import { selectSshTransport } from './ssh-transport';
 import {
   findRemotePathCandidates, findRemoteTerminalPaths, resolveRemoteTerminalCwdReport,
   resolveRemoteTerminalPath
@@ -214,6 +218,7 @@ const managedRemoteTerminals = new Map<vscode.Terminal, {
   mount: MountConfig;
   remoteCwd: string;
   retryWithSystemSsh?: boolean;
+  usesSystemSsh?: boolean;
   connectionError?: string;
   hostKeyRetries?: number;
   startedAt: number;
@@ -2799,7 +2804,7 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
   if (!reopen) return;
   const diagnosticText = await logManagedTerminalExit(terminal, reopen);
   const status = terminal.exitStatus;
-  if (isRemoteDirectoryPermissionDenied(
+  if (!reopen.retryWithSystemSsh && isRemoteDirectoryPermissionDenied(
     `${reopen.connectionError ?? ''}\n${diagnosticText}`
   )) {
     await vscode.window.showErrorMessage(
@@ -2856,6 +2861,13 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
     await openTerminal(vscodeContext, reopen.mount, remoteCwd, undefined, true, true);
     return;
   }
+  if (reopen.usesSystemSsh && isSshAuthenticationFailure(diagnosticText)) {
+    const selected = await vscode.window.showErrorMessage(
+      'SAFS：远程终端认证失败，请检查 SSH 配置、账号或密钥。', viewSafsLogAction
+    );
+    if (selected === viewSafsLogAction) bridgeOutput?.show(true);
+    return;
+  }
   if (autoReconnect) {
     const key = `${reopen.mount.name}\0${remoteCwd}`;
     const lifetimeMs = Math.max(0, Date.now() - reopen.startedAt);
@@ -2887,7 +2899,8 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
     );
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     await openTerminal(
-      vscodeContext, reopen.mount, remoteCwd, undefined, false, false, reopen.hostKeyRetries ?? 0
+      vscodeContext, reopen.mount, remoteCwd, undefined, false,
+      reopen.usesSystemSsh ?? false, reopen.hostKeyRetries ?? 0
     );
     return;
   }
@@ -2986,9 +2999,12 @@ async function openTerminal(
     // Direct password terminals use ssh2 on all platforms. The actual terminal
     // connection performs the VS Code host-key confirmation, avoiding the race
     // where ssh-keyscan verifies one backend and system ssh reaches another.
+    const configuredSystemSsh = await systemSshUsesConfiguredRoute(
+      resolved.hostConfig, platformAdapter.kind
+    );
     const useBuiltinSsh = shouldUseBuiltinSshTerminal(
       platformAdapter.kind, resolved.hostConfig, forceSystemSsh
-    );
+    ) && !configuredSystemSsh;
     if (!useBuiltinSsh && resolved.hostConfig.password
       && platformUsesAskpass(platformAdapter.kind)) {
       credentials = await createAskpassCredentials(resolved.hostConfig.password);
@@ -3024,6 +3040,7 @@ async function openTerminal(
       }
     }
     const plan = platformAdapter.terminal(resolved.hostConfig, remoteCwd, {
+      respectSshConfig: configuredSystemSsh,
       reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
       bridgeMasterPassword: bridgePasswordEnv.WSL_VPN_MASTER_PASSWORD,
       bridgeConfigPath: configPath(),
@@ -3068,8 +3085,12 @@ async function openTerminal(
             // same built-in transport. Authentication failures do not match
             // either connection-level pattern and therefore do not fall back.
             if (shouldFallbackToSystemSsh(error)) {
-              if (entry) entry.retryWithSystemSsh = true;
+              if (entry) {
+                entry.retryWithSystemSsh = true;
+                return true;
+              }
             }
+            return false;
           },
           (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`),
           (reportedCwd) => {
@@ -3106,7 +3127,8 @@ async function openTerminal(
       });
     performanceLine(`${mount.name} SSH 终端创建（不含远端握手）`, terminalStartedAt);
     managedRemoteTerminals.set(terminal, {
-      mount, remoteCwd, pty: builtinPty, diagnostic, hostKeyRetries, startedAt: Date.now()
+      mount, remoteCwd, pty: builtinPty, diagnostic, hostKeyRetries,
+      startedAt: Date.now(), usesSystemSsh: !useBuiltinSsh
     });
     if (credentials) {
       const disposable = vscode.window.onDidCloseTerminal((closed) => {
@@ -3181,6 +3203,25 @@ function configFocusForArgument(argument: unknown): ConfigFocus | undefined {
   }
   // 没有参数时按 SAFS 视图当前选中项定位。
   return configFocusForElement(mountsTreeView?.selection[0]);
+}
+
+/** 导入的树条目编辑其 SSH 源配置；显式的错误定位仍编辑 SAFS 配置。 */
+async function openConfigForArgument(argument: unknown): Promise<void> {
+  const value = Array.isArray(argument) ? argument[0] : argument;
+  const focus = configFocusForArgument(argument);
+  if (!isConfigFocus(value) && focus) {
+    const config = await readConfig();
+    const mount = config.mounts.find(candidate => candidate.name === focus.name);
+    const host = config.hosts.find(candidate => candidate.name === (mount?.host ?? focus.name));
+    if (host?.source === 'ssh-config') {
+      const document = await vscode.workspace.openTextDocument(
+        vscode.Uri.file(path.join(os.homedir(), '.ssh', 'config'))
+      );
+      await vscode.window.showTextDocument(document);
+      return;
+    }
+  }
+  await openConfig(focus);
 }
 
 /** 打开 `~/.safs/config.json`，并按 focus 把光标定位到对应行。 */
@@ -3463,6 +3504,9 @@ async function addHostCredentials(
     name: generatedName,
     user: normalizedUser
   };
+  if (index < 0 || !targetHost.user.trim() || normalizedUser !== targetHost.user) {
+    delete updated.source;
+  }
   if (password) {
     updated.password = await encryptPassword(
       password, await promptMasterPassword(context, true)
@@ -4017,9 +4061,6 @@ async function executeRemoteCommand(
     if (resolved.hostConfig.password) {
       const config = await readConfig();
       resolved.hostConfig = await resolveStoredHostPassword(context, config, resolved.hostConfig);
-      if (platformAdapter.kind !== 'windows' && platformUsesAskpass(platformAdapter.kind)) {
-        credentials = await createAskpassCredentials(resolved.hostConfig.password!);
-      }
     }
     const controller = new AbortController();
     const cancellation = token?.onCancellationRequested(() => controller.abort());
@@ -4035,7 +4076,13 @@ async function executeRemoteCommand(
       : undefined;
     try {
       let result;
-      if (platformAdapter.kind === 'windows') {
+      const configuredSystemSsh = await systemSshUsesConfiguredRoute(
+        resolved.hostConfig, platformAdapter.kind
+      );
+      let useSystemSsh = selectSshTransport(
+        platformAdapter.kind, resolved.hostConfig, configuredSystemSsh
+      ) === 'system';
+      if (!useSystemSsh) {
         bridgeOutput?.appendLine(
           `[Agent MCP] $ ${redactSensitiveText(input.command)} (cwd: ${remoteCwd})`
         );
@@ -4049,10 +4096,16 @@ async function executeRemoteCommand(
           );
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          bridgeOutput?.appendLine(`[Agent MCP] [失败] ${redactSensitiveText(input.command)}: ${detail}`);
-          throw error;
+          if (controller.signal.aborted || !(error instanceof Ssh2ConnectionError)
+            || !shouldFallbackToSystemSsh(error)) throw error;
+          bridgeOutput?.appendLine(`[Agent MCP] SSH 连接准备失败，自动尝试系统 SSH：${detail}`);
+          useSystemSsh = true;
         }
-      } else {
+      }
+      if (useSystemSsh) {
+        if (resolved.hostConfig.password && platformUsesAskpass(platformAdapter.kind)) {
+          credentials = await createAskpassCredentials(resolved.hostConfig.password);
+        }
         await warmSshCliCapabilities();
         const hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
           'hostKeyChangedAction', 'prompt'
@@ -4070,6 +4123,7 @@ async function executeRemoteCommand(
           await verifyCurrentSystemSshHostKey();
         }
         const plan = platformAdapter.exec(resolved.hostConfig, remoteCwd, input.command, {
+          respectSshConfig: configuredSystemSsh,
           reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
           bridgeConfigPath: configPath(),
           hostKeyPolicy,
@@ -5913,6 +5967,9 @@ async function configureAgentInterface(
     );
     if (action === '安装 Node.js') {
       await vscode.env.openExternal(vscode.Uri.parse('https://nodejs.org/zh-cn'));
+      void vscode.window.showInformationMessage(
+        '安装后，请完全退出所有 VS Code 窗口再打开。'
+      );
     }
     if (action === '切换 MCP 模式') {
       await settings().update('agentInterface', 'mcp', vscode.ConfigurationTarget.Global);
@@ -6309,21 +6366,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   pool = new SftpConnectionPool(
     async (hostName, signal) => {
       const host = await resolvedHost(context, hostName);
-      let session: SftpSession;
-      try {
-        session = await connectSftp(
-          host,
-          platformAdapter.kind === 'wsl',
-          signal,
-          settings().get<string>('sshClientIdent', defaultSshClientIdent),
-          hostVerifierFor(host, (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`)),
-          (reason) => bridgeOutput?.appendLine(
-            `[SFTP] ${host.name} SFTP 子系统不可用，回退到 SCP/exec：${reason}`
-          )
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (/authentication methods failed|permission denied|host key/i.test(message)) throw error;
+      const configuredSystemSsh = await systemSshUsesConfiguredRoute(host, platformAdapter.kind);
+      const connectWithSystemSsh = async (reason: string): Promise<SftpSession> => {
         const hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
           'hostKeyChangedAction', 'prompt'
         );
@@ -6336,15 +6380,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           if (!verification.ok) throw new Error(verification.reason);
         }
         await warmSshCliCapabilities();
-        bridgeOutput?.appendLine(
-          `[SFTP] ${host.name} ssh2 连接失败，静默回退系统 SSH/SCP：${message}`
-        );
-        session = await connectSystemScp(host, platformAdapter, {
+        bridgeOutput?.appendLine(`[SFTP] ${host.name} ${reason}`);
+        const connectionOptions: import('./platform').ConnectionOptions = {
+          respectSshConfig: configuredSystemSsh,
           reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
-          bridgeConfigPath: configPath(),
-          hostKeyPolicy,
+          bridgeConfigPath: configPath(), hostKeyPolicy,
           ...(hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
-        }, signal);
+        };
+        try {
+          return await connectSystemSftp(host, platformAdapter, connectionOptions, signal);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (signal?.aborted
+            || !/subsystem request failed|subsystem.*(?:not found|not supported|disabled)/i.test(message)) {
+            throw error;
+          }
+          bridgeOutput?.appendLine(
+            `[SFTP] ${host.name} SFTP 子系统不可用，回退 SCP：${message}`
+          );
+          return connectSystemScp(host, platformAdapter, connectionOptions, signal);
+        }
+      };
+      let session: SftpSession;
+      if (selectSshTransport(platformAdapter.kind, host, configuredSystemSsh) === 'system') {
+        session = await connectWithSystemSsh('连接配置要求使用系统 SSH/SFTP');
+      } else {
+        try {
+          session = await connectSftp(
+            host, platformAdapter.kind === 'wsl', signal,
+            settings().get<string>('sshClientIdent', defaultSshClientIdent),
+            hostVerifierFor(host, message => bridgeOutput?.appendLine(`[主机密钥] ${message}`)),
+            reason => bridgeOutput?.appendLine(
+              `[SFTP] ${host.name} SFTP 子系统不可用，回退到 SCP/exec：${reason}`
+            )
+          );
+        } catch (error) {
+          if (signal?.aborted || !shouldFallbackToSystemSsh(error)) throw error;
+          const message = error instanceof Error ? error.message : String(error);
+          session = await connectWithSystemSsh(`ssh2 连接失败，尝试系统 SSH/SFTP：${message}`);
+        }
       }
       agentTrace('SFTP', `${host.name} 传输通道：${session.transport}`);
       return session;
@@ -6454,6 +6528,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const tree = new RemoteFoldersProvider(context);
   refreshTree = () => tree.refresh();
+  const sshImporter = startSshConfigImport({
+    root: path.join(os.homedir(), '.ssh', 'config'),
+    target: configPath(),
+    log: message => bridgeOutput?.appendLine(`[SSH 自动导入] ${message}`),
+    canWrite: () => !vscode.workspace.textDocuments.some(document =>
+      document.uri.scheme === 'file'
+      && path.resolve(document.uri.fsPath) === path.resolve(configPath())
+      && document.isDirty
+    ),
+    changed: async () => {
+      await registerMountAliases();
+      refreshTree();
+      refreshSafsEntryLabel();
+      await refreshAgentCommandTerminalState();
+    }
+  });
+  context.subscriptions.push(sshImporter, vscode.workspace.onDidSaveTextDocument(document => {
+    if (document.uri.scheme === 'file'
+      && path.resolve(document.uri.fsPath) === path.resolve(configPath())) {
+      sshImporter.resume();
+    }
+  }));
   // 用 createTreeView 而不是 registerTreeDataProvider：视图标题栏的「打开配置」
   // 需要读当前选中项，才能定位到 config.json 里对应的那一行。
   mountsTreeView = vscode.window.createTreeView(`${commandPrefix}.mounts`, {
@@ -6540,7 +6636,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
     });
   });
-  command('openConfig', (argument) => openConfig(configFocusForArgument(argument)));
+  command('openConfig', (argument) => openConfigForArgument(argument));
   command('addRemoteDirectory', async () => {
     await addRemoteDirectoryConfig(context);
     tree.refresh();
@@ -6590,6 +6686,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await copyMcpUninstallPromptAndNotify(context);
   });
   command('refreshExplorer', async () => {
+    sshImporter.refresh();
     const config = await readConfig();
     const activeHosts = new Set((vscode.workspace.workspaceFolders ?? [])
       .filter(workspace => workspace.uri.scheme === remoteFileSystemScheme)

@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { HostConfig } from './config';
 import {
   appendKnownHostsFile, appendLoadBalancedKnownHostsFile, defaultPrompts,
@@ -7,14 +10,16 @@ import {
   HostKeyChangedAction, HostKeyPrompts, ProbedHostKey,
   replaceKnownHostsForHost, sha256Fingerprint, verifyHostKeyWithPrompt
 } from './host-key';
-import { PlatformKind } from './platform';
+import { createPlatformAdapter, PlatformKind } from './platform';
 import { resolveExecutable } from './process';
 import { ensureSshCapabilities } from './ssh-algorithms';
 import { sshBridgePath } from './wsl-bridge';
+import { needsOpenSshAuthentication } from './ssh-transport';
 
 /**
  * 系统 ssh 路径（WSL/Linux/macOS/Windows 非内置通道）的主机密钥校验：
- * 系统 ssh 无法弹 VS Code 对话框，因此由扩展在连接前用 ssh-keyscan 探测
+ * 直连使用 ssh-keyscan，代理/别名使用 OpenSSH 配置路由探测。
+ * 系统 ssh 无法弹 VS Code 对话框，因此由扩展在连接前探测
  * 当前后端密钥，与扩展 known_hosts 文件比对；未确认时弹对话框
  * （首次连接 / 每次新密钥：接受、拒绝）。
  *
@@ -27,7 +32,7 @@ import { sshBridgePath } from './wsl-bridge';
 const execFileAsync = promisify(execFile);
 
 export interface HostKeyProbeResult {
-  /** 探测是否成功；false 时调用方按“跳过校验继续连接”降级（不阻断已有流程）。 */
+  /** 探测是否成功；false 时必须中止连接，不能跳过主机身份校验。 */
   probed: boolean;
   /** 探测到的服务器密钥指纹（可能多个算法各一个）。 */
   fingerprints: string[];
@@ -87,10 +92,21 @@ function keyscanKeyTypes(
 }
 
 async function probeNative(
-  host: HostConfig, _platformKind: PlatformKind, log?: (message: string) => void
+  host: HostConfig, platformKind: PlatformKind, log?: (message: string) => void
 ): Promise<HostKeyProbeResult> {
+  const ssh = await resolveExecutable('ssh');
+  const caps = await ensureSshCapabilities(ssh);
+  const args = createPlatformAdapter(platformKind === 'wsl' ? 'linux' : platformKind)
+    .terminal(host, undefined, { respectSshConfig: true }).args;
+  try {
+    const { stdout } = await execFileAsync(ssh, ['-G', ...args], { timeout: 5000, windowsHide: true });
+    if (requiresConfiguredSshProbe(stdout, host)) {
+      return probeConfiguredSshHostKey(host, platformKind, log);
+    }
+  } catch (error) {
+    return { probed: false, fingerprints: [], error: error instanceof Error ? error.message : String(error) };
+  }
   const keyscanPath = await resolveExecutable('ssh-keyscan');
-  const caps = await ensureSshCapabilities(await resolveExecutable('ssh'));
   try {
     const { stdout } = await execFileAsync(keyscanPath, [
       '-T', '15', '-p', String(host.port ?? 22),
@@ -112,6 +128,105 @@ async function probeNative(
       error: error instanceof Error ? error.message : String(error)
     };
   }
+}
+
+export function requiresConfiguredSshProbe(config: string, host: HostConfig): boolean {
+  return config.split(/\r?\n/).some((line) => {
+    const [key, ...parts] = line.trim().split(/\s+/);
+    const value = parts.join(' ');
+    return ((key === 'proxyjump' || key === 'proxycommand') && value !== 'none' && value !== '')
+      || (key === 'hostname' && value.toLowerCase() !== host.ip.toLowerCase());
+  });
+}
+
+/** Let OpenSSH interpret Include/Match, proxy and authentication configuration. */
+export async function systemSshUsesConfiguredRoute(
+  host: HostConfig, platformKind: PlatformKind, configFile?: string
+): Promise<boolean> {
+  if (platformKind === 'wsl' && host.vpn) return false;
+  try {
+    const ssh = await resolveExecutable('ssh');
+    await ensureSshCapabilities(ssh);
+    const args = createPlatformAdapter(platformKind === 'wsl' ? 'linux' : platformKind)
+      .terminal(host, undefined, { respectSshConfig: true }).args;
+    const { stdout } = await execFileAsync(ssh, ['-G', ...(configFile ? ['-F', configFile] : []), ...args],
+      { timeout: 5000, windowsHide: true });
+    if (requiresConfiguredSshProbe(stdout, host)) return true;
+    const nullFile = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    const { stdout: defaults } = await execFileAsync(ssh, ['-G', '-F', nullFile, ...args],
+      { timeout: 5000, windowsHide: true });
+    return needsOpenSshAuthentication(stdout, defaults, host, Boolean(process.env.SSH_AUTH_SOCK));
+  } catch (error) {
+    // A missing OpenSSH must not disable otherwise-working built-in SSH.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    const detail = (error as { stderr?: string }).stderr
+      || (error instanceof Error ? error.message : String(error));
+    throw new Error(`无法读取系统 SSH 配置：${detail}`, { cause: error });
+  }
+}
+
+/**
+ * Capture the configured route's key in an isolated, disposable known_hosts.
+ * No credentials, sessions, local commands or forwards are allowed. The key
+ * remains untrusted until verifySystemSshHostKey confirms it; the real
+ * connection still uses strict verification against the extension's store.
+ * This works on older OpenSSH without KnownHostsCommand and does not launch
+ * the VS Code executable as a Node.js helper.
+ */
+export async function probeConfiguredSshHostKey(
+  host: HostConfig, platformKind: PlatformKind, log?: (message: string) => void,
+  configFile?: string
+): Promise<HostKeyProbeResult> {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-ssh-probe-'));
+  try {
+    const ssh = await resolveExecutable('ssh');
+    await ensureSshCapabilities(ssh);
+    const keysFile = path.join(directory, 'keys');
+    await writeFile(keysFile, '', { mode: 0o600 });
+    const plan = createPlatformAdapter(platformKind === 'wsl' ? 'linux' : platformKind)
+      .terminal(host, undefined, { reuseSshConnection: false, respectSshConfig: true });
+    const nullFile = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    // OpenSSH writes the key before attempting authentication. Only the SSH
+    // "none" query is permitted; even a server accepting it cannot start a
+    // session (-N), allocate a PTY (-T), or receive a password/agent signature.
+    const args = [
+      ...(configFile ? ['-F', configFile] : []),
+      '-N', '-T',
+      '-o', `UserKnownHostsFile="${keysFile.replace(/\\/g, '/')}"`,
+      '-o', `GlobalKnownHostsFile=${nullFile}`, '-o', 'StrictHostKeyChecking=no',
+      '-o', 'HashKnownHosts=no', '-o', 'PreferredAuthentications=none',
+      '-o', 'PubkeyAuthentication=no', '-o', 'PasswordAuthentication=no',
+      '-o', 'KbdInteractiveAuthentication=no', '-o', 'HostbasedAuthentication=no',
+      '-o', 'ForwardAgent=no',
+      '-o', 'ForwardX11=no', '-o', 'UpdateHostKeys=no',
+      '-o', 'IgnoreUnknown=KnownHostsCommand,RemoteCommand,ForkAfterAuthentication',
+      '-o', 'KnownHostsCommand=none', '-o', 'RemoteCommand=none',
+      '-o', 'ForkAfterAuthentication=no',
+      '-o', 'BatchMode=yes', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
+      '-o', 'ClearAllForwardings=yes', '-o', 'PermitLocalCommand=no',
+      '-o', 'ConnectTimeout=15', '-o', 'ConnectionAttempts=1', ...plan.args
+    ];
+    let failure = '';
+    await new Promise<void>((resolve) => {
+      const child = execFile(ssh, args, { timeout: 25_000, windowsHide: true }, (error, _stdout, stderr) => {
+        clearInterval(poll);
+        failure = stderr || error?.message || '';
+        resolve();
+      });
+      // Inspect metadata only: opening the file for reading while Windows
+      // OpenSSH appends can deny its write ("Failed to add the host").
+      // Read the key only after the child has exited and released its handle.
+      const poll = setInterval(() => {
+        void stat(keysFile).then(info => {
+          if (info.size > 0) child.kill();
+        }).catch(() => undefined);
+      }, 50);
+    });
+    const keys = parseKeyscanLines(await readFile(keysFile, 'utf8').catch(() => ''));
+    if (!keys.length) return { probed: false, fingerprints: [], error: failure || 'OpenSSH 未返回主机密钥' };
+    log?.(`已通过 OpenSSH 配置路由探测 ${host.ip} 的主机密钥`);
+    return { probed: true, keys, fingerprints: keys.map((key) => sha256Fingerprint(Buffer.from(key.blob, 'base64'))) };
+  } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
 async function probeViaBridge(
@@ -159,7 +274,7 @@ export async function probeHostKey(
   host: HostConfig, platformKind: PlatformKind,
   log?: (message: string) => void, env?: NodeJS.ProcessEnv
 ): Promise<HostKeyProbeResult> {
-  const probe = platformKind === 'wsl' ? probeViaBridge : probeNative;
+  const probe = platformKind === 'wsl' && host.vpn ? probeViaBridge : probeNative;
   let result = await probe(host, platformKind, log, env);
   if (!result.probed) {
     log?.(`主机密钥首次探测失败，将重试：${result.error ?? '未知错误'}`);
@@ -194,7 +309,7 @@ export function isOpenSshHostKeyVerificationFailure(message: string): boolean {
  * 正常指纹弹窗；达到上限后原样返回失败，避免不稳定地址造成无限重连。
  */
 export async function runWithOpenSshHostKeyRetry<
-  T extends { exitCode: number; stderr: string }
+  T extends { exitCode: number; stderr: string; commandStarted?: boolean }
 >(
   run: () => Promise<T>, refreshTrust: () => Promise<void>,
   log?: (message: string) => void, maxRetries = maxOpenSshHostKeyRetries
@@ -202,7 +317,8 @@ export async function runWithOpenSshHostKeyRetry<
   let result = await run();
   for (let retry = 1;
     retry <= maxRetries
-      && result.exitCode !== 0
+      && result.exitCode === 255
+      && result.commandStarted !== true
       && isOpenSshHostKeyVerificationFailure(result.stderr);
     retry += 1) {
     log?.(`OpenSSH 严格校验遇到尚未记录的负载节点，重新探测并重试（${retry}/${maxRetries}）`);

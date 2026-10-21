@@ -22,9 +22,11 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 1. 安装并启用 SAFS 扩展。
 2. 点击左侧活动栏的 **SAFS** 图标。
-3. 点击远程目录视图右上角的 **＋**，填写主机名（如dev）和 IP 地址。
-4. 在主机名旁点击 **＋**，填写账号和密码；密码会在需要时使用配置加密主口令保存，也可以选择私钥认证。
+3. 点击远程目录视图右上角的 **＋**，连续填写主机名、IP 地址、端口和账号凭据。
+4. 在已有主机旁点击 **＋**，可以继续追加账号。
 5. 首次连接时核对并确认服务器主机密钥指纹。
+
+SAFS 会自动扫描 `~/.ssh/config` 及其 `Include` 文件，并导入字面量 `Host` 条目的主机名、账号、端口和私钥。包含 `ProxyJump`、`ProxyCommand`、证书、SSH agent 或其他 OpenSSH 专属设置的连接，会由系统 OpenSSH 统一承载远程目录、终端和命令；通配符 `Host` 仅作为 OpenSSH 配置规则使用，不会单独出现在 SAFS 列表中。
 
 配置保存在 `~/.safs/config.json`。一般使用界面添加即可；需要手动维护时，可运行 `SAFS: 打开配置`：
 
@@ -63,7 +65,7 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 默认使用 **CLI 模式**，需要本地 **Node.js 18+**。插件自动安装全局 `safs` 命令和 Skill；缺少 Node.js 时，弹窗提供[安装链接](https://nodejs.org/zh-cn)或切换 MCP 模式。
 
-重启 VS Code，在终端运行 `safs --version` 检查安装，然后在 Agent 中输入 `/safs-cli`，选择远程工作区。
+安装 Node.js 后，请完全退出所有 VS Code 窗口，再重新打开（仅重新加载窗口不会更新 PATH）。在终端运行 `safs --version` 检查安装，然后在 Agent 中输入 `/safs-cli`，选择远程工作区。
 
 如需 **MCP 模式**，先将 `safs.agentInterface` 设置为 `mcp`：
 从 CLI 切换时，当前操作窗口会自动提示输入 Agent 名称并复制安装提示词；取消后可通过下述安装命令重试。

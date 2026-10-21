@@ -144,8 +144,11 @@ export async function executeSsh2Command(
   remoteCwd: string, command: string, signal?: AbortSignal, maxOutputBytes = 1024 * 1024,
   outputMarker?: string
 ): Promise<Ssh2CommandResult> {
-  const session = await getExecSession(host, password);
-  await session.ready;
+  signal?.throwIfAborted();
+  const session = await getExecSession(host, password).catch((error) => {
+    throw new Ssh2ConnectionError(error);
+  });
+  await session.ready.catch((error) => { throw new Ssh2ConnectionError(error); });
   return new Promise<Ssh2CommandResult>((resolve, reject) => {
     let settled = false;
     let stream: ClientChannel | undefined;
@@ -219,6 +222,14 @@ export async function executeSsh2Command(
   });
 }
 
+/** 仅连接准备失败；此时尚未派发远程命令，可安全切换系统 SSH。 */
+export class Ssh2ConnectionError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'Ssh2ConnectionError';
+  }
+}
+
 export class Ssh2Terminal implements vscode.Pseudoterminal {
   private readonly writeEmitter = new vscode.EventEmitter<string>();
   readonly onDidWrite = this.writeEmitter.event;
@@ -256,7 +267,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     private readonly host: HostConfig,
     password?: string,
     private readonly remoteCwd?: string,
-    private readonly onFailed?: (error: Error) => void,
+    private readonly onFailed?: (error: Error) => boolean | void,
     private readonly log?: (message: string) => void,
     private readonly onCwd?: (remoteCwd: string) => void,
     private readonly connectionHint?: string
@@ -496,8 +507,8 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
 
   private fail(error: Error): void {
     if (this.closed || this.closeRequested) return;
-    this.onFailed?.(error);
-    this.writeEmitter.fire(`\r\nSAFS: ${error.message}\r\n`);
+    const retrying = this.onFailed?.(error) === true;
+    if (!retrying) this.writeEmitter.fire(`\r\nSAFS: ${error.message}\r\n`);
     this.finish(1);
   }
 

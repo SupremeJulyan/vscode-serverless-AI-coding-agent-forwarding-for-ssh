@@ -127,7 +127,7 @@ for index, item in enumerate(entries):
         str(item["ip"]), str(item["user"]), str(item.get("password") or ""),
         os.path.expanduser(str(item.get("private_key_path") or "")),
         str(item.get("port") or 22),
-        "true" if item.get("vpn", item.get("atrust", True)) else "false",
+        "true" if item.get("vpn", item.get("atrust", False)) else "false",
     )
     for value in values:
         sys.stdout.buffer.write(value.encode() + b"\0")
@@ -239,8 +239,10 @@ strict_host_key="${WSL_VPN_STRICT_HOST_KEY:-no}"
 known_hosts_file="${WSL_VPN_KNOWN_HOSTS_FILE:-}"
 ssh_options=(
   -o "StrictHostKeyChecking=${strict_host_key}"
-  -o "HostKeyAlgorithms=+${legacy_host_keys_joined}"
 )
+if [[ "${WSL_VPN_RESPECT_SSH_CONFIG:-0}" != 1 ]]; then
+  ssh_options+=(-o "HostKeyAlgorithms=+${legacy_host_keys_joined}")
+fi
 if [[ -n "$known_hosts_file" ]]; then
   # prompt：扩展已确认并写入密钥记录，OpenSSH 用该文件做最后一道校验。
   ssh_options+=(
@@ -256,8 +258,8 @@ elif [[ "$strict_host_key" != "yes" ]]; then
     -o LogLevel=ERROR
   )
 fi
-if [[ -z "$ssh_major" ]] \
-  || (( 10#$ssh_major > 8 || (10#$ssh_major == 8 && 10#$ssh_minor >= 5) )); then
+if [[ "${WSL_VPN_RESPECT_SSH_CONFIG:-0}" != 1 ]] && { [[ -z "$ssh_major" ]] \
+  || (( 10#$ssh_major > 8 || (10#$ssh_major == 8 && 10#$ssh_minor >= 5) )); }; then
   ssh_options+=(-o "PubkeyAcceptedAlgorithms=+${legacy_host_keys_joined}")
 fi
 # 显式 KexAlgorithms 可抑制 OpenSSH 10+ 对旧服务器的 post-quantum 警告。
@@ -270,7 +272,7 @@ kex_preferred=(sntrup761x25519-sha512 sntrup761x25519-sha512@openssh.com \
   diffie-hellman-group-exchange-sha1 diffie-hellman-group14-sha1 \
   diffie-hellman-group1-sha1)
 kex_supported="$(ssh -Q kex 2>/dev/null | tr -d '\r')"
-if [[ -n "$kex_supported" ]]; then
+if [[ "${WSL_VPN_RESPECT_SSH_CONFIG:-0}" != 1 && -n "$kex_supported" ]]; then
   kex_list=()
   for algo in "${kex_preferred[@]}"; do
     if grep -qx "$algo" <<<"$kex_supported"; then
@@ -295,14 +297,33 @@ if [[ "$force_tty" == true ]] || [[ -n "${SSH_BRIDGE_MOUNT_NAME:-}" && ${#remote
 fi
 if [[ -n "$private_key_path" ]]; then
   [[ -r "$private_key_path" ]] || die "私钥不可读: $private_key_path"
-  ssh_options+=(-o IdentitiesOnly=yes -i "$private_key_path")
+  if [[ "${WSL_VPN_RESPECT_SSH_CONFIG:-0}" != 1 ]]; then
+    ssh_options+=(-o IdentitiesOnly=yes)
+  fi
+  ssh_options+=(-i "$private_key_path")
+fi
+
+if [[ "${WSL_VPN_SSH_EXEC:-0}" == 1 ]]; then
+  ssh_options+=(-T -o IgnoreUnknown=RemoteCommand,SessionType,StdinNull,ForkAfterAuthentication -o RemoteCommand=none -o RequestTTY=no -o SessionType=default
+    -o StdinNull=no -o ForkAfterAuthentication=no -o ClearAllForwardings=yes)
+elif [[ "$force_tty" == true ]]; then
+  ssh_options+=(-o IgnoreUnknown=RemoteCommand,SessionType,StdinNull,ForkAfterAuthentication -o RemoteCommand=none -o SessionType=default
+    -o StdinNull=no -o ForkAfterAuthentication=no)
+fi
+
+if [[ -n "${WSL_VPN_SSH_SUBSYSTEM:-}" ]]; then
+  [[ "$WSL_VPN_SSH_SUBSYSTEM" == sftp ]] || die "不支持的 SSH 子系统"
+  ssh_options=(-T -s -o IgnoreUnknown=RemoteCommand,StdinNull,ForkAfterAuthentication -o RemoteCommand=none -o RequestTTY=no
+    -o StdinNull=no -o ForkAfterAuthentication=no -o ClearAllForwardings=yes
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=3
+    -o ControlMaster=no -o ControlPath=none "${ssh_options[@]}")
+  remote_args=(sftp)
 fi
 
 ssh_command=(ssh)
 
-# 把实际连接地址与 known_hosts 身份固定为扩展刚刚探测的目标，避免用户
-# ~/.ssh/config 中的 HostName / HostKeyAlias / CanonicalizeHostname 把连接改到
-# 另一台服务器，导致预检对象和 OpenSSH 严格校验对象不一致。
+# known_hosts 身份固定为扩展探测的目标；IP 直连固定地址，SSH 别名则在
+# 探测和连接时都使用同一套 OpenSSH HostName / 代理配置。
 host_key_alias="$target_host"
 if [[ "$target_port" != 22 ]]; then
   host_key_alias="[$target_host]:$target_port"
@@ -310,10 +331,15 @@ fi
 
 # ── Direct connection (no VPN) ───────────────────────────────────────────────
 if [[ "$use_vpn" != true ]]; then
+  destination_options=()
+  # Keep literal IPs pinned, but let OpenSSH resolve configured Host aliases.
+  if [[ "$target_host" == *:* || "$target_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    destination_options+=(-o "HostName=$target_host")
+  fi
   bridge_performance_log "SSH 连接派发前准备总计" "$bridge_started_at"
   exec "${ssh_command[@]}" "${ssh_options[@]}" \
     -p "$target_port" \
-    -o "HostName=$target_host" \
+    "${destination_options[@]}" \
     -o "HostKeyAlias=$host_key_alias" \
     -o CanonicalizeHostname=no \
     -o CheckHostIP=no \
