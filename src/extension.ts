@@ -99,7 +99,7 @@ import { setRemoteShellIntegrationBundlePath } from './remote-shell-integration'
 import { hostVerifierFor, setKnownHostsFilePath } from './host-key';
 import {
   isOpenSshHostKeyVerificationFailure, maxOpenSshHostKeyRetries,
-  runWithOpenSshHostKeyRetry, verifySystemSshHostKey, systemSshUsesConfiguredRoute
+  runWithOpenSshHostKeyRetry, verifySystemSshHostKey
 } from './system-ssh-host-key';
 import {
   hasRequiredWslDependencies, installWslDependencies
@@ -2999,12 +2999,10 @@ async function openTerminal(
     // Direct password terminals use ssh2 on all platforms. The actual terminal
     // connection performs the VS Code host-key confirmation, avoiding the race
     // where ssh-keyscan verifies one backend and system ssh reaches another.
-    const configuredSystemSsh = await systemSshUsesConfiguredRoute(
-      resolved.hostConfig, platformAdapter.kind
-    );
+    const importedSshConfig = resolved.hostConfig.source === 'ssh-config';
     const useBuiltinSsh = shouldUseBuiltinSshTerminal(
       platformAdapter.kind, resolved.hostConfig, forceSystemSsh
-    ) && !configuredSystemSsh;
+    );
     if (!useBuiltinSsh && resolved.hostConfig.password
       && platformUsesAskpass(platformAdapter.kind)) {
       credentials = await createAskpassCredentials(resolved.hostConfig.password);
@@ -3040,14 +3038,15 @@ async function openTerminal(
       }
     }
     const plan = platformAdapter.terminal(resolved.hostConfig, remoteCwd, {
-      respectSshConfig: configuredSystemSsh,
+      respectSshConfig: importedSshConfig,
       reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
       bridgeMasterPassword: bridgePasswordEnv.WSL_VPN_MASTER_PASSWORD,
       bridgeConfigPath: configPath(),
       hostKeyPolicy,
       ...(hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
     });
-    const resolvedTerminalCommand = await resolveExecutable(plan.command, plan.env);
+    const resolvedTerminalCommand = useBuiltinSsh
+      ? plan.command : await resolveExecutable(plan.command, plan.env);
     const diagnostic = useBuiltinSsh
       ? undefined
       : await createTerminalDiagnostic(
@@ -3059,13 +3058,18 @@ async function openTerminal(
           platformAdapter.kind, resolvedTerminalCommand, plan, diagnostic.file
         )
       : { ...plan, command: resolvedTerminalCommand };
-    const terminalCommand = await resolveExecutable(terminalPlan.command, terminalPlan.env);
-    bridgeOutput?.info(`[终端] 正在启动 ${mount.name}；cwd=${remoteCwd ?? remoteRoot}`);
-    bridgeOutput?.debug(
-      `[终端] 启动命令：$ ${
-        redactSensitiveText(planDisplayName({ ...plan, command: resolvedTerminalCommand }))
-      }`
+    const terminalCommand = useBuiltinSsh
+      ? terminalPlan.command : await resolveExecutable(terminalPlan.command, terminalPlan.env);
+    bridgeOutput?.info(
+      `[终端] 正在启动 ${mount.name}；通道=${useBuiltinSsh ? 'ssh2' : '系统 SSH'}；cwd=${remoteCwd ?? remoteRoot}`
     );
+    if (!useBuiltinSsh) {
+      bridgeOutput?.debug(
+        `[终端] 启动命令：$ ${
+          redactSensitiveText(planDisplayName({ ...plan, command: resolvedTerminalCommand }))
+        }`
+      );
+    }
     const terminalStartedAt = performance.now();
     let builtinPty: import('./ssh2-terminal').Ssh2Terminal | undefined;
     const terminal = useBuiltinSsh
@@ -4076,11 +4080,9 @@ async function executeRemoteCommand(
       : undefined;
     try {
       let result;
-      const configuredSystemSsh = await systemSshUsesConfiguredRoute(
-        resolved.hostConfig, platformAdapter.kind
-      );
+      const importedSshConfig = resolved.hostConfig.source === 'ssh-config';
       let useSystemSsh = selectSshTransport(
-        platformAdapter.kind, resolved.hostConfig, configuredSystemSsh
+        platformAdapter.kind, resolved.hostConfig
       ) === 'system';
       if (!useSystemSsh) {
         bridgeOutput?.appendLine(
@@ -4123,7 +4125,7 @@ async function executeRemoteCommand(
           await verifyCurrentSystemSshHostKey();
         }
         const plan = platformAdapter.exec(resolved.hostConfig, remoteCwd, input.command, {
-          respectSshConfig: configuredSystemSsh,
+          respectSshConfig: importedSshConfig,
           reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
           bridgeConfigPath: configPath(),
           hostKeyPolicy,
@@ -6366,7 +6368,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   pool = new SftpConnectionPool(
     async (hostName, signal) => {
       const host = await resolvedHost(context, hostName);
-      const configuredSystemSsh = await systemSshUsesConfiguredRoute(host, platformAdapter.kind);
+      const importedSshConfig = host.source === 'ssh-config';
       const connectWithSystemSsh = async (reason: string): Promise<SftpSession> => {
         const hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
           'hostKeyChangedAction', 'prompt'
@@ -6382,7 +6384,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await warmSshCliCapabilities();
         bridgeOutput?.appendLine(`[SFTP] ${host.name} ${reason}`);
         const connectionOptions: import('./platform').ConnectionOptions = {
-          respectSshConfig: configuredSystemSsh,
+          respectSshConfig: importedSshConfig,
           reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
           bridgeConfigPath: configPath(), hostKeyPolicy,
           ...(hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
@@ -6402,9 +6404,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       };
       let session: SftpSession;
-      if (selectSshTransport(platformAdapter.kind, host, configuredSystemSsh) === 'system') {
-        session = await connectWithSystemSsh('连接配置要求使用系统 SSH/SFTP');
+      if (selectSshTransport(platformAdapter.kind, host) === 'system') {
+        session = await connectWithSystemSsh(importedSshConfig
+          ? 'SSH config 导入配置，使用系统 SSH/SFTP'
+          : 'WSL VPN 配置，使用系统 SSH/SFTP');
       } else {
+        bridgeOutput?.appendLine(`[SFTP] ${host.name} SAFS 手动配置，使用内置 ssh2`);
         try {
           session = await connectSftp(
             host, platformAdapter.kind === 'wsl', signal,

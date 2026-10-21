@@ -14,7 +14,6 @@ import { createPlatformAdapter, PlatformKind } from './platform';
 import { resolveExecutable } from './process';
 import { ensureSshCapabilities } from './ssh-algorithms';
 import { sshBridgePath } from './wsl-bridge';
-import { needsOpenSshAuthentication } from './ssh-transport';
 
 /**
  * 系统 ssh 路径（WSL/Linux/macOS/Windows 非内置通道）的主机密钥校验：
@@ -137,32 +136,6 @@ export function requiresConfiguredSshProbe(config: string, host: HostConfig): bo
     return ((key === 'proxyjump' || key === 'proxycommand') && value !== 'none' && value !== '')
       || (key === 'hostname' && value.toLowerCase() !== host.ip.toLowerCase());
   });
-}
-
-/** Let OpenSSH interpret Include/Match, proxy and authentication configuration. */
-export async function systemSshUsesConfiguredRoute(
-  host: HostConfig, platformKind: PlatformKind, configFile?: string
-): Promise<boolean> {
-  if (platformKind === 'wsl' && host.vpn) return false;
-  try {
-    const ssh = await resolveExecutable('ssh');
-    await ensureSshCapabilities(ssh);
-    const args = createPlatformAdapter(platformKind === 'wsl' ? 'linux' : platformKind)
-      .terminal(host, undefined, { respectSshConfig: true }).args;
-    const { stdout } = await execFileAsync(ssh, ['-G', ...(configFile ? ['-F', configFile] : []), ...args],
-      { timeout: 5000, windowsHide: true });
-    if (requiresConfiguredSshProbe(stdout, host)) return true;
-    const nullFile = process.platform === 'win32' ? 'NUL' : '/dev/null';
-    const { stdout: defaults } = await execFileAsync(ssh, ['-G', '-F', nullFile, ...args],
-      { timeout: 5000, windowsHide: true });
-    return needsOpenSshAuthentication(stdout, defaults, host, Boolean(process.env.SSH_AUTH_SOCK));
-  } catch (error) {
-    // A missing OpenSSH must not disable otherwise-working built-in SSH.
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    const detail = (error as { stderr?: string }).stderr
-      || (error instanceof Error ? error.message : String(error));
-    throw new Error(`无法读取系统 SSH 配置：${detail}`, { cause: error });
-  }
 }
 
 /**

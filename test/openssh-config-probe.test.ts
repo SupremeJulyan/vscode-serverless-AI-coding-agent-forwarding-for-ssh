@@ -8,7 +8,7 @@ import { connect } from 'node:net';
 import test from 'node:test';
 import { Server } from 'ssh2';
 import { parseSshVersion } from '../src/ssh-algorithms';
-import { probeConfiguredSshHostKey, requiresConfiguredSshProbe, systemSshUsesConfiguredRoute } from '../src/system-ssh-host-key';
+import { probeConfiguredSshHostKey, requiresConfiguredSshProbe } from '../src/system-ssh-host-key';
 
 const host = { name: 'route', ip: 'safs-test-route', user: 'alice', port: 22 };
 
@@ -63,12 +63,16 @@ test('probes configured routes without credentials or target sessions, including
   await writeFile(config, `Host safs-test-route\n HostName unreachable.invalid\n ProxyCommand ${proxyCommand}\n`);
   const kind = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
   const result = await probeConfiguredSshHostKey(host, kind, undefined, config);
-  assert.equal(await systemSshUsesConfiguredRoute(host, kind, config), true);
   assert.equal(result.probed, true, result.error);
   assert.equal(result.keys?.length, 1);
   assert.match(result.fingerprints[0], /^SHA256:/);
   assert.ok(authentications.every(method => method === 'none'));
   assert.equal(sessions, 0);
+
+  await writeFile(config, `Match host safs-test-route\n ProxyCommand ${proxyCommand}\n`);
+  const viaMatch = await probeConfiguredSshHostKey(host, kind, undefined, config);
+  assert.equal(viaMatch.probed, true, viaMatch.error);
+  assert.deepEqual(viaMatch.fingerprints, result.fingerprints);
 
   // Windows 7.7's implicit ProxyJump subprocess cannot locate ssh.exe.
   // ProxyCommand above still exercises the probe on that actual old client.
@@ -76,6 +80,13 @@ test('probes configured routes without credentials or target sessions, including
     t.diagnostic('Skipping implicit ProxyJump fixture on Windows OpenSSH 7.7; ProxyCommand probe passed');
     return;
   }
+
+  const include = path.join(directory, 'included-config');
+  await writeFile(include, `Host safs-test-route\n HostName unreachable.invalid\n ProxyCommand ${proxyCommand}\n`);
+  await writeFile(config, `Include ${quote(include)}\n`);
+  const viaInclude = await probeConfiguredSshHostKey(host, kind, undefined, config);
+  assert.equal(viaInclude.probed, true, viaInclude.error);
+  assert.deepEqual(viaInclude.fingerprints, result.fingerprints);
 
   let forwarded = false;
   const jump = new Server({ hostKeys: [key] }, client => {
@@ -104,7 +115,6 @@ test('probes configured routes without credentials or target sessions, including
   const jumpConfig = path.join(jumpDirectory, 'config');
   await writeFile(jumpConfig, `Host safs-test-route\n HostName 127.0.0.1\n ProxyJump safs-test-jump\nHost safs-test-jump\n HostName 127.0.0.1\n Port ${jumpPort}\n User alice\n StrictHostKeyChecking no\n UserKnownHostsFile ${process.platform === 'win32' ? 'NUL' : '/dev/null'}\n`);
   const viaJump = await probeConfiguredSshHostKey({ ...host, port }, kind, undefined, jumpConfig);
-  assert.equal(await systemSshUsesConfiguredRoute({ ...host, port }, kind, jumpConfig), true);
   assert.equal(viaJump.probed, true, viaJump.error);
   assert.equal(forwarded, true);
   assert.deepEqual(viaJump.fingerprints, result.fingerprints);
@@ -112,24 +122,16 @@ test('probes configured routes without credentials or target sessions, including
   assert.equal(sessions, 0);
 });
 
-test('OpenSSH applies Include and Match authentication settings, while malformed config remains an error', async t => {
+test('malformed OpenSSH config fails host-key probing instead of bypassing verification', async t => {
   try { execFileSync('ssh', ['-V'], { stdio: 'ignore' }); }
   catch { t.skip('OpenSSH is unavailable'); return; }
   const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-config-auth-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const include = path.join(directory, 'identities');
   const config = path.join(directory, 'config');
-  const target = { name: 'dev', ip: '127.0.0.1', user: 'alice', password: 'secret' };
+  const target = { name: 'dev', ip: '127.0.0.1', user: 'alice', source: 'ssh-config' as const };
   const kind = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
-  await writeFile(include, 'Host 127.0.0.1\n IdentityFile /keys/one\n IdentityFile /keys/two\n CertificateFile /keys/user-cert.pub\n');
-  // Older Windows OpenSSH interprets drive-letter Include paths as relative.
-  // Keep Match/malformed-config coverage there; newer clients also test Include.
-  if (!isLegacyWindowsSsh()) {
-    await writeFile(config, `Include "${include.replace(/\\/g, '/')}"\n`);
-    assert.equal(await systemSshUsesConfiguredRoute(target, kind, config), true);
-  }
-  await writeFile(config, 'Match host 127.0.0.1\n IdentitiesOnly yes\n');
-  assert.equal(await systemSshUsesConfiguredRoute(target, kind, config), true);
   await writeFile(config, 'Host *\n ThisIsNotAnSshDirective yes\n');
-  await assert.rejects(systemSshUsesConfiguredRoute(target, kind, config), /无法读取系统 SSH 配置/);
+  const result = await probeConfiguredSshHostKey(target, kind, undefined, config);
+  assert.equal(result.probed, false);
+  assert.match(result.error ?? '', /ThisIsNotAnSshDirective|Bad configuration option/i);
 });

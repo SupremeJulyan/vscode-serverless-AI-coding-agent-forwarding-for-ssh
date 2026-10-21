@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.3
+
+- SSH 通道统一按账号来源分流：SAFS 手动配置默认使用内置 ssh2，从 SSH config 导入且标记 `source: "ssh-config"` 的账号始终使用系统 SSH/SFTP；移除基于全局 SSH 配置、SSH agent 和凭据是否填写的通道推断。保留原有 WSL VPN 中继和实际连接失败后的兼容回退，连接日志明确显示所选通道。
+
 ## 2.1.2
 
 - 导入账号右键“打开配置”跳转到 `~/.ssh/config`；安装 Node.js 后提示完全退出所有 VS Code 窗口并重新打开。

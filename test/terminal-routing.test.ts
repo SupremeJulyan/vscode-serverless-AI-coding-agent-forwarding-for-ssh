@@ -37,9 +37,16 @@ test('key-only terminals (no password) use ssh2 on all platforms', () => {
 test('WSL VPN relay and explicit fallback keep system SSH', () => {
   assert.equal(shouldUseBuiltinSshTerminal('wsl', { ...passwordHost, vpn: true }), false);
   assert.equal(shouldUseBuiltinSshTerminal('linux', passwordHost, true), false);
-  assert.equal(shouldUseBuiltinSshTerminal('linux', {
-    ...passwordHost, password: undefined
-  }), false);
+});
+
+test('terminal routing follows config origin rather than the presence of credentials', () => {
+  for (const kind of ['windows', 'linux', 'macos', 'wsl'] as const) {
+    for (const host of [passwordHost, { ...passwordHost, password: undefined },
+      { ...passwordHost, password: undefined, private_key_path: '/keys/manual' }]) {
+      assert.equal(shouldUseBuiltinSshTerminal(kind, host), true);
+      assert.equal(shouldUseBuiltinSshTerminal(kind, { ...host, source: 'ssh-config' }), false);
+    }
+  }
 });
 
 test('falls back to system SSH for setup, authentication, and channel failures', () => {

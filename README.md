@@ -26,7 +26,9 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 4. 在已有主机旁点击 **＋**，可以继续追加账号。
 5. 首次连接时核对并确认服务器主机密钥指纹。
 
-SAFS 会自动扫描 `~/.ssh/config` 及其 `Include` 文件，并导入字面量 `Host` 条目的主机名、账号、端口和私钥。包含 `ProxyJump`、`ProxyCommand`、证书、SSH agent 或其他 OpenSSH 专属设置的连接，会由系统 OpenSSH 统一承载远程目录、终端和命令；通配符 `Host` 仅作为 OpenSSH 配置规则使用，不会单独出现在 SAFS 列表中。
+SAFS 会自动扫描 `~/.ssh/config` 及其 `Include` 文件，并导入字面量 `Host` 条目的主机名、账号、端口和私钥。导入账号自动标记 `source: "ssh-config"`，统一使用系统 SSH/SFTP，由 OpenSSH 处理代理、证书、SSH agent 等配置；通配符 `Host` 仅作为配置规则使用，不会单独出现在 SAFS 列表中。
+
+直接在 SAFS 中添加或手动写入 `~/.safs/config.json` 的账号默认使用内置 `ssh2`，不根据全局 SSH 配置、SSH agent 或是否填写密码/私钥推断通道。原有 WSL VPN 中继及实际连接失败后的兼容回退规则不变。
 
 配置保存在 `~/.safs/config.json`。一般使用界面添加即可；需要手动维护时，可运行 `SAFS: 打开配置`：
 

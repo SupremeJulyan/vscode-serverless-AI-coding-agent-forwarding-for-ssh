@@ -6,6 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/config';
+import { selectSshTransport } from '../src/ssh-transport';
 import {
   appendSshImportEntries, appendSshImports, discoverSshAliases, resolveSshImportEntry, startSshConfigImport
 } from '../src/ssh-config-import';
@@ -289,6 +290,11 @@ test('import provenance survives config saving without marking manual accounts',
   const restored = await loadConfig(target);
   assert.equal(restored.hosts.find(host => host.user === 'imported')?.source, 'ssh-config');
   assert.equal(restored.hosts.find(host => host.user === 'manual')?.source, undefined);
+  for (const host of restored.hosts) {
+    for (const platform of ['windows', 'linux', 'macos', 'wsl'] as const) {
+      assert.equal(selectSshTransport(platform, host), host.user === 'imported' ? 'system' : 'ssh2');
+    }
+  }
 });
 
 test('import fills an empty account placeholder instead of keeping a second empty account', () => {
