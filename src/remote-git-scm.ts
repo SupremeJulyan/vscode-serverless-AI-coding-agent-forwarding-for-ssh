@@ -49,6 +49,7 @@ export class RemoteGitScm implements vscode.Disposable {
   private discovering = false;
   private readonly failures = new Map<string, { message: string; retryAt: number }>();
   private disposed = false;
+  private refreshTimer?: ReturnType<typeof setTimeout>;
 
   /** 供历史视图复用同一批仓库实例（同一个 RemoteGit，避免重复发现）。 */
   repositoriesInUse(): { uri: vscode.Uri; name: string; git: RemoteGit; syncState?: GitSyncState; pendingChanges: number }[] {
@@ -221,9 +222,25 @@ export class RemoteGitScm implements vscode.Disposable {
       });
     });
     this.subscriptions.push(
-      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.refresh())
+      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.refresh()),
+      vscode.workspace.onDidSaveTextDocument(document => {
+        if (document.uri.scheme === 'safs') this.scheduleRefresh(200);
+      }),
+      vscode.window.onDidChangeWindowState(state => {
+        if (state.focused) this.scheduleRefresh(0);
+      })
     );
-    void this.refresh();
+    void this.refresh().finally(() => this.scheduleRefresh());
+  }
+
+  private scheduleRefresh(delay = 2000): void {
+    if (this.disposed) return;
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      const refresh = vscode.window.state.focused ? this.refresh() : Promise.resolve();
+      void refresh.finally(() => this.scheduleRefresh());
+    }, delay);
   }
 
   private async select(source?: vscode.SourceControl | vscode.Uri): Promise<Repository | undefined> {
@@ -364,6 +381,7 @@ export class RemoteGitScm implements vscode.Disposable {
   }
   dispose(): void {
     this.disposed = true;
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.subscriptions.forEach(subscription => subscription.dispose());
     this.repositories.forEach(repository => this.close(repository));
     this.repositories.clear();

@@ -29,6 +29,8 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   const localPulls: string[] = [];
   const localFetches: string[] = [];
   let contentProvider: any;
+  let saveDocument: (document: { uri: Uri }) => void;
+  let changeWindowState: (state: { focused: boolean }) => void;
   const rootA = new Uri('safs', '/placeholder/a');
   const rootB = new Uri('safs', '/placeholder/b');
   let status = 'MM file.txt\0A  added.txt\0D  deleted.txt\0R  renamed.txt\0original.txt\0UU conflict.txt\0';
@@ -55,10 +57,12 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   Object.assign(vscode.workspace, {
     workspaceFolders: [{ uri: rootA, name: 'A' }, { uri: rootB, name: 'B' }],
     registerTextDocumentContentProvider: (_scheme: string, provider: any) => { contentProvider = provider; return disposable(); },
-    onDidChangeWorkspaceFolders: disposable, onDidSaveTextDocument: disposable
+    onDidChangeWorkspaceFolders: disposable,
+    onDidSaveTextDocument: (listener: typeof saveDocument) => { saveDocument = listener; return disposable(); }
   });
   Object.assign(vscode.window, {
-    state: { focused: true }, onDidChangeWindowState: disposable,
+    state: { focused: true },
+    onDidChangeWindowState: (listener: typeof changeWindowState) => { changeWindowState = listener; return disposable(); },
     showErrorMessage: async (message: string) => { errors.push(message); },
     showWarningMessage: async (message: string) => { warnings.push(message); return '还原更改'; },
     // 历史视图标题栏没有输入框：提交走 showInputBox，多仓库时走 showQuickPick。
@@ -165,6 +169,30 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     await scm.refresh();
     assert.equal(a.disposed, true);
     assert.equal(b.disposed, false);
+    const waitForStatus = async (expected: string) => {
+      for (let attempt = 0; attempt < 300 && b.groups[1].resourceStates[0]?.change.path !== expected; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal(b.groups[1].resourceStates[0]?.change.path, expected);
+    };
+    const backgroundStart = executions.length;
+    status = ' M saved.txt\0';
+    saveDocument!({ uri: rootB.with({ path: `${rootB.path}/saved.txt` }) });
+    saveDocument!({ uri: rootB.with({ path: `${rootB.path}/saved.txt` }) });
+    await waitForStatus('saved.txt');
+    assert.equal(executions.slice(backgroundStart).filter(command => command.command.includes("'status'")).length, 1);
+    status = '?? external.txt\0';
+    await waitForStatus('external.txt');
+    vscode.window.state.focused = false;
+    status = ' M focused.txt\0';
+    const pausedStart = executions.length;
+    await new Promise(resolve => setTimeout(resolve, 2100));
+    assert.equal(executions.length, pausedStart);
+    vscode.window.state.focused = true;
+    changeWindowState!({ focused: true });
+    await waitForStatus('focused.txt');
+    assert.ok(executions.slice(backgroundStart).every(command =>
+      !command.command.includes("'symbolic-ref'") && !command.command.includes("'rev-list'")));
     assert.deepEqual(errors, []);
     assert.ok(metrics.length > 0);
   } finally { scm.dispose(); }
