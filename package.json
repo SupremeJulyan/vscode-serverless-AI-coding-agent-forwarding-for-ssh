@@ -999,7 +999,7 @@
     "@types/vscode": "^1.93.0",
     "@vscode/vsce": "^3.6.2",
     "esbuild": "^0.25.0",
-    "tsx": "^4.20.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.0"
   },
   "dependencies": {
