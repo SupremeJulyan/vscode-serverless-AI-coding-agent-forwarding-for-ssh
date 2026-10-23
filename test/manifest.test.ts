@@ -276,6 +276,7 @@ test('git commands keep short titles and group under the SAFS Git category', asy
   const git = (manifest.contributes?.commands ?? []).filter(item => item.command.startsWith('safs.git.'));
   // 面板按钮/菜单只显示 title，命令面板用 category 补前缀，所以标题里不再重复 "SAFS Git"。
   assert.deepEqual(git.map(item => [item.command, item.category, item.title]), [
+    ['safs.git.init', 'SAFS Git', '初始化远程仓库'],
     ['safs.git.refresh', 'SAFS Git', '刷新'],
     ['safs.git.branch', 'SAFS Git', '分支'],
     ['safs.git.switchBranch', 'SAFS Git', '切换分支'],

@@ -32,6 +32,7 @@ function looksLikeRemotePath(candidate: string): boolean {
   // Let VS Code's normal URL provider handle URI schemes instead of treating
   // their path portions as files on the active SSH host.
   if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(candidate)) return false;
+  if (candidate === '~' || candidate.startsWith('~/')) return true;
   if (candidate.startsWith('/') || candidate.startsWith('./')
     || candidate.startsWith('../')) return true;
   if (candidate.includes('/')) return true;
@@ -83,9 +84,19 @@ export function findRemoteTerminalPaths(line: string): RemoteTerminalPathMatch[]
 }
 
 /** Resolve a terminal path without allowing POSIX `..` segments to remain. */
-export function resolveRemoteTerminalPath(candidate: string, remoteCwd: string): string {
+export function resolveRemoteTerminalPath(
+  candidate: string, remoteCwd: string, remoteHome?: string
+): string {
   if (!path.posix.isAbsolute(remoteCwd)) {
     throw new Error(`Remote terminal cwd must be absolute: ${remoteCwd}`);
+  }
+  if (candidate === '~' || candidate.startsWith('~/')) {
+    if (!remoteHome || !path.posix.isAbsolute(remoteHome)) {
+      throw new Error(`Remote home must be absolute when resolving ${candidate}`);
+    }
+    return candidate === '~'
+      ? path.posix.normalize(remoteHome)
+      : path.posix.resolve(remoteHome, candidate.slice(2));
   }
   return candidate.startsWith('/')
     ? path.posix.normalize(candidate)
