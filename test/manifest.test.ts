@@ -288,8 +288,8 @@ test('git commands keep short titles and group under the SAFS Git category', asy
     ['safs.git.unstage', 'SAFS Git', '取消暂存'],
     ['safs.git.discard', 'SAFS Git', '还原更改'],
     ['safs.git.commit', 'SAFS Git', '提交'],
-    ['safs.git.fetch', 'SAFS Git', '提取'],
-    ['safs.git.pull', 'SAFS Git', '拉取（仅快进）'],
+    ['safs.git.fetch', 'SAFS Git', '提取 (Fetch)'],
+    ['safs.git.pull', 'SAFS Git', '拉取 (Pull)（仅快进）'],
     ['safs.git.push', 'SAFS Git', '推送'],
     ['safs.git.refreshHistory', 'SAFS Git', '刷新历史'],
     ['safs.git.copyCommitId', 'SAFS Git', '复制提交 ID']
