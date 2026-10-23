@@ -444,16 +444,6 @@
           "group": "navigation@0"
         },
         {
-          "command": "safs.git.commit",
-          "when": "view == safs.gitHistory",
-          "group": "navigation@1"
-        },
-        {
-          "command": "safs.git.branch",
-          "when": "view == safs.gitHistory",
-          "group": "navigation@2"
-        },
-        {
           "command": "safs.git.fetch",
           "when": "view == safs.gitHistory",
           "group": "remote"
@@ -597,7 +587,7 @@
         {
           "command": "safs.git.branch",
           "when": "scmProvider == safs-git",
-          "group": "navigation@2"
+          "group": "3_checkout@1"
         },
         {
           "command": "safs.git.commit",
@@ -620,7 +610,34 @@
           "group": "remote"
         }
       ],
+      "scm/resourceGroup/context": [
+        {
+          "command": "safs.git.stage",
+          "when": "scmProvider == safs-git && scmResourceGroup != index",
+          "group": "inline@1"
+        },
+        {
+          "command": "safs.git.unstage",
+          "when": "scmProvider == safs-git && scmResourceGroup == index",
+          "group": "inline@1"
+        }
+      ],
       "scm/resourceState/context": [
+        {
+          "command": "safs.git.stage",
+          "when": "scmProvider == safs-git && scmResourceGroup != index",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "safs.git.unstage",
+          "when": "scmProvider == safs-git && scmResourceGroup == index",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "safs.git.discard",
+          "when": "scmProvider == safs-git && scmResourceGroup == working",
+          "group": "1_modification@2"
+        },
         {
           "command": "safs.git.stage",
           "when": "scmProvider == safs-git && scmResourceGroup != index",
