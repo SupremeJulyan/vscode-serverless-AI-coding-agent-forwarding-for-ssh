@@ -346,14 +346,20 @@
         {
           "id": "safs.gitHistory",
           "name": "SAFS Git View",
-          "contextualTitle": "SAFS Git View"
+          "contextualTitle": "SAFS Git View",
+          "visibility": "visible"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "safs.gitHistory",
-        "contents": "尚未打开远程 Git 仓库。\n[初始化远程 Git 仓库](command:safs.git.init)\n[克隆 Git 仓库](command:safs.cloneGitRepository)\n[添加远程 Git 目录](command:safs.addRemoteDirectory)"
+        "contents": "[初始化远程 Git 仓库](command:safs.git.init)",
+        "when": "safs.hasRemoteWorkspace"
+      },
+      {
+        "view": "safs.gitHistory",
+        "contents": "尚未打开远程 Git 仓库。\n[克隆 Git 仓库](command:safs.cloneGitRepository)\n[添加远程 Git 目录](command:safs.addRemoteDirectory)"
       },
       {
         "view": "safs.mounts",
