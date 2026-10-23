@@ -291,13 +291,13 @@
       {
         "command": "safs.git.fetch",
         "category": "SAFS Git",
-        "title": "提取",
+        "title": "提取 (Fetch)",
         "icon": "$(cloud-download)"
       },
       {
         "command": "safs.git.pull",
         "category": "SAFS Git",
-        "title": "拉取（仅快进）",
+        "title": "拉取 (Pull)（仅快进）",
         "icon": "$(arrow-down)"
       },
       {
