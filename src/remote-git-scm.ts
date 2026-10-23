@@ -16,6 +16,7 @@ interface Repository {
   working: vscode.SourceControlResourceGroup;
   conflicts: vscode.SourceControlResourceGroup;
   queue: Promise<unknown>;
+  pendingOperations?: number;
   disposed: boolean;
   revision: number;
   syncState?: GitSyncState;
@@ -169,6 +170,12 @@ export class RemoteGitScm implements vscode.Disposable {
     });
     for (const action of ['stage', 'unstage'] as const) {
       command(action, async (...resources: Resource[]) => {
+        resources = resources.flatMap(resource => {
+          if (resource && 'resourceStates' in resource) {
+            return (resource as unknown as vscode.SourceControlResourceGroup).resourceStates as Resource[];
+          }
+          return [resource];
+        });
         const groups = new Map<Repository, GitChange[]>();
         for (const resource of resources) {
           if (!resource?.repository || !resource.change) continue;
@@ -241,7 +248,7 @@ export class RemoteGitScm implements vscode.Disposable {
         if (!message.trim()) return;
       }
       await this.enqueue(repository, async () => {
-        await this.update(repository);
+        await this.update(repository, false);
         if (repository.conflicts.resourceStates.length) throw new Error('请先解决并暂存冲突。');
         if (!repository.index.resourceStates.length) throw new Error('请先暂存需要提交的更改。');
         await repository.git.commit(message);
@@ -284,7 +291,11 @@ export class RemoteGitScm implements vscode.Disposable {
   }
 
   private enqueue(repository: Repository, operation: () => Promise<void>): Promise<void> {
-    const next = repository.queue.then(async () => { if (!repository.disposed) await operation(); });
+    repository.pendingOperations = (repository.pendingOperations ?? 0) + 1;
+    const next = repository.queue.then(async () => {
+      try { if (!repository.disposed) await operation(); }
+      finally { repository.pendingOperations!--; }
+    });
     repository.queue = next.catch(() => {});
     return next;
   }
@@ -330,7 +341,9 @@ export class RemoteGitScm implements vscode.Disposable {
           // Existing repositories refresh their sync state only for an explicit
           // user refresh. A newly discovered repository still performs a full
           // update because it has no sync state yet.
-          await this.enqueue(repository, () => this.update(repository!, interactive));
+          if (interactive || !repository.pendingOperations) {
+            await this.enqueue(repository, () => this.update(repository!, interactive));
+          }
           this.failures.delete(key);
         } catch (error) {
           const message = `${folder.name}: ${error instanceof Error ? error.message : String(error)}`;

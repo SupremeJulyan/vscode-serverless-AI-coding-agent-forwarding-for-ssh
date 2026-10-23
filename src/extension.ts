@@ -4184,6 +4184,15 @@ async function removeRemoteGitTemporaries(session: SftpSession, paths: string[])
 }
 
 async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Promise<void> {
+  const head = await git.probe(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+  if (!head) throw new Error('当前仓库尚无提交，请先暂存文件并创建首次提交后再推送。');
+  if ((await git.status()).length) {
+    const proceed = await vscode.window.showWarningMessage(
+      '当前仓库有未提交的更改，推送仅包含已有提交。请先提交需要一起推送的更改。',
+      { modal: true }, '仅推送已有提交'
+    );
+    if (proceed !== '仅推送已有提交') return;
+  }
   const location = parseRemoteUri(uri.toString());
   const { folder } = await mountAndFolder(location.mountName);
   const remoteCwd = remotePathForUri(folder, location.remotePath);

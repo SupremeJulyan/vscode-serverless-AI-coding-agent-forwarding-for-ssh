@@ -257,17 +257,15 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   await assert.rejects(access(new URL('../src/agent-mcp-registry.ts', import.meta.url)));
 });
 
-test('the history view title bar offers the same Git actions', async () => {
+test('the history view keeps refresh and remote actions without duplicate editing actions', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
   const titles = (manifest.contributes?.menus?.['view/title'] ?? [])
     .filter(item => item.when === 'view == safs.gitHistory');
-  // 与源代码管理面板一致的布局：刷新/提交常驻，提取/拉取/推送收在 ... 里。
+  // 历史面板保留刷新，提交和分支操作放在源代码管理面板。
   assert.deepEqual(titles, [
     { command: 'safs.git.refreshHistory', when: 'view == safs.gitHistory', group: 'navigation@0' },
-    { command: 'safs.git.commit', when: 'view == safs.gitHistory', group: 'navigation@1' },
-    { command: 'safs.git.branch', when: 'view == safs.gitHistory', group: 'navigation@2' },
     { command: 'safs.git.fetch', when: 'view == safs.gitHistory', group: 'remote' },
     { command: 'safs.git.pull', when: 'view == safs.gitHistory', group: 'remote' },
     { command: 'safs.git.push', when: 'view == safs.gitHistory', group: 'remote' }
