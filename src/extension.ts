@@ -6840,6 +6840,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Restore workspaces on startup
   await guard(restoreRemoteWorkspaces);
   await guard(restoreSyncedLocalWorkspaceTerminal);
+  const refreshRemoteWorkspaceContext = () => vscode.commands.executeCommand(
+    'setContext', 'safs.hasRemoteWorkspace',
+    (vscode.workspace.workspaceFolders ?? []).some(
+      folder => folder.uri.scheme === remoteFileSystemScheme
+    )
+  );
+  await refreshRemoteWorkspaceContext();
   const gitScm = new RemoteGitScm(async (uri) => {
     const location = parseRemoteUri(uri.toString());
     const { folder } = await mountAndFolder(location.mountName);
@@ -6910,6 +6917,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }));
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void refreshRemoteWorkspaceContext();
       void updateSyncStatusBar().catch((error) =>
         logAsyncFailure('同步状态栏刷新失败', error)
       );
