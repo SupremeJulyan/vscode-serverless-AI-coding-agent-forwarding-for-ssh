@@ -46,6 +46,28 @@ test('resolves paths against the remote terminal cwd', () => {
   assert.throws(() => resolveRemoteTerminalPath('a.ts', 'relative/cwd'), /must be absolute/);
 });
 
+test('resolves tilde paths against the remote login home, not the terminal cwd', () => {
+  assert.deepEqual(findRemoteTerminalPaths('~/gg_test_app/gperftools/'), [
+    { startIndex: 0, length: 25, path: '~/gg_test_app/gperftools/' }
+  ]);
+  assert.equal(
+    resolveRemoteTerminalPath(
+      '~/gg_test_app/gperftools/',
+      '/home/share/zhuyuan/c2_tests/batch_1/AF3_test/HW_TESTS/37aa2JO9',
+      '/home/share/zhuyuan'
+    ),
+    '/home/share/zhuyuan/gg_test_app/gperftools'
+  );
+  assert.equal(
+    resolveRemoteTerminalPath('~', '/home/share/zhuyuan/c2_tests', '/home/share/zhuyuan'),
+    '/home/share/zhuyuan'
+  );
+  assert.throws(
+    () => resolveRemoteTerminalPath('~/file.txt', '/srv/project'),
+    /Remote home must be absolute/
+  );
+});
+
 test('accepts an authority-less file URI cwd reported by a remote shell', () => {
   assert.equal(
     resolveRemoteTerminalCwdReport(

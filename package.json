@@ -69,6 +69,11 @@
   "contributes": {
     "commands": [
       {
+        "command": "safs.git.init",
+        "title": "初始化远程仓库",
+        "category": "SAFS Git"
+      },
+      {
         "command": "safs.openFolder",
         "title": "SAFS：打开远程目录",
         "icon": "$(remote-explorer)"
@@ -348,7 +353,7 @@
     "viewsWelcome": [
       {
         "view": "safs.gitHistory",
-        "contents": "尚未打开远程 Git 仓库。\n[克隆 Git 仓库](command:safs.cloneGitRepository)\n[添加远程 Git 目录](command:safs.addRemoteDirectory)"
+        "contents": "尚未打开远程 Git 仓库。\n[初始化远程 Git 仓库](command:safs.git.init)\n[克隆 Git 仓库](command:safs.cloneGitRepository)\n[添加远程 Git 目录](command:safs.addRemoteDirectory)"
       },
       {
         "view": "safs.mounts",

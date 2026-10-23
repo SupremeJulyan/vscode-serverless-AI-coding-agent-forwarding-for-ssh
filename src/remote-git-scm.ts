@@ -87,6 +87,35 @@ export class RemoteGitScm implements vscode.Disposable {
       }));
     };
     command('refresh', async () => this.refresh(true));
+    command('init', async () => {
+      const folders = (vscode.workspace.workspaceFolders ?? [])
+        .filter(folder => folder.uri.scheme === 'safs');
+      const folder = folders.length === 1 ? folders[0] : await vscode.window.showQuickPick(
+        folders.map(folder => ({ label: folder.name, description: folder.uri.path, folder })),
+        { placeHolder: '选择要初始化 Git 仓库的远程工作区' }
+      ).then(selected => selected?.folder);
+      if (!folder) return;
+      const git = new RemoteGit(await this.runner(folder.uri), this.log);
+      await git.run(['init']);
+      await this.refresh(true);
+      const name = await vscode.window.showInputBox({
+        title: '配置远程仓库提交身份（1/2）', prompt: 'Git 用户名，仅保存到当前远程仓库',
+        value: await git.config('user.name') ?? '',
+        validateInput: value => value.trim() ? undefined : '请输入 Git 用户名'
+      });
+      if (name !== undefined) {
+        const email = await vscode.window.showInputBox({
+          title: '配置远程仓库提交身份（2/2）', prompt: 'Git 邮箱，仅保存到当前远程仓库',
+          value: await git.config('user.email') ?? '',
+          validateInput: value => /^[^\s@]+@[^\s@]+$/.test(value.trim()) ? undefined : '请输入有效邮箱'
+        });
+        if (email !== undefined) {
+          await git.run(['config', '--local', 'user.name', name.trim()]);
+          await git.run(['config', '--local', 'user.email', email.trim()]);
+        }
+      }
+      void vscode.window.showInformationMessage(`SAFS：已在远程工作区 ${folder.name} 初始化 Git 仓库。`);
+    });
     command('openChange', async (resource: Resource) => this.openChange(resource));
     command('branch', async (source?: vscode.SourceControl | vscode.Uri) => {
       const selected = await vscode.window.showQuickPick([

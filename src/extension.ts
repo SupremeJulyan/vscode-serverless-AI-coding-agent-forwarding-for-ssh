@@ -6,7 +6,7 @@ import { createRemoteGitBundle } from './remote-git-bundle';
 import {
   applySuccessfulPushReceipt, recordSuccessfulPush, localGitRunner, pushReceiptKey,
   pushThroughLocalGit, resolvePushTarget, resolveShallowBoundaries,
-  successfulPushReceipt, SuccessfulPushReceipt
+  successfulPushReceipt, SuccessfulPushReceipt, validatePushUrl
 } from './local-git-push';
 import {
   pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget,
@@ -741,7 +741,9 @@ function provideSafsTerminalLinks(
       ? remoteCwd
       : folder.remoteRoot;
   return findRemoteTerminalPaths(context.line).map((match) => {
-    const remotePath = resolveRemoteTerminalPath(match.path, remoteCwd);
+    const remotePath = resolveRemoteTerminalPath(
+      match.path, remoteCwd, folder.defaultRemotePath
+    );
     const insideRoot = isRemotePathInsideRoot(folder.remoteRoot, remotePath);
     return {
       startIndex: match.startIndex,
@@ -4186,6 +4188,20 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
   const { folder } = await mountAndFolder(location.mountName);
   const remoteCwd = remotePathForUri(folder, location.remotePath);
   const configuration = vscode.workspace.getConfiguration('safs', uri);
+  if (!configuration.get<string>('git.pushUrl', '').trim()
+    && !(await git.run(['remote'])).trim()) {
+    const url = await vscode.window.showInputBox({
+      title: '配置远程 Git 地址',
+      prompt: '当前仓库尚未配置远程地址，输入后保存为 origin 并继续推送',
+      placeHolder: 'https://github.com/owner/repository.git 或 git@github.com:owner/repository.git',
+      validateInput: value => {
+        try { validatePushUrl(value.trim()); return undefined; }
+        catch { return '请输入有效的 HTTPS 或 SSH Git 仓库地址'; }
+      }
+    });
+    if (url === undefined) return;
+    await git.run(['remote', 'add', 'origin', url.trim()]);
+  }
   const target = await resolvePushTarget(git, configuration.get<string>('git.pushUrl', '').trim() || undefined);
   // 浅克隆的远端只能打出到边界提交为止的 bundle：先问远端要边界，本地照样声明。
   const shallowBoundaries = await resolveShallowBoundaries(git, `refs/heads/${target.branch}`);
