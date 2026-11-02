@@ -560,3 +560,74 @@ test('verifySystemSshHostKey does not write the file when the key is refused', a
   assert.equal(result.ok, false);
   await assert.rejects(readFile(file, 'utf8'));
 });
+
+for (const known of [false, true]) {
+  test(`macOS concurrent host verification prompts once (${known ? 'load-balanced' : 'first connection'})`, async () => {
+    const { file } = tempKnownHosts();
+    const host = hostAt(3020);
+    setKnownHostsFilePath(file);
+    if (known) await writeFile(file, lineFor(host, 'ssh-ed25519', blobA) + '\n');
+    let count = 0;
+    const confirm = async () => {
+      count++;
+      // Keep the dialog open long enough for all connections to reach verification.
+      await new Promise(resolve => setTimeout(resolve, 30));
+      return 'accept' as const;
+    };
+    const prompts = { firstConnection: confirm, changed: confirm };
+    const blobs = known ? [blobB, blobC, blobB, blobC] : [blobB, blobB, blobB, blobB];
+    const results = await Promise.all(blobs.map(blob => verifySystemSshHostKey(
+      'prompt', host, 'macos', undefined, async () => ({
+        probed: true,
+        fingerprints: [sha256Fingerprint(Buffer.from(blob, 'base64'))],
+        keys: [{ host: hostEntryName(host), type: 'ssh-ed25519', blob }]
+      }), prompts
+    )));
+    assert.ok(results.every(result => result.ok));
+    assert.equal(count, 1);
+    for (const blob of blobs) {
+      assert.ok((await readTrustedFingerprints(file, host)).includes(
+        sha256Fingerprint(Buffer.from(blob, 'base64'))
+      ));
+    }
+  });
+}
+
+test('mixed-case host identities reuse legacy keys and load-balanced markers', async () => {
+  const { file } = tempKnownHosts();
+  const host = { ...hostAt(2222), ip: 'My-Cluster' };
+  const legacyEntry = '[My-Cluster]:2222';
+  const marker = '# SAFS_LOAD_BALANCED ' + Buffer.from(legacyEntry).toString('base64url');
+  await writeFile(file, `${marker}\n${legacyEntry} ssh-ed25519 ${blobA}\n`);
+  setKnownHostsFilePath(file);
+  assert.equal(hostEntryName(host), '[my-cluster]:2222');
+  assert.deepEqual(hostEntryNames(host), ['[my-cluster]:2222', 'my-cluster']);
+  assert.deepEqual(await readTrustedFingerprints(file, host), [
+    sha256Fingerprint(Buffer.from(blobA, 'base64'))
+  ]);
+  assert.equal(await isLoadBalancedKnownHost(file, host), true);
+  const noPrompts = {
+    firstConnection: async () => { throw new Error('must reuse legacy trust'); },
+    changed: async () => { throw new Error('must reuse load-balanced preference'); }
+  };
+  assert.equal(await verifyHostKeyWithPrompt(host,
+    [sha256Fingerprint(Buffer.from(blobB, 'base64'))], undefined, noPrompts), 'append');
+  await replaceKnownHostsForHost(file, host, [
+    { host: hostEntryName(host), type: 'ssh-ed25519', blob: blobB }
+  ]);
+  assert.equal(await isLoadBalancedKnownHost(file, host), false);
+  assert.deepEqual(await readTrustedFingerprints(file, host), [
+    sha256Fingerprint(Buffer.from(blobB, 'base64'))
+  ]);
+});
+test('imported aliases never probe or prompt through SAFS, regardless of its host-key policy', async () => {
+  for (const action of ['prompt', 'accept', 'reject'] as const) {
+    const result = await verifySystemSshHostKey(action,
+      { ...hostAt(22), source: 'ssh-config' }, 'macos', undefined,
+      async () => { throw new Error('must not open a separate probe connection'); }, {
+        firstConnection: async () => { throw new Error('must not prompt'); },
+        changed: async () => { throw new Error('must not prompt'); }
+      });
+    assert.deepEqual(result, { ok: true });
+  }
+});

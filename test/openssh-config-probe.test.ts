@@ -8,7 +8,10 @@ import { connect } from 'node:net';
 import test from 'node:test';
 import { Server } from 'ssh2';
 import { parseSshVersion } from '../src/ssh-algorithms';
-import { probeConfiguredSshHostKey, requiresConfiguredSshProbe } from '../src/system-ssh-host-key';
+import { createPlatformAdapter } from '../src/platform';
+import { executeCaptured } from '../src/process';
+import { setKnownHostsFilePath } from '../src/host-key';
+import { probeConfiguredSshHostKey, requiresConfiguredSshProbe, verifySystemSshHostKey } from '../src/system-ssh-host-key';
 
 const host = { name: 'route', ip: 'safs-test-route', user: 'alice', port: 22 };
 
@@ -74,6 +77,24 @@ test('probes configured routes without credentials or target sessions, including
   assert.equal(viaMatch.probed, true, viaMatch.error);
   assert.deepEqual(viaMatch.fingerprints, result.fingerprints);
 
+  // OpenSSH lowercases HostKeyAlias before writing known_hosts. Repeated
+  // sequential connections must recognize that entry even for mixed-case aliases.
+  for (const identityPort of [22, 2222]) {
+    const mixedCaseHost = { ...host, ip: 'SAFS-Test-Route', port: identityPort };
+    setKnownHostsFilePath(path.join(directory, `trusted-keys-${identityPort}`));
+    let confirmations = 0;
+    const confirm = async () => { confirmations++; return 'accept' as const; };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const verified = await verifySystemSshHostKey(
+        'prompt', mixedCaseHost, kind, undefined,
+        () => probeConfiguredSshHostKey(mixedCaseHost, kind, undefined, config),
+        { firstConnection: confirm, changed: confirm }
+      );
+      assert.equal(verified.ok, true, verified.reason);
+    }
+    assert.equal(confirmations, 1, 'sequential connections must reuse the saved trust');
+  }
+
   // Windows 7.7's implicit ProxyJump subprocess cannot locate ssh.exe.
   // ProxyCommand above still exercises the probe on that actual old client.
   if (isLegacyWindowsSsh()) {
@@ -134,4 +155,63 @@ test('malformed OpenSSH config fails host-key probing instead of bypassing verif
   const result = await probeConfiguredSshHostKey(target, kind, undefined, config);
   assert.equal(result.probed, false);
   assert.match(result.error ?? '', /ThisIsNotAnSshDirective|Bad configuration option/i);
+});
+
+test('imported aliases reach rotating backends with one actual connection per command and no SAFS probes', { timeout: 20000 }, async t => {
+  try { execFileSync('ssh', ['-V'], { stdio: 'ignore' }); }
+  catch { t.skip('OpenSSH is unavailable'); return; }
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-native-alias-'));
+  const clients = new Set<any>();
+  const visits: number[] = [];
+  const servers = [0, 1].map(index => {
+    const key = generateKeyPairSync('rsa', { modulusLength: 2048,
+      privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+      publicKeyEncoding: { type: 'spki', format: 'pem' } }).privateKey;
+    return new Server({ hostKeys: [key] }, client => {
+      visits.push(index);
+      clients.add(client);
+      client.on('error', () => {});
+      client.on('close', () => clients.delete(client));
+      client.on('authentication', ctx => ctx.accept());
+      client.on('ready', () => client.on('session', accept => {
+        accept().on('exec', accept => {
+          const stream = accept();
+          stream.write(`backend-${index}`);
+          stream.exit(0);
+          stream.end();
+        });
+      }));
+    });
+  });
+  t.after(async () => {
+    for (const client of clients) client.end();
+    for (const server of servers) await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  });
+  for (const server of servers) await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ports = servers.map(server => (server.address() as { port: number }).port);
+  const counter = path.join(directory, 'counter');
+  const proxy = path.join(directory, 'proxy.cjs');
+  const config = path.join(directory, 'config');
+  await writeFile(counter, '0');
+  await writeFile(proxy, `const fs=require('fs');const file=process.argv[2];const n=Number(fs.readFileSync(file,'utf8'));fs.writeFileSync(file,String(n+1));const ports=${JSON.stringify(ports)};const s=require('net').connect(ports[n%2],'127.0.0.1');process.stdin.pipe(s).pipe(process.stdout);s.on('close',()=>process.exit());s.on('error',()=>process.exit(1));`);
+  const quote = (value: string) => '"' + value.replace(/\\/g, '/') + '"';
+  const executable = process.platform === 'win32'
+    ? execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${process.execPath}") do @echo %~sI`],
+      { encoding: 'utf8', windowsVerbatimArguments: true }).trim() : quote(process.execPath);
+  const nullFile = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  await writeFile(config, `Host cluster\n HostName unreachable.invalid\n User alice\n ProxyCommand ${executable} ${quote(proxy)} ${quote(counter)}\n StrictHostKeyChecking no\n UserKnownHostsFile ${nullFile}\n GlobalKnownHostsFile ${nullFile}\n`);
+  const imported = { name: 'cluster', ip: 'cluster', user: 'stale', source: 'ssh-config' as const };
+  const adapter = createPlatformAdapter(process.platform === 'win32' ? 'windows' : 'macos');
+  for (let index = 0; index < 4; index++) {
+    const verified = await verifySystemSshHostKey('prompt', imported, adapter.kind, undefined,
+      async () => { throw new Error('imported aliases must not pre-probe'); });
+    assert.equal(verified.ok, true);
+    const plan = adapter.exec(imported, '/', 'hostname');
+    plan.args.unshift('-F', config);
+    const result = await executeCaptured(plan);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.stdout, `backend-${index % 2}`);
+  }
+  assert.deepEqual(visits, [0, 1, 0, 1]);
 });

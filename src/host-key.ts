@@ -157,6 +157,28 @@ export function getKnownHostsFilePath(): string {
   return knownHostsFilePath;
 }
 
+// Serialize the whole read/prompt/write transaction, shared by system SSH and
+// ssh2. A file-write lock alone cannot stop concurrent connections prompting
+// before the first connection has persisted its decision.
+const hostTrustTransactions = new Map<string, Promise<void>>();
+
+export async function withHostKeyTrustTransaction<T>(
+  host: HostConfig, action: () => Promise<T>
+): Promise<T> {
+  const identity = JSON.stringify([knownHostsFilePath, hostEntryName(host).toLowerCase()]);
+  const previous = hostTrustTransactions.get(identity) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  hostTrustTransactions.set(identity, current);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (hostTrustTransactions.get(identity) === current) hostTrustTransactions.delete(identity);
+  }
+}
+
 /** 探测/记录到的服务器主机密钥行（OpenSSH known_hosts 格式：host type blob）。 */
 export interface ProbedHostKey {
   /** known_hosts 条目主机字段（`ip` 或 `[ip]:port`，与 ssh 连接参数一致）。 */
@@ -170,14 +192,18 @@ export interface ProbedHostKey {
 /** 该主机在 known_hosts 中的规范条目名（写入用）：port 22 → `ip`，否则 `[ip]:port`。 */
 export function hostEntryName(host: HostConfig): string {
   const port = host.port ?? 22;
-  if (port === 22) return host.ip;
-  return `[${host.ip}]:${port}`;
+  // OpenSSH canonicalizes HostKeyAlias to lowercase, including SSH config
+  // aliases. Use the same identity for probing, trust lookup and persistence.
+  const address = host.ip.toLowerCase();
+  if (port === 22) return address;
+  return `[${address}]:${port}`;
 }
 
 /** OpenSSH 对该连接实际会匹配的条目名。非标准端口也会回退检查裸主机名。 */
 export function hostEntryNames(host: HostConfig): string[] {
   const port = host.port ?? 22;
-  return port === 22 ? [host.ip] : [`[${host.ip}]:${port}`, host.ip];
+  const address = host.ip.toLowerCase();
+  return port === 22 ? [address] : [`[${address}]:${port}`, address];
 }
 
 /** OpenSSH 会忽略该注释；SAFS 用它持久记录用户确认过的负载节点地址。 */
@@ -186,11 +212,18 @@ function loadBalancedHostMarker(host: HostConfig): string {
   return `# SAFS_LOAD_BALANCED ${encoded}`;
 }
 
+/** Also recognize mixed-case markers written before identity normalization. */
+function isLoadBalancedHostMarker(line: string, host: HostConfig): boolean {
+  const match = /^# SAFS_LOAD_BALANCED ([A-Za-z0-9_-]+)$/.exec(line.trim());
+  return !!match && Buffer.from(match[1], 'base64url').toString('utf8').toLowerCase()
+    === hostEntryName(host);
+}
+
 /** 替换时额外清理旧版本写入、但 OpenSSH 不会匹配的方括号格式。 */
 function removableHostEntryNames(host: HostConfig): string[] {
   const port = host.port ?? 22;
   return [...new Set([
-    ...hostEntryNames(host), `[${host.ip}]`, `[${host.ip}]:${port}`
+    ...hostEntryNames(host), `[${host.ip.toLowerCase()}]`, `[${host.ip.toLowerCase()}]:${port}`
   ])];
 }
 
@@ -264,9 +297,8 @@ export async function appendLoadBalancedKnownHostsFile(
 export async function isLoadBalancedKnownHost(
   filePath: string, host: HostConfig
 ): Promise<boolean> {
-  const marker = loadBalancedHostMarker(host);
   const content = await readKnownHostsOrEmpty(filePath);
-  return content.split(/\r?\n/).some((line) => line.trim() === marker);
+  return content.split(/\r?\n/).some((line) => isLoadBalancedHostMarker(line, host));
 }
 
 /**
@@ -278,7 +310,6 @@ export async function replaceKnownHostsForHost(
   log?: (message: string) => void
 ): Promise<void> {
   const names = new Set(removableHostEntryNames(host));
-  const loadBalancedMarker = loadBalancedHostMarker(host);
   const entry = hostEntryName(host);
   const replacements = [...new Set(
     keys.map((key) => `${entry} ${key.type} ${key.blob}`)
@@ -287,9 +318,9 @@ export async function replaceKnownHostsForHost(
     const existing = await readKnownHostsOrEmpty(filePath);
     const kept = existing.split(/\r?\n/).filter((line) => {
       const trimmed = line.trim();
-      if (trimmed === loadBalancedMarker) return false;
+      if (isLoadBalancedHostMarker(trimmed, host)) return false;
       const match = /^(\S+)\s+/.exec(trimmed);
-      return !match || !names.has(match[1]);
+      return !match || !names.has(match[1].toLowerCase());
     });
     while (kept.length > 0 && kept[kept.length - 1] === '') kept.pop();
     await writeKnownHostsAtomically(
@@ -310,7 +341,7 @@ export async function readTrustedFingerprints(
   const fingerprints = new Set<string>();
   for (const line of content.split(/\r?\n/)) {
     const match = /^(\S+)\s+(\S+)\s+(\S+)\s*$/.exec(line.trim());
-    if (!match || !names.has(match[1])) continue;
+    if (!match || !names.has(match[1].toLowerCase())) continue;
     const encoded = match[3];
     // 严格 base64 校验：Node 的宽松解码会忽略非法字符，导致垃圾行被误判为密钥。
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) continue;
@@ -505,7 +536,7 @@ export function hostVerifierFor(
   });
   return (key, callback) => {
     const fingerprint = sha256Fingerprint(key);
-    void (async () => {
+    void withHostKeyTrustTransaction(host, async () => {
       const trusted = await trustedFingerprintsFor(host);
       if (trusted.includes(fingerprint)) {
         callback(true);
@@ -551,6 +582,9 @@ export function hostVerifierFor(
         }
       }
       callback(allowed);
-    })();
+    }).catch(error => {
+      warnStoreFailure(error);
+      callback(false);
+    });
   };
 }

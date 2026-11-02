@@ -219,6 +219,7 @@ const managedRemoteTerminals = new Map<vscode.Terminal, {
   remoteCwd: string;
   retryWithSystemSsh?: boolean;
   usesSystemSsh?: boolean;
+  importedSshConfig?: boolean;
   connectionError?: string;
   hostKeyRetries?: number;
   startedAt: number;
@@ -2839,6 +2840,7 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
     ? location.remotePath
     : reopen.remoteCwd;
   if (isOpenSshHostKeyVerificationFailure(diagnosticText)) {
+    if (reopen.importedSshConfig) return;
     const retry = reopen.hostKeyRetries ?? 0;
     if (retry < maxOpenSshHostKeyRetries) {
       bridgeOutput?.appendLine(
@@ -3022,7 +3024,7 @@ async function openTerminal(
     let hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
       'hostKeyChangedAction', 'prompt'
     );
-    if (!useBuiltinSsh && hostKeyPolicy === 'prompt') {
+    if (!useBuiltinSsh && !importedSshConfig && hostKeyPolicy === 'prompt') {
       const verification = await verifySystemSshHostKey(
         hostKeyPolicy, resolved.hostConfig, platformAdapter.kind,
         (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`),
@@ -3045,7 +3047,7 @@ async function openTerminal(
       bridgeMasterPassword: bridgePasswordEnv.WSL_VPN_MASTER_PASSWORD,
       bridgeConfigPath: configPath(),
       hostKeyPolicy,
-      ...(hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
+      ...(!importedSshConfig && hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
     });
     const resolvedTerminalCommand = useBuiltinSsh
       ? plan.command : await resolveExecutable(plan.command, plan.env);
@@ -3133,7 +3135,7 @@ async function openTerminal(
       });
     performanceLine(`${mount.name} SSH 终端创建（不含远端握手）`, terminalStartedAt);
     managedRemoteTerminals.set(terminal, {
-      mount, remoteCwd, pty: builtinPty, diagnostic, hostKeyRetries,
+      mount, remoteCwd, pty: builtinPty, diagnostic, hostKeyRetries, importedSshConfig,
       startedAt: Date.now(), usesSystemSsh: !useBuiltinSsh
     });
     if (credentials) {
@@ -4123,7 +4125,7 @@ async function executeRemoteCommand(
           );
           if (!verification.ok) throw new Error(verification.reason);
         };
-        if (hostKeyPolicy === 'prompt') {
+        if (!importedSshConfig && hostKeyPolicy === 'prompt') {
           await verifyCurrentSystemSshHostKey();
         }
         const plan = platformAdapter.exec(resolved.hostConfig, remoteCwd, input.command, {
@@ -4132,7 +4134,7 @@ async function executeRemoteCommand(
           bridgeConfigPath: configPath(),
           hostKeyPolicy,
           outputMarker,
-          ...(hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
+          ...(!importedSshConfig && hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
         });
         plan.env = {
           ...plan.env,
@@ -4142,7 +4144,7 @@ async function executeRemoteCommand(
         const runSystemSsh = () => executeAgentMcpCommand(
           plan, controller.signal, maxOutputBytes
         );
-        result = hostKeyPolicy === 'prompt'
+        result = !importedSshConfig && hostKeyPolicy === 'prompt'
           ? await runWithOpenSshHostKeyRetry(
               runSystemSsh, verifyCurrentSystemSshHostKey,
               (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`)
@@ -6398,7 +6400,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
           'hostKeyChangedAction', 'prompt'
         );
-        if (hostKeyPolicy === 'prompt') {
+        if (!importedSshConfig && hostKeyPolicy === 'prompt') {
           const verification = await verifySystemSshHostKey(
             hostKeyPolicy, host, platformAdapter.kind,
             (entry) => bridgeOutput?.appendLine(`[主机密钥] ${entry}`),
@@ -6412,7 +6414,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           respectSshConfig: importedSshConfig,
           reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
           bridgeConfigPath: configPath(), hostKeyPolicy,
-          ...(hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
+          ...(!importedSshConfig && hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
         };
         try {
           return await connectSystemSftp(host, platformAdapter, connectionOptions, signal);

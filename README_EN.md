@@ -25,7 +25,7 @@ SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote
 4. Click **+** beside an existing host to add another account.
 5. On the first connection, verify and accept the server's host-key fingerprint.
 
-SAFS automatically scans `~/.ssh/config` and its `Include` files, importing the alias, account, port, and identity of literal `Host` entries. Imported accounts are marked with `source: "ssh-config"` and consistently use system SSH/SFTP, with OpenSSH handling proxies, certificates, SSH agents, and other configuration. Wildcard `Host` entries remain configuration rules and are not listed as separate SAFS hosts.
+SAFS automatically scans `~/.ssh/config` and its `Include` files, importing the alias, account, port, and identity of literal `Host` entries. Imported accounts are marked with `source: "ssh-config"` and consistently use system SSH/SFTP, connecting as `ssh alias`. OpenSSH reads the user, port, identities, proxies, certificates, SSH agents, host-key policy, and known_hosts from SSH config. SAFS does not pre-probe imported aliases or override their policy with `safs.hostKeyChangedAction`. Wildcard `Host` entries remain configuration rules and are not listed as separate SAFS hosts.
 
 Accounts added directly in SAFS or manually written to `~/.safs/config.json` use built-in `ssh2` by default. Global SSH settings, SSH agents, and the presence of passwords or private keys do not determine the transport. Existing WSL VPN relay handling and compatibility fallbacks after actual connection failures remain unchanged.
 

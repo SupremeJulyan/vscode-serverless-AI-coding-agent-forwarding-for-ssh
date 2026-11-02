@@ -123,10 +123,14 @@ function commandSessionArgs(): string[] {
 function sshArgs(
   kind: PlatformKind, host: HostConfig, remoteCwd?: string, options?: ConnectionOptions
 ): string[] {
+  // Imported accounts connect as `ssh alias`; OpenSSH owns authentication,
+  // host identity, trust policy and connection reuse. Manual fallback accounts
+  // retain SAFS host-key verification and explicit endpoint settings.
   // 主机密钥策略由 safs.hostKeyChangedAction 设置驱动（accept→no+空设备、
   // prompt→yes+扩展 known_hosts、reject→yes+真实文件），不再无条件
   // StrictHostKeyChecking=no。
-  const args = [
+  const imported = host.source === 'ssh-config';
+  const args = imported ? [] : [
     '-p', String(host.port ?? 22),
     // Pin the actual destination and known_hosts identity to the endpoint
     // verified by the extension. Command-line options take precedence over
@@ -141,14 +145,14 @@ function sshArgs(
   // rejects them by default, so re-enable them explicitly. The exact flags
   // are adapted to the installed client (see ssh-algorithms.ts), because old
   // OpenSSH rejects PubkeyAcceptedAlgorithms and OpenSSH 10+ rejects ssh-dss.
-  if (!options?.respectSshConfig) args.push(...legacySshAlgorithmArgs());
+  if (!imported && !options?.respectSshConfig) args.push(...legacySshAlgorithmArgs());
   // An explicit KexAlgorithms list suppresses OpenSSH 10+'s post-quantum
   // warning that otherwise spams the terminal on legacy servers.
-  if (!options?.respectSshConfig) args.push(...kexAlgorithmsArgs());
+  if (!imported && !options?.respectSshConfig) args.push(...kexAlgorithmsArgs());
   // ControlMaster=auto reuses a healthy master and lets OpenSSH fall back to a
   // direct connection when the control socket cannot be used.
-  args.push(...connectionReuseArgs(options));
-  if (host.private_key_path) {
+  if (!imported) args.push(...connectionReuseArgs(options));
+  if (!imported && host.private_key_path) {
     if (!options?.respectSshConfig) args.push('-o', 'IdentitiesOnly=yes');
     args.push('-i', host.private_key_path);
   }
@@ -159,7 +163,7 @@ function sshArgs(
       '-o', 'ForkAfterAuthentication=no'
     );
   }
-  args.push(`${host.user}@${host.ip}`);
+  args.push(imported ? host.ip : `${host.user}@${host.ip}`);
   if (remoteCwd) {
     args.push(`cd -- ${shellQuote(remoteCwd)} && exec "\${SHELL:-/bin/sh}" -l`);
   }
@@ -196,6 +200,7 @@ class WslAdapter implements PlatformAdapter {
   readonly kind = 'wsl' as const;
 
   terminal(host: HostConfig, remoteCwd?: string, options?: ConnectionOptions): CommandPlan {
+    if (host.source === 'ssh-config') return new UnixAdapter('linux').terminal(host, remoteCwd, options);
     const args = [host.name];
     if (remoteCwd) args.unshift('--tty');
     if (remoteCwd) args.push(remoteLoginCommand(remoteCwd));
@@ -220,6 +225,7 @@ class WslAdapter implements PlatformAdapter {
   }
 
   exec(host: HostConfig, remoteCwd: string, command: string, options?: ConnectionOptions): CommandPlan {
+    if (host.source === 'ssh-config') return new UnixAdapter('linux').exec(host, remoteCwd, command, options);
     return {
       command: sshBridgePath(),
       args: [host.name, remoteExecCommand(remoteCwd, command, options?.outputMarker)],

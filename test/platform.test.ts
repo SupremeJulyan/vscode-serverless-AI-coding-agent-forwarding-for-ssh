@@ -259,3 +259,22 @@ test('fixed router defaults separate Windows and WSL while honoring explicit por
     assert.equal(agentHttpRouterPort(kind, 9849), agentHttpRouterPort(kind));
   }
 });
+
+test('imported accounts connect by alias and leave authentication, trust and multiplexing to OpenSSH', () => {
+  const imported = { ...host, ip: 'MyCluster', source: 'ssh-config' as const };
+  for (const kind of ['macos', 'linux', 'windows', 'wsl'] as const) {
+    const adapter = createPlatformAdapter(kind);
+    const options = { respectSshConfig: true, hostKeyPolicy: 'accept' as const,
+      userKnownHostsFile: '/unused/safs_known_hosts', reuseSshConnection: true };
+    assert.deepEqual(adapter.terminal(imported, undefined, options), {
+      command: 'ssh', args: ['MyCluster']
+    });
+    const command = adapter.exec(imported, '/project', 'pwd', options);
+    assert.equal(command.command, 'ssh');
+    assert.ok(command.args.includes('MyCluster'));
+    for (const argument of command.args) {
+      assert.doesNotMatch(argument, /^(?:HostName|HostKeyAlias|StrictHostKeyChecking|UserKnownHostsFile|GlobalKnownHostsFile|CanonicalizeHostname|CheckHostIP|ControlMaster|ControlPath|ControlPersist|IdentitiesOnly|KexAlgorithms|HostKeyAlgorithms)=/);
+      assert.ok(argument !== '-i' && argument !== '-p');
+    }
+  }
+});

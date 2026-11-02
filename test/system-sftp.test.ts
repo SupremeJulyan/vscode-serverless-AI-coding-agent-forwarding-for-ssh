@@ -5,7 +5,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { Server } from 'ssh2';
+import { Server, utils } from 'ssh2';
 import { createPlatformAdapter } from '../src/platform';
 import { executeCaptured } from '../src/process';
 import { connectSystemSftp } from '../src/sftp/system-sftp';
@@ -18,12 +18,15 @@ test('system OpenSSH runs a real SFTP subsystem through a configured proxy witho
     privateKeyEncoding: { type: 'pkcs1', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } }).privateKey;
   const clients = new Set<any>();
   let subsystem = false, exec = false, rejectSubsystem = false, allowExec = false;
+  let connectionCount = 0;
+  const users: string[] = [];
   let content = Buffer.from('remote content');
   const server = new Server({ hostKeys: [key] }, client => {
+    connectionCount++;
     clients.add(client);
     client.on('error', () => {});
     client.on('close', () => clients.delete(client));
-    client.on('authentication', ctx => ctx.accept());
+    client.on('authentication', ctx => { users.push(ctx.username); ctx.accept(); });
     client.on('ready', () => client.on('session', accept => {
       const channel = accept();
       channel.on('exec', (accept, reject, info) => {
@@ -99,6 +102,35 @@ test('system OpenSSH runs a real SFTP subsystem through a configured proxy witho
   assert.equal(exec, false);
   await session.close();
   assert.equal(session.isAlive(), false);
+  // Imported metadata is a discovery snapshot. The live SSH config owns the
+  // account, destination port and trusted host identity on the actual connection.
+  const trustedFile = path.join(directory, 'native_known_hosts');
+  const parsedKey = utils.parseKey(key);
+  if (parsedKey instanceof Error) throw parsedKey;
+  await writeFile(trustedFile, `configured-host-key ssh-rsa ${parsedKey.getPublicSSH().toString('base64')}\n`);
+  await writeFile(config, `Host safs-sftp-test\n User configured-user\n Port 2222\n HostName unreachable.invalid\n HostKeyAlias configured-host-key\n ProxyCommand ${executable} ${quote(proxy)} ${port}\n StrictHostKeyChecking yes\n UserKnownHostsFile ${quote(trustedFile)}\n`);
+  const imported = { name: 'imported', ip: 'safs-sftp-test', user: 'stale-user',
+    port: 1, private_key_path: '/missing/stale-key', source: 'ssh-config' as const };
+  const beforeImported = connectionCount;
+  const importedSession = await connectSystemSftp(imported, adapter, {
+    respectSshConfig: true, hostKeyPolicy: 'prompt',
+    userKnownHostsFile: path.join(directory, 'unused_safs_known_hosts')
+  });
+  assert.equal(connectionCount - beforeImported, 1);
+  assert.equal(users.at(-1), 'configured-user');
+  assert.equal(await importedSession.realpath('.'), '/home/alice');
+  await importedSession.close();
+  const importedWslSession = await connectSystemSftp(imported, { ...adapter, kind: 'wsl' }, {
+    respectSshConfig: true, hostKeyPolicy: 'prompt'
+  });
+  assert.equal(await importedWslSession.realpath('.'), '/home/alice');
+  await importedWslSession.close();
+  // A genuinely unknown key must still be rejected by OpenSSH's configured
+  // strict policy, even if SAFS itself is set to accept host keys.
+  await writeFile(trustedFile, '');
+  await assert.rejects(connectSystemSftp(imported, adapter, {
+    hostKeyPolicy: 'accept', respectSshConfig: true
+  }), /host key verification failed/i);
   allowExec = true;
   const commandResult = await executeCaptured(adapter.exec({ name: 'dev', ip: 'safs-sftp-test', user: 'alice', port },
     '/', 'requested-command', { respectSshConfig: true, reuseSshConnection: false, hostKeyPolicy: 'accept' }));
