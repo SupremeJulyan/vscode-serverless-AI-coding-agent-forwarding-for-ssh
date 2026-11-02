@@ -8,7 +8,7 @@ import {
   appendKnownHostsFile, appendLoadBalancedKnownHostsFile, defaultPrompts,
   getKnownHostsFilePath,
   HostKeyChangedAction, HostKeyPrompts, ProbedHostKey,
-  replaceKnownHostsForHost, sha256Fingerprint, verifyHostKeyWithPrompt
+  replaceKnownHostsForHost, sha256Fingerprint, verifyHostKeyWithPrompt, withHostKeyTrustTransaction
 } from './host-key';
 import { createPlatformAdapter, PlatformKind } from './platform';
 import { resolveExecutable } from './process';
@@ -323,7 +323,8 @@ export async function verifySystemSshHostKey(
   prompts: HostKeyPrompts = defaultPrompts,
   env?: NodeJS.ProcessEnv
 ): Promise<HostKeyVerification> {
-  if (action !== 'prompt') {
+  // Imported aliases delegate host identity and known_hosts entirely to OpenSSH.
+  if (host.source === 'ssh-config' || action !== 'prompt') {
     return { ok: true };
   }
   const result = await probe(host, platformKind, log, env);
@@ -338,30 +339,32 @@ export async function verifySystemSshHostKey(
       reason: `无法验证主机"${host.name}"的 SSH 主机密钥（${detail}），已中止连接`
     };
   }
-  const decision = await verifyHostKeyWithPrompt(host, result.fingerprints, log, prompts);
-  if (decision === 'refuse') {
-    return {
-      ok: false,
-      reason: `已拒绝接受主机"${host.name}"的新 SSH 主机密钥（指纹：${result.fingerprints.join(', ')}）`
-    };
-  }
-  const knownHostsFile = getKnownHostsFilePath();
-  if (knownHostsFile && result.keys && result.keys.length > 0) {
-    try {
-      if (decision === 'replace') {
-        await replaceKnownHostsForHost(knownHostsFile, host, result.keys, log);
-      } else if (decision === 'append') {
-        await appendLoadBalancedKnownHostsFile(
-          knownHostsFile, host, result.keys, log
-        );
-      } else if (decision === 'accept') {
-        await appendKnownHostsFile(knownHostsFile, result.keys, log);
-      }
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      log?.(`写入主机密钥记录失败（${host.name}）：${detail}`);
-      return { ok: false, reason: `无法写入主机密钥记录（${detail}），已中止连接` };
+  return withHostKeyTrustTransaction(host, async () => {
+    const decision = await verifyHostKeyWithPrompt(host, result.fingerprints, log, prompts);
+    if (decision === 'refuse') {
+      return {
+        ok: false,
+        reason: `已拒绝接受主机"${host.name}"的新 SSH 主机密钥（指纹：${result.fingerprints.join(', ')}）`
+      };
     }
-  }
-  return { ok: true };
+    const knownHostsFile = getKnownHostsFilePath();
+    if (knownHostsFile && result.keys && result.keys.length > 0) {
+      try {
+        if (decision === 'replace') {
+          await replaceKnownHostsForHost(knownHostsFile, host, result.keys, log);
+        } else if (decision === 'append') {
+          await appendLoadBalancedKnownHostsFile(
+            knownHostsFile, host, result.keys, log
+          );
+        } else if (decision === 'accept') {
+          await appendKnownHostsFile(knownHostsFile, result.keys, log);
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        log?.(`写入主机密钥记录失败（${host.name}）：${detail}`);
+        return { ok: false, reason: `无法写入主机密钥记录（${detail}），已中止连接` };
+      }
+    }
+    return { ok: true };
+  });
 }

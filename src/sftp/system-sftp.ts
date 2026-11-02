@@ -19,7 +19,7 @@ export async function connectSystemSftp(
   let child: ReturnType<typeof spawn> | undefined;
   try {
     const plan = adapter.terminal(host, undefined, options);
-    if (adapter.kind === 'wsl') {
+    if (adapter.kind === 'wsl' && host.source !== 'ssh-config') {
       plan.env = { ...plan.env, WSL_VPN_SSH_SUBSYSTEM: 'sftp' };
     } else {
       plan.args.unshift('-T', '-s', '-o', 'IgnoreUnknown=RemoteCommand,SessionType,StdinNull,ForkAfterAuthentication', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no',
