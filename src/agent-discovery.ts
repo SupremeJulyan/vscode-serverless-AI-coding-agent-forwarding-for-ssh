@@ -16,6 +16,7 @@ export interface AgentWorkspaceRecord {
   workspaceUri: string;
   mountName: string;
   workspaceRoot: string;
+  localRoot?: string;
   /** This window currently exposes only command execution in its selected visible terminal. */
   terminalCommandOnly?: true;
   host: string;
@@ -74,6 +75,8 @@ export function readAgentWorkspaceRecord(
       || Math.abs(now - updatedAtMs) > maxRecordAgeMs) {
       return undefined;
     }
+    if (!new URL(value.mcpUrl).searchParams.get('socket')) return undefined;
+    if (value.processPlatform && value.processPlatform !== process.platform) return undefined;
     if (!Number.isInteger(value.processId) || value.processId! <= 0) return undefined;
     const samePlatform = value.processPlatform
       ? value.processPlatform === process.platform

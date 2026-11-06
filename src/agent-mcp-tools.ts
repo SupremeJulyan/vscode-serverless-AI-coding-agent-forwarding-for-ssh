@@ -31,7 +31,7 @@ export const terminalAgentMcpInstructions = [
 
 export const terminalCliInstructions = [
   'This workspace is in SAFS terminal-only mode.',
-  'Use only safs exec --workspace <workspaceId> -- <command>. Do not pass --cwd.',
+  'Use only safs exec --id <workspaceId> -- <command>. Do not pass --cwd.',
   'Commands may create or modify files inside the selected workspaceRoot, but they are rejected if they change directory or write outside that workspaceRoot.',
   'All SAFS file, search, transfer, batch, and retained-output commands are disabled until terminal mode is stopped in Agent Activity.'
 ].join(' ');
@@ -42,7 +42,7 @@ export const terminalMcpOnlyToolMessage =
 
 export const terminalCliOnlyCommandMessage =
   'This SAFS workspace is in terminal mode. The requested command is unavailable. ' +
-  "Use the only available CLI command: safs exec --workspace <workspaceId> -- 'COMMAND'. Do not pass --cwd.";
+  "Use the only available CLI command: safs exec --id <workspaceId> -- 'COMMAND'. Do not pass --cwd.";
 
 export function terminalMcpOnlyToolError() {
   return {

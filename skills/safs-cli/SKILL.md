@@ -11,21 +11,26 @@ The extension installs the CLI and this Skill. If `safs` is unavailable, restart
 
 ## Select a workspace
 
+Always execute `safs` in the Agent's current local working directory. Do not `cd`, set a different shell cwd/workdir, or search other directories to locate a workspace marker. If the current directory has no `.safs-workspace-id`, pass `--id ID`. To operate on other workspaces, remain in the current directory and pass their explicit IDs.
+
 List active SAFS workspaces and ask the user to choose when there is more than one:
 
 ```bash
 safs workspaces
 ```
 
-Pass the selected `workspaceId` explicitly to every later workspace command:
+The extension creates `.safs-workspace-id` in each Agent local working directory. By default SAFS reads the file in the current directory only, without searching parent directories. If its ID is active, use it. If it has expired, SAFS matches the current placeholder path to active workspaces and writes the new ID back only when exactly one workspace matches. Never choose by window focus.
+
+If the file is absent, or stale-ID recovery finds zero or multiple matches, run `safs workspaces` and explicitly pass `--id ID`. Explicit `--id` takes priority, does not modify the marker, and never falls back to another workspace if that ID is stale.
+
+For tasks involving multiple workspaces, always pass `--id` on every command, even inside a directory with a marker:
 
 ```bash
-safs read README.md --workspace <workspaceId>
+safs read README.md --id <workspaceA>
+safs read README.md --id <workspaceB>
 ```
 
-Do not infer a workspace from focus, host, path, or a previous task. If the selected ID is no longer active, list workspaces again and ask the user to choose.
-
-Workspace selection does not cancel operations targeting other workspace IDs. Always keep the selected ID with each command.
+Workspace selection does not cancel operations targeting other workspace IDs. A batch operates on one explicitly selected workspace; use separate calls for different workspaces.
 
 ## Operate safely
 

@@ -837,21 +837,6 @@
           "default": 600,
           "description": "Idle SFTP connection lifetime in seconds before the pool recycles it (0 disables recycling)."
         },
-        "safs.agentMcpPort": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 65535,
-          "default": 0,
-          "description": "Dynamic loopback-only MCP backend port for each remote VS Code window. Use 0 (recommended) to avoid multi-window collisions."
-        },
-        "safs.agentHttpRouterPort": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 65535,
-          "default": 0,
-          "scope": "machine",
-          "description": "Stable loopback-only Streamable HTTP MCP router port registered with Agents. Automatically uses Windows/macOS/Linux 9848 and WSL 9849. Values 0, 9848 and 9849 select this platform-specific default, including legacy settings. Other values select a custom port; use different custom ports for Windows and WSL."
-        },
         "safs.agentMcpTimeoutMs": {
           "type": "number",
           "minimum": 0,
@@ -864,30 +849,6 @@
           "default": 600000,
           "scope": "machine",
           "description": "Timeout for SAFS Git push, pull, and fetch relay operations (milliseconds). 0 disables the timeout."
-        },
-        "safs.agentInterface": {
-          "type": "string",
-          "enum": [
-            "mcp",
-            "cli"
-          ],
-          "enumDescriptions": [
-            "MCP: exposes the selected MCP tool profile and removes the mutually exclusive global CLI and SAFS Agent Skills.",
-            "CLI (default): installs the global SAFS CLI and Agent Skill, then copies a prompt for unregistering the mutually exclusive MCP entry."
-          ],
-          "default": "cli",
-          "scope": "machine",
-          "description": "Mutually exclusive Agent entry point. mcp removes the global CLI and SAFS Agent Skills; cli downloads the matching versioned CLI for the current platform on demand, installs its Skill, then copies an MCP unregister prompt. Reload VS Code windows and restart Agents after changing it."
-        },
-        "safs.agentMcpToolProfile": {
-          "type": "string",
-          "enum": [
-            "full",
-            "core"
-          ],
-          "default": "full",
-          "scope": "machine",
-          "description": "Tool profile used only in mcp mode. core exposes workspace selection, listing, bounded reads, search, edit/write and command/output tools; full also exposes current file, transfer and file management tools. Use the same setting in all windows and restart the Agent after changing it."
         },
         "safs.agentMcpMaxOutputBytes": {
           "type": "number",

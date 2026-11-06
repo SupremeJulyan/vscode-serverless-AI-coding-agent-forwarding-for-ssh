@@ -58,7 +58,8 @@ import {
   configEntryOffset, passwordValueOffset
 } from './authentication';
 import { AgentMcpServer, AgentToolError } from './agent-mcp';
-import { AgentHttpRouter, agentTaggedMcpUrl } from './agent-http-router';
+import { writeWorkspaceId } from './workspace-id';
+import { AgentHttpRouter, agentTaggedMcpUrl, workspaceIdFor } from './agent-http-router';
 import { AgentActivityStore } from './agent-activity';
 import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent-activity-view';
 import {
@@ -117,7 +118,6 @@ import {
   evaluateMcpCommandPolicy, readMcpCommandPolicySettings
 } from './mcp-command-policy';
 import { remoteCommandBoundaryViolation } from './remote-command-boundary';
-import { proxyEnvironmentWarning } from './proxy-environment';
 import { testLoopbackProxy } from './proxy-diagnostic';
 import { remoteConnectionShortcutHint, remoteShortcutKeys } from './shortcut-hint';
 import {
@@ -153,7 +153,6 @@ const mountRenamesKey = platformStateKey('mountRenames');
 const mountRenames = new Map<string, string>();
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
-const proxyEnvironmentCheckKey = platformStateKey('proxyEnvironmentCheckV1');
 const agentForwardingHintKey = platformStateKey('agentForwardingHintV1');
 const mcpInstalledAgentsKey = platformStateKey('mcpInstalledAgentsV1');
 const gitPushReceiptsKey = platformStateKey('gitPushReceiptsV1');
@@ -194,7 +193,8 @@ let registry: RemoteFolderRegistry;
 let provider: SftpFileSystemProvider;
 let agentActivityStore: AgentActivityStore;
 let agentActivityView: AgentActivityViewProvider;
-const agentWorkspacePublisher = new AgentWorkspacePublisher(randomBytes(12).toString('hex'));
+const agentInstanceId = randomBytes(12).toString('hex');
+const agentWorkspacePublisher = new AgentWorkspacePublisher(agentInstanceId);
 let agentWorkspaceHeartbeat: NodeJS.Timeout | undefined;
 let lastAgentDiscoveryState = '';
 let lastForwardingSignature = '';
@@ -612,43 +612,6 @@ function cliRouterUrl(url: string): string {
   return tagged.toString();
 }
 
-function scheduleFirstProxyEnvironmentCheck(context: vscode.ExtensionContext): void {
-  let checking = false;
-  const check = async (): Promise<void> => {
-    if (checking || !vscode.window.state.focused) return;
-    if (context.globalState.get<boolean>(proxyEnvironmentCheckKey, false)) {
-      listener.dispose();
-      return;
-    }
-    checking = true;
-    try {
-      // Mark the first focused activation before opening UI so another window
-      // cannot display the same first-install warning at the same time.
-      await context.globalState.update(proxyEnvironmentCheckKey, true);
-      listener.dispose();
-      const warning = proxyEnvironmentWarning(process.env);
-      if (!warning) return;
-      bridgeOutput?.warn(
-        `[代理检测] 检测到 ${warning.proxyVariables.join(', ')}；NO_PROXY 缺少 ${
-          warning.missingLoopbackHosts.join(', ')
-        }`
-      );
-      const action = await vscode.window.showWarningMessage(
-        'SAFS 检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。',
-        { modal: true },
-        '测试本机连接'
-      );
-      if (action === '测试本机连接') await vscode.commands.executeCommand('safs.testLocalProxy');
-    } finally {
-      checking = false;
-    }
-  };
-  const listener = vscode.window.onDidChangeWindowState((state) => {
-    if (state.focused) void check();
-  });
-  context.subscriptions.push(listener);
-  void check();
-}
 
 async function removeLegacyCliInstructions(localRoot: string): Promise<void> {
   // workspaceRoot uses URI path syntax; normalize to the native filesystem view.
@@ -5756,12 +5719,19 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   const editorWorkspacePath = currentWorkspacePath(folder);
   const terminalCommandOnly = activeAgentCommandTerminal() !== undefined;
   const workspacePath = terminalCommandOnly ? agentCommandTerminalCwd! : editorWorkspacePath;
+  const localRoot = vscode.Uri.from({ scheme: 'file', path: workspacePathForRemote(folder, editorWorkspacePath) }).fsPath;
+  const workspaceUri = folderUri(folder, editorWorkspacePath);
+  await mkdir(localRoot, { recursive: true });
+  await writeWorkspaceId(localRoot, workspaceIdFor({
+    instanceId: agentInstanceId, workspaceUri, host: mount.host
+  }));
   await agentWorkspacePublisher.publish({
     focused: vscode.window.state.focused,
     execution: 'remote',
     workspaceUri: folderUri(folder, editorWorkspacePath),
     mountName: mount.name,
     workspaceRoot: workspacePath,
+    localRoot,
     host: mount.host,
     hostName: config.host_aliases?.[resolveMount(config, mount).hostConfig.ip] ?? resolveMount(config, mount).hostConfig.ip,
     user: resolveMount(config, mount).hostConfig.user,
@@ -5970,13 +5940,6 @@ async function configureAgentInterface(
   context: vscode.ExtensionContext
 ): Promise<{ cliExecutable?: string }> {
   const router = await ensureAgentHttpRouter(context);
-  if (!cliEnabled()) {
-    const removed = await uninstallGlobalCli(context);
-    bridgeOutput?.appendLine(
-      `[Agent MCP] Streamable HTTP 路由已就绪：${router.url}；已移除互斥的 CLI 和 Skill：${removed}`
-    );
-    return {};
-  }
   let executable: string;
   try {
     executable = await installGlobalCli(context, cliRouterUrl(router.url));
@@ -5990,19 +5953,15 @@ async function configureAgentInterface(
     const action = await vscode.window.showErrorMessage(
       missingNode ? 'SAFS CLI 需要 Node.js 18 或以上版本' : 'SAFS CLI 安装或更新失败',
       { modal: true, detail: missingNode
-        ? `${detail}\n也可以切换 MCP 模式，无需安装 Node.js。`
-        : `${detail}\n请检查本地 Node.js 环境与安装目录权限，也可以切换 MCP 模式。` },
-      ...(missingNode ? ['安装 Node.js', '切换 MCP 模式'] : ['切换 MCP 模式'])
+        ? detail
+        : `${detail}\n请检查本地 Node.js 环境与安装目录权限。` },
+      ...(missingNode ? ['安装 Node.js'] : [])
     );
     if (action === '安装 Node.js') {
       await vscode.env.openExternal(vscode.Uri.parse('https://nodejs.org/zh-cn'));
       void vscode.window.showInformationMessage(
         '安装后，请完全退出所有 VS Code 窗口再打开。'
       );
-    }
-    if (action === '切换 MCP 模式') {
-      await settings().update('agentInterface', 'mcp', vscode.ConfigurationTarget.Global);
-      return {};
     }
     throw error;
   }
@@ -6341,7 +6300,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await guard(() => normalizeHierarchicalConfigNames(context));
   await guard(registerMountAliases);
   await guard(refreshRemoteWorkspaceNames);
-  scheduleFirstProxyEnvironmentCheck(context);
+
   agentActivityStore = new AgentActivityStore(
     context.workspaceState, platformStateKey('agentActivity')
   );
