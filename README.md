@@ -65,21 +65,11 @@ SAFS 会自动扫描 `~/.ssh/config` 及其 `Include` 文件，并导入字面�
 
 ### 3. 让 Agent 操作远程工作区
 
-默认使用 **CLI 模式**，需要本地 **Node.js 18+**。插件自动安装全局 `safs` 命令和 Skill；缺少 Node.js 时，弹窗提供[安装链接](https://nodejs.org/zh-cn)或切换 MCP 模式。
+默认使用 **CLI 模式**，需要本地 **Node.js 18+**。插件自动安装全局 `safs` 命令和 Skill；缺少 Node.js 时，弹窗提供[安装链接](https://nodejs.org/zh-cn)。
 
 安装 Node.js 后，请完全退出所有 VS Code 窗口，再重新打开（仅重新加载窗口不会更新 PATH）。在终端运行 `safs --version` 检查安装，然后在 Agent 中输入 `/safs-cli`，选择远程工作区。
 
-如需 **MCP 模式**，先将 `safs.agentInterface` 设置为 `mcp`：
-从 CLI 切换时，当前操作窗口会自动提示输入 Agent 名称并复制安装提示词；取消后可通过下述安装命令重试。
-(1) 在 SAFS 视图中点击连接父节点旁的 **启用 Agent 转发**。也可以主动运行 `SAFS: 为我的Agent安装转发功能` 进行修复。
-(2) 按提示输入 Agent 名称，扩展会复制一段包含本机 Streamable HTTP URL 的英文安装提示词。
-(3) 将提示词粘贴给 Agent，由 Agent 自行安装 Streamable HTTP 类型的 `safs` MCP。
-(4) 打开该连接的远程目录。
-(5) 重启 Agent 并新建对话，然后通过 `/mcp` 或 MCP 管理界面确认存在 `safs` 服务。
-(6) 在 Agent里输入：`use safs mcp`，Agent 会列出工作区并让你明确选择目标。
-
-插件首次启动时会检查 `ALL_PROXY`、`HTTPS_PROXY` 和 `HTTP_PROXY` 等环境变量。检测到代理环境变量且 `NO_PROXY` 未完整覆盖本机回环地址时，会提示可能影响 Agent 本机转发连接；这不代表代理软件开启了全局模式。可设置 `NO_PROXY=localhost,127.0.0.1,::1`，然后重启 Agent，让本机转发请求绕过代理。
-
+CLI 通过 Unix socket（Windows 使用命名管道）与扩展通信，无需监听本地 TCP 端口。扩展在 Agent 本地工作目录创建 `.safs-workspace-id`，CLI 默认读取当前目录中的文件，不向父目录查找。ID 过期时，按占位符路径唯一匹配活动工作区并写回新 ID。没有文件、匹配失败或有歧义时，使用 `safs workspaces` 查看 ID 并传入 `--id ID`。显式 `--id` 优先且不改写文件；Agent 始终在当前本地工作目录执行 `safs`，不通过 `cd` 或覆盖执行目录来选择工作区；跨多个工作区操作时，在当前目录中为每条命令显式指定 ID。
 
 启用后，Agent可以在当前远程工作区下：
 
@@ -136,7 +126,6 @@ SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命�
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | 切换文件时，让已打开的远程终端自动 `cd` 到对应目录 |
 | `safs.terminalAutoReconnect` | `true` | 远程终端意外结束后自动重连；瞬时网络错误会有限退避重试 |
-| `safs.agentInterface` | `cli` | 选择互斥的 MCP 或 CLI 接口；切换时清理另一入口 |
 | `safs.agentMcpToolProfile` | `full` | 改为 `core` 可减少 Agent 工具定义的上下文开销 |
 | `safs.agentMcpTimeoutMs` | `120000` | Agent 命令、搜索和传输的超时；`0` 表示关闭 |
 | `safs.sftp.watchInterval` | `5` | 轮询远程文件变化的间隔（秒） |

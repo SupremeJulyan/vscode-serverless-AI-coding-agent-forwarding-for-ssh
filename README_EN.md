@@ -41,22 +41,11 @@ The first time you open the configured remote home from a parent connection node
 
 ### 3. Let an Agent operate the remote workspace
 
-**CLI mode** is the default and requires local **Node.js 18+**. The extension installs the global `safs` command and Skill. If Node.js is missing, the dialog offers an [installation link](https://nodejs.org/zh-cn) or a switch to MCP mode.
+**CLI mode** is the default and requires local **Node.js 18+**. The extension installs the global `safs` command and Skill. If Node.js is missing, the dialog offers an [installation link](https://nodejs.org/zh-cn).
 
 After installing Node.js, fully quit all VS Code windows and reopen VS Code so it picks up the updated PATH; reloading the window is insufficient. Run `safs --version` to check installation, then enter `/safs-cli` in your Agent and select a remote workspace.
 
-For **MCP mode**, first set `safs.agentInterface` to `mcp`:
-
-Switching from CLI automatically asks for the Agent name and copies the installation prompt in the window where you changed the setting. If you cancel, use the installation command below to retry.
-
-1. Click **Enable Agent Forwarding** beside a parent connection node in the SAFS view. You can also run `SAFS: Install Agent Forwarding for My Agent` to repair the integration.
-2. Enter the Agent name when prompted. The extension copies an English installation prompt containing the local Streamable HTTP URL.
-3. Paste the prompt into the Agent so it can install the Streamable HTTP `safs` MCP itself.
-4. Open the remote directory for that connection.
-5. Restart the Agent, start a new conversation, and confirm that a `safs` service is present through `/mcp` or its MCP management view.
-6. Enter `use safs mcp` in the Agent. It lists the workspaces and asks you to choose a target explicitly.
-
-On its first startup, the extension checks environment variables such as `ALL_PROXY`, `HTTPS_PROXY`, and `HTTP_PROXY`. If proxy environment variables are present and `NO_PROXY` does not fully cover loopback, SAFS warns that local Agent forwarding connections may be affected; this does not mean the proxy application is in global mode. You can set `NO_PROXY=localhost,127.0.0.1,::1` and restart the Agent to bypass the proxy for local forwarding requests.
+The CLI communicates over Unix sockets or Windows named pipes, without listening on local TCP ports. The extension creates `.safs-workspace-id` in each Agent local working directory. The CLI reads the marker in cwd only, without searching parent directories. Expired IDs refresh only after unique active-placeholder matching. Missing markers or failed/ambiguous matches require `--id ID`. Explicit IDs take priority without modifying the marker; Agents must run `safs` in their current local working directory without `cd` or cwd/workdir overrides; for other workspaces, stay in cwd and specify an ID on each command.
 
 Once enabled, the Agent can operate within the current remote workspace:
 
@@ -114,7 +103,6 @@ Search for `SAFS` in VS Code Settings:
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | Automatically `cd` an open remote terminal when the active file changes |
 | `safs.terminalAutoReconnect` | `true` | Reconnect a remote terminal after an unexpected exit, with bounded backoff retries for transient network errors |
-| `safs.agentInterface` | `cli` | Select mutually exclusive MCP or CLI; switching cleans up the other entry point |
 | `safs.agentMcpToolProfile` | `full` | Change to `core` to reduce the Agent context used by tool definitions |
 | `safs.agentMcpTimeoutMs` | `120000` | Timeout for Agent commands, searches, and transfers; `0` disables it |
 | `safs.sftp.watchInterval` | `5` | Polling interval for remote file changes, in seconds |

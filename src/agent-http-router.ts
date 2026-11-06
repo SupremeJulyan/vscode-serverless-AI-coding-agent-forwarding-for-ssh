@@ -1,16 +1,14 @@
+import { ipcFetch, ipcPath, ipcUrl, listenIpc } from './agent-ipc';
 import { operationMetric } from './operation-metric';
 import * as http from 'node:http';
 import { orderedBatch } from './ordered-batch';
 import { createHash, randomUUID } from 'node:crypto';
 import express from 'express';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   DiscoveredAgentWorkspace, agentDiscoveryDirectories, discoverAgentWorkspaces
 } from './agent-discovery';
 import {
-  type AgentToolProfile, configureAgentMcpResources,
-  registerAgentMcpTools, routedAgentMcpInstructions,
+  type AgentToolProfile,
   terminalCliOnlyCommandMessage, terminalMcpOnlyToolMessage
 } from './agent-mcp-tools';
 import { AgentActivitySource } from './agent-activity';
@@ -110,7 +108,7 @@ export class AgentHttpRouter {
   }
 
   get url(): string {
-    return `http://127.0.0.1:${this.port}/mcp?token=${encodeURIComponent(this.token)}`;
+    return `${ipcUrl(ipcPath('router-' + this.port))}&token=${encodeURIComponent(this.token)}`;
   }
 
   get available(): boolean {
@@ -125,12 +123,6 @@ export class AgentHttpRouter {
     return this.discover();
   }
 
-  private activeToolProfile(): AgentToolProfile {
-    // The shared MCP URL has no window identity before workspace selection.
-    // Tool schemas must stay stable; workspaceId determines each window's mode.
-    return this.options.toolProfile?.() ?? 'full';
-  }
-
   private workspace(workspaceId: string, snapshot?: DiscoveredAgentWorkspace[]): DiscoveredAgentWorkspace | undefined {
     // workspaceId is the exact route key. Never fall back to focus,
     // host, mount, or remote path after an operation has named its target.
@@ -140,6 +132,7 @@ export class AgentHttpRouter {
   private publicWorkspace(workspace: DiscoveredAgentWorkspace): Record<string, unknown> {
     return {
       workspaceRoot: workspace.workspaceRoot,
+      localRoot: workspace.localRoot,
       host: workspace.hostName ?? workspace.host,
       ...(workspace.user !== undefined ? { user: workspace.user } : {}),
       ...(workspace.hostName ? { label: [workspace.hostName, workspace.user, workspace.workspaceRoot].filter(Boolean).join(' → ') } : {}),
@@ -202,7 +195,7 @@ export class AgentHttpRouter {
     );
     const forwardTimeoutMs = this.options.forwardTimeoutMs ?? 120_000;
     const forwardStarted = performance.now();
-    const response = await fetch(url, {
+    const response = await ipcFetch(url, {
       method: 'POST',
       // redirect: manual —— 不允许 3xx 重定向跳出 loopback（SSRF 防护）。
       redirect: 'manual',
@@ -264,7 +257,7 @@ export class AgentHttpRouter {
     let args: Record<string, unknown> = { ...publicInput, mountName: workspace.mountName };
     if (workspace.terminalCommandOnly) {
       if (name !== 'run_remote_command') {
-        const cliCommand = `safs exec --workspace ${workspaceId} -- 'COMMAND'`;
+        const cliCommand = `safs exec --id ${workspaceId} -- 'COMMAND'`;
         return this.toolError(
           'TERMINAL_COMMAND_ONLY',
           source === 'cli'
@@ -297,26 +290,11 @@ export class AgentHttpRouter {
     }
   }
 
-  private createProtocolServer(agentName?: string): McpServer {
-    const profile = this.activeToolProfile();
-    const server = new McpServer(
-      { name: 'safs-http-router', version: '1.0.0' },
-      { instructions: routedAgentMcpInstructions }
-    );
-    configureAgentMcpResources(server);
-    registerAgentMcpTools(server, {
-      routed: true,
-      profile,
-      invoke: (name, input) => this.callTool(name, input, agentName, 'mcp')
-    });
-    return server;
-  }
-
   private async isExistingRouter(): Promise<boolean> {
     let response: Response;
     try {
-      response = await fetch(
-        `http://127.0.0.1:${this.port}/health?token=${encodeURIComponent(this.token)}`,
+      response = await ipcFetch(
+        this.url.replace('/mcp?', '/health?'),
         { signal: AbortSignal.timeout(1500) }
       );
     } catch {
@@ -395,7 +373,7 @@ export class AgentHttpRouter {
             response.json({ ok: false, result: {
               code: 'TERMINAL_COMMAND_ONLY',
               message: terminalCliOnlyCommandMessage,
-              allowedCommand: "safs exec --workspace <workspaceId> -- 'COMMAND'"
+              allowedCommand: "safs exec --id <workspaceId> -- 'COMMAND'"
             } });
             return;
           }
@@ -439,63 +417,12 @@ export class AgentHttpRouter {
         response.status(500).json({ ok: false, error: message });
       }
     });
-    app.all('/mcp', async (request, response) => {
-      if (request.query.token !== this.token) {
-        response.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-      // 路由器绝不能作为另一个路由器的转发目标：带 x-safs-forwarded 标记的请求
-      // 说明来源是路由器转发，直接拒绝，防止路由器间形成转发环。
-      if (request.headers['x-safs-forwarded']) {
-        this.options.log?.('拒绝路由器转发请求（x-safs-forwarded）');
-        response.status(403).json({ error: 'Forwarding target must not be another router' });
-        return;
-      }
-      if (request.method !== 'POST') {
-        response.status(405).json({ error: 'Method not allowed' });
-        return;
-      }
-      const agentName = requestAgentName(request.query.agent);
-      const method = typeof request.body?.method === 'string' ? request.body.method : 'unknown';
-      const tool = request.body?.params?.name;
-      this.options.log?.(
-        `收到 MCP 请求：${method}${tool ? ` (${tool})` : ''}${
-          agentName ? `，agent=${agentName}` : '，agent=<unknown>'
-        }`
-      );
-      const requestStarted = performance.now();
-      const protocol = this.createProtocolServer(agentName);
-      operationMetric(this.options.log, 'mcp.protocol.setup', requestStarted);
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      try {
-        await protocol.connect(transport);
-        await transport.handleRequest(request, response, request.body);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        this.options.log?.(`固定 HTTP MCP 请求失败：${detail}`);
-        if (!response.headersSent) {
-          response.status(500).json({
-            jsonrpc: '2.0', error: { code: -32603, message: detail }, id: null
-          });
-        }
-      } finally {
-        await transport.close();
-        await protocol.close();
-        operationMetric(this.options.log, 'mcp.request', requestStarted);
-      }
-    });
     const candidate = http.createServer(app);
-    const outcome = await new Promise<'leader' | 'occupied'>((resolve, reject) => {
-      const startupError = (error: NodeJS.ErrnoException) => {
-        if (error.code === 'EADDRINUSE') resolve('occupied');
-        else reject(error);
-      };
-      candidate.once('error', startupError);
-      candidate.listen(this.port, '127.0.0.1', () => {
-        candidate.off('error', startupError);
-        resolve('leader');
+    const outcome = await listenIpc(candidate, ipcPath('router-' + this.port))
+      .then(() => 'leader', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EADDRINUSE') return 'occupied';
+        throw error;
       });
-    });
     if (outcome === 'leader') {
       candidate.on('error', (error) => {
         this.options.log?.(`固定 HTTP MCP 服务错误：${error.message}`);

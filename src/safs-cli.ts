@@ -3,6 +3,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import * as http from 'node:http';
+import { resolveWorkspaceId } from './workspace-id';
 import { help, commandHelp } from './cli-help';
 
 declare const CLI_VERSION: string;
@@ -21,12 +22,12 @@ const allowed: Record<string, string[]> = {
   search: ['path', 'query', 'name', 'mode'], find: ['path', 'name'], edit: ['path'],
   write: ['path', 'content'], create: ['path', 'type', 'content'], delete: ['path'],
   chmod: ['path', 'mode'], move: [], upload: [], download: [], 'read-many': [], batch: [],
-  output: ['id', 'stream', 'offset', 'length'], exec: ['command']
+  output: ['output-id', 'stream', 'offset', 'length'], exec: ['command']
 };
 const positional: Record<string, string[]> = {
   list: ['path'], read: ['path'], edit: ['path'], write: ['path'], delete: ['path'],
   create: ['path', 'type'], search: ['query', 'path'], find: ['name', 'path'],
-  chmod: ['path', 'mode'], output: ['id', 'stream'], exec: ['command']
+  chmod: ['path', 'mode'], output: ['outputId', 'stream'], exec: ['command']
 };
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
 function option(args: string[], flag: string): string | undefined {
@@ -68,12 +69,12 @@ async function parse(args: string[]) {
         assign(key, flag); continue;
       }
       const key = flag.slice(2);
-      if (!(allowed[verb].includes(key) || (key === 'workspace' && verb !== 'workspaces'))) throw new Error(`Invalid option for ${verb}: ${flag}`);
+      if (!(allowed[verb].includes(key) || (key === 'id' && verb !== 'workspaces'))) throw new Error(`Invalid option for ${verb}: ${flag}`);
       const value = args.shift();
       if (value === undefined) throw new Error(`${flag} requires a value`);
       const numeric = ['limit', 'offset', 'length', 'head', 'tail', 'start-line', 'line-count'].includes(key);
       if (numeric && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) throw new Error(`Invalid ${flag}`);
-      assign(key === 'start-line' ? 'startLine' : key === 'line-count' ? 'lineCount' : key, numeric ? Number(value) : value);
+      assign(key === 'id' ? 'workspace' : key === 'output-id' ? 'outputId' : key === 'start-line' ? 'startLine' : key === 'line-count' ? 'lineCount' : key, numeric ? Number(value) : value);
     }
     if (verb === 'find' || verb === 'search') {
       if ('name' in values) {
@@ -85,8 +86,8 @@ async function parse(args: string[]) {
       if (typeof values.query !== 'string') throw new Error('Search query is required. Use --query for contents or --name for filenames');
       if (values.mode && !['content', 'files', 'count', 'names'].includes(values.mode)) throw new Error('--mode must be content, files, count, or names');
     }
-    const workspace = values.workspace; delete values.workspace;
-    if (verb !== 'workspaces' && (typeof workspace !== 'string' || !workspace)) throw new Error('--workspace is required. Use the workspaceId returned by `safs workspaces`.');
+    const workspace = values.workspace ?? (verb === 'workspaces' ? undefined : await inferWorkspace()); delete values.workspace;
+    if (verb !== 'workspaces' && (typeof workspace !== 'string' || !workspace)) throw new Error('--id is required. Use the workspaceId returned by `safs workspaces`.');
     if (verb === 'batch') {
       if (!Array.isArray(values.operations) || values.operations.length < 1 || values.operations.length > 50) throw new Error('batch requires 1 to 50 operations');
       const operations = values.operations.map((op: any) => {
@@ -99,11 +100,10 @@ async function parse(args: string[]) {
     }
     if (verb !== 'workspaces') values.workspaceId = workspace;
     if (verb === 'output') {
-      if (!values.id) throw new Error('--id is required');
-      values.outputId = values.id; delete values.id;
+      if (!values.outputId) throw new Error('--output-id is required');
       if (!['stdout', 'stderr'].includes(values.stream)) throw new Error('--stream stdout|stderr is required');
     }
-    if (verb === 'exec' && (typeof values.command !== 'string' || !values.command.trim())) throw new Error("Remote command is required. Retry with `safs exec --workspace ID -- 'COMMAND'` or `--command 'COMMAND'`");
+    if (verb === 'exec' && (typeof values.command !== 'string' || !values.command.trim())) throw new Error("Remote command is required. Retry with `safs exec --id ID -- 'COMMAND'` or `--command 'COMMAND'`");
     if (file !== undefined) {
       if (!['write', 'create'].includes(verb)) throw new Error('--file is only valid for write or create');
       assign('content', file === '-' ? stdin : await readFile(file, 'utf8'));
@@ -123,13 +123,15 @@ async function invoke(configPath: string, request: Awaited<ReturnType<typeof par
   if (config.version !== 1) throw new Error('Unsupported SAFS connection file');
   const url = new URL(config.url);
   token = url.searchParams.get('token') ?? '';
-  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || !token || url.username || url.password) throw new Error('SAFS connection must be an authenticated loopback URL');
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || !url.searchParams.get('socket') || !token || url.username || url.password) throw new Error('SAFS connection must be an authenticated loopback URL');
   url.pathname = '/cli';
   let timeout = Number.isSafeInteger(config.timeoutMs) && config.timeoutMs >= 0 ? config.timeoutMs : 120000;
   if (timeout && request.name === 'safs_cli_batch') timeout = timeout * request.arguments.operations.length + 5000;
   return new Promise((resolve, reject) => {
     let timer: NodeJS.Timeout | undefined;
-    const req = http.request(url, { method: 'POST', headers: { 'content-type': 'application/json' }, agent: false }, res => {
+    const socketPath = url.searchParams.get('socket');
+    if (!socketPath) { reject(new Error('Missing IPC endpoint; reload SAFS')); return; }
+    const req = http.request({ socketPath, path: url.pathname + url.search, method: 'POST', headers: { 'content-type': 'application/json' }, agent: false }, res => {
       const chunks: Buffer[] = [];
       res.on('data', chunk => chunks.push(chunk));
       res.on('error', error => { if (timer) clearTimeout(timer); reject(error); });
@@ -161,6 +163,13 @@ function compact(result: any): any {
   if (Array.isArray(result)) return result.map(compact);
   if (!object(result)) return result;
   return Object.fromEntries(Object.entries(result).filter(([k, v]) => !(k === 'status' && v === 'ok' || k === 'ok' && v === true || ['truncated', 'hasMore'].includes(k) && v === false)).map(([k,v]) => [k,compact(v)]));
+}
+let activeConfig = '';
+async function inferWorkspace(): Promise<string> {
+  return resolveWorkspaceId(process.cwd(), async () => {
+    const result = await invoke(activeConfig, { name: 'list_remote_workspaces', arguments: {} });
+    return Array.isArray(result) ? result : result.workspaces ?? [];
+  });
 }
 async function main() {
   const args = process.argv.slice(2);
@@ -198,6 +207,7 @@ async function main() {
       console.log(`Installed SAFS skill to ${directory}`); return;
     } catch (error) { throw new Error(`${error instanceof Error ? error.message : error}\n\n${commandHelp.install}`); }
   }
+  activeConfig = config;
   const request = await parse(args);
   let result = await invoke(config, request);
   const code = exitCode(result);
