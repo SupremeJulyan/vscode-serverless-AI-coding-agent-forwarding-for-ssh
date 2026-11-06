@@ -1,7 +1,7 @@
 export type AgentInterface = 'mcp' | 'cli';
 
-export function normalizeAgentInterface(value: unknown): AgentInterface {
-  return value === 'mcp' ? 'mcp' : 'cli';
+export function normalizeAgentInterface(_value: unknown): AgentInterface {
+  return 'cli';
 }
 
 export function shouldCopyMcpUninstallPrompt(

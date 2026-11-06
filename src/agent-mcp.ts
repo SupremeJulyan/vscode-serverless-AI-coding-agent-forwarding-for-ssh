@@ -1,3 +1,4 @@
+import { ipcPath, ipcUrl, listenIpc } from './agent-ipc';
 import { operationMetric } from './operation-metric';
 import { listDirectories } from './remote-results';
 import { readTextBatch } from './remote-read-batch';
@@ -90,17 +91,15 @@ export class AgentMcpServer {
   private readonly outputs = new RemoteOutputStore();
   private httpServer: http.Server | undefined;
   private _portUnavailable = false;
-  private listeningPort: number | undefined;
 
   constructor(
-    private readonly port: number,
+    _port: number,
     private readonly token: string,
     private readonly callbacks: AgentMcpCallbacks
   ) {}
 
   get url(): string {
-    const port = this.listeningPort ?? this.port;
-    return `http://127.0.0.1:${port}/mcp?token=${encodeURIComponent(this.token)}`;
+    return `${ipcUrl(ipcPath('window-' + process.pid + '-' + this.token))}&token=${encodeURIComponent(this.token)}`;
   }
 
   get running(): boolean {
@@ -367,33 +366,10 @@ export class AgentMcpServer {
     });
     const server = http.createServer(app);
     this._portUnavailable = false;
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE') {
-          this._portUnavailable = true;
-          this.callbacks.log?.(
-            `MCP 端口 ${this.port} 已被其他窗口占用；请将 agentMcpPort 设为 0 以启用每窗口独立端口。`
-          );
-          resolve();
-        } else {
-          reject(err);
-        }
-      });
-      server.listen(this.port, '127.0.0.1', () => {
-        server.off('error', reject);
-        const address = server.address();
-        if (address && typeof address !== 'string') this.listeningPort = address.port;
-        resolve();
-      });
-    });
-    if (this._portUnavailable) {
-      // A fixed port can collide with another window. Do not claim that the
-      // other server represents this window; no cross-window reuse is safe.
-      return;
-    }
+    await listenIpc(server, ipcPath('window-' + process.pid + '-' + this.token));
     this.httpServer = server;
     this.callbacks.log?.(
-      `MCP 已启动：http://127.0.0.1:${this.listeningPort ?? this.port}/mcp?token=<hidden>`
+      'Agent IPC 已启动'
     );
   }
 
@@ -401,7 +377,6 @@ export class AgentMcpServer {
     this.outputs.clear();
     const server = this.httpServer;
     this.httpServer = undefined;
-    this.listeningPort = undefined;
     if (!server) return;
     this.callbacks.log?.('正在停止 MCP');
     await new Promise<void>((resolve, reject) => {
