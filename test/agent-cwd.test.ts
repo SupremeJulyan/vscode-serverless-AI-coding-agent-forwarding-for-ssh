@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdtemp, readdir } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
@@ -73,4 +73,41 @@ test('caches the last remote directory beside the empty cwd placeholder', async 
     writeLastRemoteDirectory(root.localPath, '/home/share/alice', '/home/share/other'),
     /outside the remote root/
   );
+});
+
+
+test('new placeholders use readable endpoint and remote directory names', async () => {
+  const { agentCwdDirectoryName } = await import('../src/agent/agent-cwd');
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'safs-readable-'));
+  try {
+    const root = await ensureAgentCwdPlaceholder('/', storage, 'alias', '192.0.2.1', 'user', 22);
+    const remote = '/home/share/user/folder1';
+    const cwd = await ensureAgentCwdSubdirectory(root.localPath, '/', remote);
+    assert.equal(path.basename(cwd), 'user@192.0.2.1@22home-share-user-folder1');
+    assert.equal(await ensureAgentCwdSubdirectory(root.localPath, '/', remote), cwd);
+    const other = await ensureAgentCwdPlaceholder(remote, storage, 'renamed', '192.0.2.1', 'user', 2222);
+    assert.notEqual(cwd, other.localPath);
+    assert.notEqual(agentCwdDirectoryName('host', 22, 'user', '/a-b/c'), agentCwdDirectoryName('host', 22, 'user', '/a/b-c'));
+    const { workspacePathForRemote, remotePathForUri } = await import('../src/ssh2/filesystem-provider');
+    const folder = { mountName: 'alias', hostName: 'alias', remoteRoot: '/', workspaceRoot: root.localPath };
+    assert.equal(workspacePathForRemote(folder, remote), cwd);
+    assert.equal(remotePathForUri(folder, cwd + '/file.txt'), remote + '/file.txt');
+  } finally { await rm(storage, { recursive: true, force: true }); }
+});
+
+test('existing legacy placeholders are reused without creating readable duplicates', async () => {
+  const { legacyAgentCwdPath, agentCwdDirectoryName } = await import('../src/agent/agent-cwd');
+  const storage = await mkdtemp(path.join(os.tmpdir(), 'safs-reuse-'));
+  try {
+    const oldRoot = legacyAgentCwdPath('/', storage, '192.0.2.1', 'user');
+    const remote = '/home/share/user/folder1';
+    const oldProject = path.join(oldRoot, ...remote.split('/').filter(Boolean));
+    await mkdir(oldProject, { recursive: true });
+    const root = await ensureAgentCwdPlaceholder('/', storage, 'alias', '192.0.2.1', 'user');
+    assert.equal(root.localPath, oldRoot);
+    assert.equal(root.created, false);
+    assert.equal(await ensureAgentCwdSubdirectory(root.localPath, '/', remote), oldProject);
+    await assert.rejects(lstat(path.join(storage, 'agent-cwd', agentCwdDirectoryName('192.0.2.1', 22, 'user', remote))), { code: 'ENOENT' });
+    assert.equal((await ensureAgentCwdPlaceholder(remote, storage, 'otherAlias', '192.0.2.1', 'user')).localPath, oldProject);
+  } finally { await rm(storage, { recursive: true, force: true }); }
 });

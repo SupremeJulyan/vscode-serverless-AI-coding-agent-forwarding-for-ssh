@@ -40,7 +40,7 @@ test('root login does not apply a conflicting home mapping to the root namespace
   try {
     const root = await ensureAgentCwdPlaceholder('/', storage, 'dev(root)', '127.0.0.1', 'root');
     const home = await ensureAgentCwdPlaceholder('/root', storage, 'dev(root)', '127.0.0.1', 'root');
-    assert.equal(root.localPath, home.localPath);
+    assert.notEqual(root.localPath, home.localPath);
     // Covers restored folder metadata as well as current root-folder mapping.
     for (const workspaceRoot of [root.localPath.replace(/\\/g, '/'), '/c:/Users/admin/agent-cwd/7f000001/root/root']) {
       const folder: RemoteFolder = {

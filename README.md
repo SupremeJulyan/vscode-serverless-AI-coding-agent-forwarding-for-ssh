@@ -4,7 +4,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SSH 使用远程终端；服务器无需安装 VS Code Server。启用 Agent 转发后，Copilot、Codex、Claude Code 等 AI Coding Agent 也能在当前远程工作区读写文件、搜索代码和执行命令。
+SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SSH 使用远程终端；服务器无需安装 VS Code Server。打开 SAFS 远程工作区或终端后，Agent 转发会自动准备，Copilot、Codex、Claude Code 等 AI Coding Agent 可在对应远程目标读写文件、搜索代码和执行命令。
 
 
 ![SAFS 操作演示](images/safs-demo.gif)
@@ -91,7 +91,7 @@ CLI 通过 Unix socket（Windows 使用命名管道）与扩展通信，无需�
 SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命令继承该终端当前的用户
 权限和环境变量，下方会显示绑定的终端及目录。
 
-关闭时点击 **关闭 Agent 转发**。如果 CLI 是通过提示词或 URL 手动安装的，请运行 `SAFS: 为我的Agent卸载转发功能`。
+SAFS 视图中的连接条目会用圆点显示 Agent 转发状态。需要恢复时，点击连接旁的 **重启 Agent 转发**。如果 CLI 是通过提示词或 URL 手动安装的，请运行 `SAFS: 为我的Agent卸载转发功能`。
 
 ## 文件传输与本地同步
 
@@ -140,7 +140,7 @@ SAFS 在本地 VS Code 扩展进程中建立 SSH/SFTP 连接，将远程目录�
 
 SAFS 提供 CLI 接口，让 Agent 安全、高效地调用插件的文件操作与远程命令能力。该接口使用插件管理的连接、工作区边界和安全检查，支持结构化文件操作、批量请求与分段读取输出，减少重复连接和不必要的数据传输。
 
-启用 Agent 转发后，每个远程窗口都会启动仅本机可访问的 CLI 服务。多个窗口共用固定的本地路由入口；每次路由操作都显式携带 `workspaceId`，精确指向目标窗口，避免将命令发到错误的服务器或工作区。
+打开 SAFS 远程工作区或终端后，对应窗口会启动仅本机可访问的 CLI 服务。多个窗口共用固定的本地路由入口；每次路由操作都显式携带 `workspaceId`，精确指向目标窗口，避免将命令发到错误的服务器或工作区。
 
 结构化写入被限制在当前远程工作区。Agent 发起的 SSH 命令若命中高风险规则，默认会被拒绝并记录脱敏审计日志。但 SSH 命令不是沙箱：获准执行后仍拥有登录账号的权限，建议使用非 root、最小权限账号并禁用免密提权。
 
@@ -148,7 +148,7 @@ SAFS 提供 CLI 接口，让 Agent 安全、高效地调用插件的文件操作
 
 - 本地命令行和只支持 `file://` 的扩展不能直接访问 `safs://`；需要时请使用双向同步。
 - SFTP 没有原生文件变更通知，SAFS 通过轮询检测远程修改。
-- 支持Agent转发的 safs CLI 依赖本地 VS Code 持续运行，并保持对应挂载的转发已启用。
+- 支持 Agent 转发的 safs CLI 依赖本地 VS Code 持续运行，并保持对应 SAFS 远程工作区或终端打开。
 - SFTP 优先使用服务器子系统；不支持时使用同一 `ssh2` 连接上的 SCP 适配器，不调用系统 SSH/SFTP 命令。
 - CLI 工具能限制结构化文件操作，但无法拦截 Agent 自己调用的其他本地工具。
 
@@ -180,3 +180,5 @@ SAFS 提供 CLI 接口，让 Agent 安全、高效地调用插件的文件操作
 第三方移植来源与许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 [源码架构与模块目录](ARCHITECTURE.md)
+
+SAFS 新建的本地占位符使用 `用户@主机@端口远程路径` 格式，例如 `user@192.0.2.1@22home-share-user-folder1`。同一远程目录已有可确认对应的旧占位符时直接复用原目录；不同账号和端口分别管理。

@@ -1,3 +1,4 @@
+import { agentCwdMappings } from '../agent/agent-cwd';
 import { saveConfirmation } from '../remote/save-confirmation';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
@@ -15,6 +16,7 @@ export interface RemoteFolder {
   defaultRemotePath?: string;
   /** Previous storage namespace retained for restored editor tabs. */
   legacyMapping?: { workspaceRoot: string; remoteRoot: string };
+  legacyMappings?: Array<{ workspaceRoot: string; remoteRoot: string }>;
   /** POSIX URI path backed by a real directory in extension global storage. */
   workspaceRoot: string;
 }
@@ -29,14 +31,24 @@ function isWorkspaceNamespacePath(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith('../') && relative !== '..');
 }
 
+function additionalMappings(folder: RemoteFolder): Array<{ workspaceRoot: string; remoteRoot: string }> {
+  return [...agentCwdMappings(folder.workspaceRoot).map(item => ({
+    workspaceRoot: item.localPath.replaceAll('\\', '/').replace(/^(?=[A-Za-z]:\/)/, '/'), remoteRoot: item.remoteRoot
+  })), ...(folder.legacyMappings ?? [])];
+}
+
 export function isWorkspaceUriPath(folder: RemoteFolder, uriPath: string): boolean {
-  return isWorkspaceNamespacePath(folder.workspaceRoot, uriPath)
+  return additionalMappings(folder).some(item => isWorkspaceNamespacePath(item.workspaceRoot, uriPath))
+    || isWorkspaceNamespacePath(folder.workspaceRoot, uriPath)
     || Boolean(folder.legacyMapping && isWorkspaceNamespacePath(
       folder.legacyMapping.workspaceRoot, uriPath
     ));
 }
 
 export function remotePathForUri(folder: RemoteFolder, uriPath: string): string {
+  const mapped = additionalMappings(folder).sort((a, b) => b.workspaceRoot.length - a.workspaceRoot.length)
+    .find(item => isWorkspaceNamespacePath(item.workspaceRoot, uriPath));
+  if (mapped) return path.posix.join(mapped.remoteRoot, path.posix.relative(mapped.workspaceRoot, uriPath));
   if (folder.legacyMapping
     && folder.legacyMapping.workspaceRoot !== folder.workspaceRoot && isWorkspaceNamespacePath(
     folder.legacyMapping.workspaceRoot, uriPath
@@ -54,6 +66,9 @@ export function remotePathForUri(folder: RemoteFolder, uriPath: string): string 
 
 export function workspacePathForRemote(folder: RemoteFolder, remotePath: string): string {
   if (!isRemotePathInsideRoot(folder.remoteRoot, remotePath)) return remotePath;
+  const mapped = additionalMappings(folder).filter(item => isRemotePathInsideRoot(item.remoteRoot, remotePath))
+    .sort((a, b) => b.remoteRoot.length - a.remoteRoot.length)[0];
+  if (mapped) return path.posix.join(mapped.workspaceRoot, path.posix.relative(mapped.remoteRoot, remotePath));
   return path.posix.join(
     folder.workspaceRoot, path.posix.relative(folder.remoteRoot, remotePath)
   );

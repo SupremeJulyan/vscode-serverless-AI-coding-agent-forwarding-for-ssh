@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 
 export interface AgentCwdPlaceholder {
   localPath: string;
@@ -27,9 +27,89 @@ function ipPathSegment(ip: string): string {
   return Buffer.from(ip, 'utf8').toString('hex');
 }
 
-function remotePathSegments(remoteRoot: string): string[] {
+export function legacyAgentCwdPath(remoteRoot: string, storageRoot: string, host: string, user: string): string {
   const segments = path.posix.normalize(remoteRoot).split('/').filter(Boolean);
-  return segments.length > 0 ? segments.map(safeAgentCwdName) : ['root'];
+  return path.join(storageRoot, 'agent-cwd', ipPathSegment(host), safeAgentCwdName(user),
+    ...(segments.length ? segments.map(safeAgentCwdName) : ['root']));
+}
+
+export function agentCwdDirectoryName(host: string, port: number, user: string, remoteRoot: string): string {
+  const normalized = path.posix.normalize(remoteRoot);
+  if (!path.posix.isAbsolute(normalized)) throw new Error('Expected an absolute remote path');
+  const segments = normalized.split('/').filter(Boolean);
+  const name = `${safeAgentCwdName(user)}@${safeAgentCwdName(host)}@${port}${segments.map(safeAgentCwdName).join('-') || 'root'}`;
+  const lossy = [host, user, ...segments].some(value => safeAgentCwdName(value) !== value || /[-@]/.test(value))
+    || normalized === '/root' || Buffer.byteLength(name) > 180;
+  const hash = createHash('sha256').update(JSON.stringify([host, port, user, normalized])).digest('hex').slice(0, 12);
+  return lossy ? `${name.slice(0, 140)}-${hash}` : name;
+}
+
+interface PlaceholderIdentity { host: string; port: number; user: string; storageRoot: string; }
+export interface PlaceholderMapping { localPath: string; remoteRoot: string; }
+const identities = new Map<string, PlaceholderIdentity>();
+const mappings = new Map<string, PlaceholderMapping[]>();
+function mappingKey(value: string): string {
+  const normalized = value.replaceAll('\\', '/').replace(/^\/(?=[A-Za-z]:\/)/, '');
+  return process.platform === 'win32' || /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+function identityKey(identity: PlaceholderIdentity): string {
+  return JSON.stringify([identity.storageRoot, identity.host, identity.port, identity.user]);
+}
+export function agentCwdMappings(localRoot: string): PlaceholderMapping[] {
+  const identity = identities.get(mappingKey(localRoot));
+  return identity ? mappings.get(identityKey(identity)) ?? [] : [];
+}
+
+async function readablePlaceholder(remoteRoot: string, identity: PlaceholderIdentity): Promise<AgentCwdPlaceholder> {
+  const parent = path.join(identity.storageRoot, 'agent-cwd');
+  const key = identityKey(identity);
+  if (!mappings.has(key)) {
+    mappings.set(key, []);
+    const restored: PlaceholderMapping[] = [];
+    const entries = await readdir(parent, { withFileTypes: true }).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const record = JSON.parse(await readFile(path.join(parent, entry.name, '.safs-placeholder.json'), 'utf8'));
+        if (record.host !== identity.host || record.port !== identity.port || record.user !== identity.user) continue;
+        if (entry.name !== agentCwdDirectoryName(identity.host, identity.port, identity.user, record.remoteRoot)) continue;
+        restored.push({ localPath: path.join(parent, entry.name), remoteRoot: record.remoteRoot });
+      } catch { /* Other directories are not SAFS placeholder mappings. */ }
+    }
+    for (const item of restored) {
+      if (!mappings.get(key)!.some(existing => existing.localPath === item.localPath)) mappings.get(key)!.push(item);
+    }
+  }
+  const registered = mappings.get(key)!.find(item => item.remoteRoot === remoteRoot);
+  const namedPath = path.join(parent, agentCwdDirectoryName(identity.host, identity.port, identity.user, remoteRoot));
+  const oldRoot = legacyAgentCwdPath('/', identity.storageRoot, identity.host, identity.user);
+  const candidates = [registered?.localPath, namedPath,
+    ...(identity.port === 22 ? [
+      path.join(oldRoot, ...remoteRoot.split('/').filter(Boolean)),
+      legacyAgentCwdPath(remoteRoot, identity.storageRoot, identity.host, identity.user)
+    ] : [])].filter((value): value is string => Boolean(value));
+  let localPath = namedPath;
+  for (const candidate of candidates) {
+    if (mappings.get(key)!.some(item => item.localPath === candidate && item.remoteRoot !== remoteRoot)) continue;
+    if (await exists(candidate)) {
+      if (!(await lstat(candidate)).isDirectory()) continue;
+      localPath = candidate;
+      break;
+    }
+  }
+  const created = !await exists(localPath);
+  if (!created && !(await lstat(localPath)).isDirectory()) throw new Error('Placeholder path is not a directory');
+  await mkdir(localPath, { recursive: true });
+  await writeFile(path.join(localPath, '.safs-placeholder.json'), JSON.stringify({
+    host: identity.host, port: identity.port, user: identity.user, remoteRoot
+  }) + '\n', { mode: 0o600 });
+  identities.set(mappingKey(localPath), identity);
+  const items = mappings.get(key)!;
+  if (!items.some(item => item.localPath === localPath)) items.push({ localPath, remoteRoot });
+  return { localPath, created };
 }
 
 async function exists(value: string): Promise<boolean> {
@@ -48,17 +128,17 @@ async function exists(value: string): Promise<boolean> {
  * no directory or symlink is created at the remote machine's absolute path.
  */
 export async function ensureAgentCwdPlaceholder(
-  remoteRoot: string, storageRoot: string, mountName = '', hostIp?: string, user?: string
+  remoteRoot: string, storageRoot: string, mountName = '', hostIp?: string, user?: string, port = 22
 ): Promise<AgentCwdPlaceholder> {
   if (!path.posix.isAbsolute(remoteRoot)) {
     throw new Error(`Agent cwd requires an absolute remote path: ${remoteRoot}`);
   }
-  const localPath = hostIp && user !== undefined
-    ? path.join(storageRoot, 'agent-cwd', ipPathSegment(hostIp),
-      safeAgentCwdName(user), ...remotePathSegments(remoteRoot))
-    : path.join(storageRoot, 'agent-cwd', createHash('sha256')
-      .update(mountName).update('\0').update(path.posix.normalize(remoteRoot))
-      .digest('hex').slice(0, 16), safeAgentCwdName(mountName));
+  if (hostIp && user !== undefined) {
+    return readablePlaceholder(path.posix.normalize(remoteRoot), { host: hostIp, port, user, storageRoot });
+  }
+  const localPath = path.join(storageRoot, 'agent-cwd', createHash('sha256')
+    .update(mountName).update('\0').update(path.posix.normalize(remoteRoot))
+    .digest('hex').slice(0, 16), safeAgentCwdName(mountName));
   const created = !await exists(localPath);
   await mkdir(localPath, { recursive: true });
   return { localPath, created };
@@ -74,6 +154,8 @@ export async function ensureAgentCwdSubdirectory(
   if (relative === '..' || relative.startsWith('../') || path.posix.isAbsolute(relative)) {
     throw new Error(`Agent cwd path is outside the remote root: ${remotePath}`);
   }
+  const identity = identities.get(mappingKey(localRoot));
+  if (identity) return (await readablePlaceholder(path.posix.normalize(remotePath), identity)).localPath;
   const localPath = relative
     ? path.join(localRoot, ...relative.split('/'))
     : localRoot;
@@ -84,7 +166,7 @@ export async function ensureAgentCwdSubdirectory(
 function lastRemoteDirectoryPath(localRoot: string): string {
   // Keep metadata beside the directory exposed as the Agent cwd so the cwd
   // itself remains an empty mirror of the remote namespace.
-  return path.join(path.dirname(localRoot), 'last-remote-directory');
+  return localRoot + '.last-remote-directory';
 }
 
 export async function readLastRemoteDirectory(localRoot: string): Promise<string | undefined> {

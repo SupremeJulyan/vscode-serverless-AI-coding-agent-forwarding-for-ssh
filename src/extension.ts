@@ -1,3 +1,4 @@
+import { Preparation } from './shared/preparation';
 import { adoptedRemoteSaveResult } from './remote/save-result';
 import { saveConfirmation } from './remote/save-confirmation';
 import { operationMetric } from './shared/operation-metric';
@@ -61,7 +62,7 @@ import { AgentActivityStore } from './agent/agent-activity';
 import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent/agent-activity-view';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent/agent-discovery';
 import {
-  ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory,
+  ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory, legacyAgentCwdPath,
   writeLastRemoteDirectory
 } from './agent/agent-cwd';
 import { connectSftp } from './ssh2/sftp-client';
@@ -102,7 +103,7 @@ import {
 } from './security/command-policy';
 import { remoteCommandBoundaryViolation } from './security/remote-command-boundary';
 import { testLoopbackProxy } from './platform/proxy-diagnostic';
-import { remoteConnectionShortcutHint, remoteShortcutKeys } from './ui/shortcut-hint';
+import { remoteConnectionShortcutHint } from './ui/shortcut-hint';
 import {
   TerminalCommandOutputCapture, terminalForwardingCommand
 } from './terminal/terminal-command-forwarding';
@@ -133,9 +134,8 @@ const mountRenamesKey = platformStateKey('mountRenames');
 const mountRenames = new Map<string, string>();
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
-const agentForwardingHintKey = platformStateKey('agentForwardingHintV1');
 const gitPushReceiptsKey = platformStateKey('gitPushReceiptsV1');
-/** Serialize all mount toggles so only the first globally enabled mount installs integration. */
+/** Serialize automatic mount activation and recovery preference updates. */
 let aiForwardUpdate: Promise<void> = Promise.resolve();
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
@@ -162,6 +162,8 @@ let httpRouterStart: Promise<AgentHttpRouter> | undefined;
 /** 每个目标 CLI 在本次 Extension Host 生命周期只做一次真实版本检查。 */
 const cliVersionChecks = new Map<string, Promise<void>>();
 let cliSetupError: string | undefined;
+const cliPreparation = new Preparation<{ cliExecutable?: string }>();
+const cliAutoPrepareDisabledKey = 'safs.cliAutoPrepareDisabled';
 let agentHttpRouterHeartbeat: NodeJS.Timeout | undefined;
 let agentHttpRouterSettingsPromptShown = false;
 let vscodeContext: vscode.ExtensionContext;
@@ -546,25 +548,24 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   const remoteRoot = '/';
   const placeholder = await ensureAgentCwdPlaceholder(
     remoteRoot, vscodeContext.globalStorageUri.fsPath, mount.name,
-    resolved.hostConfig.ip, resolved.hostConfig.user
+    resolved.hostConfig.ip, resolved.hostConfig.user, resolved.hostConfig.port ?? 22
   );
   await removeLegacyCliInstructions(placeholder.localPath);
   const workspaceRoot = vscode.Uri.file(placeholder.localPath).path;
   // Preserve old home/configured-root URIs when existing windows and tabs restore.
   const legacyRoot = mount.remote_path === '.' ? defaultRemotePath
     : await session.realpath(mount.remote_path).catch(() => undefined);
-  const legacyPlaceholder = legacyRoot && legacyRoot !== remoteRoot
-    ? await ensureAgentCwdPlaceholder(
-      legacyRoot, vscodeContext.globalStorageUri.fsPath, mount.name,
-      resolved.hostConfig.ip, resolved.hostConfig.user
-    )
-    : undefined;
+  const legacyPath = (root: string) => vscode.Uri.file(legacyAgentCwdPath(
+    root, vscodeContext.globalStorageUri.fsPath, resolved.hostConfig.ip, resolved.hostConfig.user
+  )).path;
+  const oldRoot = legacyPath('/');
+  const oldHome = legacyRoot ? legacyPath(legacyRoot) : undefined;
   const folder: RemoteFolder = {
     mountName: mount.name, hostName: mount.host, remoteRoot, workspaceRoot, defaultRemotePath,
-    ...(legacyPlaceholder && legacyRoot
-      && vscode.Uri.file(legacyPlaceholder.localPath).path !== workspaceRoot ? { legacyMapping: {
-      workspaceRoot: vscode.Uri.file(legacyPlaceholder.localPath).path, remoteRoot: legacyRoot
-    } } : {})
+    legacyMappings: (resolved.hostConfig.port ?? 22) === 22 ? [
+      { workspaceRoot: oldRoot, remoteRoot: '/' },
+      ...(oldHome && oldHome !== oldRoot && legacyRoot ? [{ workspaceRoot: oldHome, remoteRoot: legacyRoot }] : [])
+    ] : []
   };
   await ensureAgentCwdSubdirectory(placeholder.localPath, remoteRoot, defaultRemotePath);
   registry.set(folder);
@@ -2108,7 +2109,7 @@ async function activityForwardingState(): Promise<AgentTerminalTargetState> {
   const terminal = activeAgentCommandTerminal();
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
   const mountName = location?.mountName ?? info?.mount.name;
-  if (!mountName) return { ...terminalState, availability: 'disabled', detail: '请打开远程目录或启用终端转发' };
+  if (!mountName) return { ...terminalState, availability: 'disabled', detail: '请打开 SAFS 远程目录或终端' };
   const state: AgentTerminalTargetState = { ...terminalState };
   try {
     const config = await readConfig();
@@ -2121,7 +2122,7 @@ async function activityForwardingState(): Promise<AgentTerminalTargetState> {
     if (forwardingRecoveryRunning || httpRouterStart || httpRouterCreation) {
       return { ...state, availability: 'checking', detail: '正在准备 Agent 转发' };
     }
-    if (!enabled) return { ...state, availability: 'disabled', recoveryLabel: '启用 Agent 转发' };
+    if (!enabled) return { ...state, availability: 'disabled', recoveryLabel: '启动 Agent 转发' };
     if (forwardingRecoveryError?.mountName === mountName) throw new Error(forwardingRecoveryError.message);
     if (cliEnabled()) {
       if (cliSetupError) throw new Error(cliSetupError);
@@ -2172,7 +2173,7 @@ async function recoverActivityForwarding(): Promise<void> {
     if (!enabled) {
       await setAiForwardEnabled(mount, true);
     } else {
-      await configureAgentInterface(vscodeContext);
+      await configureAgentInterface(vscodeContext, true);
     }
     await ensureFolder(mount);
     startAgentHttpRouterLeadership(vscodeContext);
@@ -2747,6 +2748,9 @@ async function openTerminal(
     ?? config.mounts.find((candidate) => candidate.name === location?.mountName)
     ?? await selectMount('选择要打开终端的远程连接');
   if (!mount) return undefined;
+  if (!vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []).includes(mount.name)) {
+    await setAiForwardEnabled(mount, true);
+  }
   const folder = await ensureFolder(mount);
   // Use the server-resolved root. Configured roots such as "." are relative
   // to the SSH login directory and cannot be compared directly with the
@@ -2847,7 +2851,6 @@ async function disconnect(requested?: MountConfig): Promise<void> {
 
   // Keep the Agent-forwarding preference so reconnecting this mount can
   // restore Agent access through the stable CLI router.
-  // Only the explicit toggle command clears the preference.
   await backend?.stop();
   await agentWorkspacePublisher.remove();
 }
@@ -4637,20 +4640,25 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     const workspaces = discoverAgentWorkspaces();
     const forwarding = aiForwarded
       && workspaces.some((workspace) => workspace.mountName === mount.name);
+    const forwardingError = forwardingRecoveryError?.mountName === mount.name || !!cliSetupError;
     const item = new vscode.TreeItem(mount.name);
     const connectionLabel = connected
       ? '已连接'
       : connectionState === 'connecting' || connectionState === 'reconnecting'
         ? '连接中'
         : connectionState === 'error' ? '连接错误' : '未连接';
-    const symbol = forwarding ? '⚡' : aiForwarded ? '○' : undefined;
-    item.description = symbol ? `Agent State: ${symbol}` : undefined;
+    item.description = forwarding ? 'Agent 转发中'
+      : forwardingError ? 'Agent 转发错误' : aiForwarded ? 'Agent 等待工作区' : 'Agent 未连接';
+    item.iconPath = new vscode.ThemeIcon(
+      'circle-filled',
+      new vscode.ThemeColor(forwardingError ? 'testing.iconFailed'
+        : forwarding ? 'testing.iconPassed' : aiForwarded ? 'testing.iconQueued' : 'disabledForeground')
+    );
     item.contextValue = [
       'safs.connection',
       connected ? 'connected' : 'disconnected',
       aiForwarded ? 'aiEnabled' : 'aiDisabled'
     ].join('.');
-    item.iconPath = new vscode.ThemeIcon(connected ? 'vm-active' : 'remote');
     item.tooltip = new vscode.MarkdownString([
       `**${mount.name}**`,
       '',
@@ -4660,8 +4668,10 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
       `SFTP：${connectionLabel}`,
       forwarding
         ? 'Agent 转发：转发中'
+        : forwardingError
+          ? 'Agent 转发：发生错误，请重启转发'
         : aiForwarded
-          ? 'Agent 转发：已启用（未转发）'
+          ? 'Agent 转发：等待远程工作区就绪'
           : 'Agent 转发：已关闭',
       '',
       '展开可查看历史远程目录。'
@@ -4699,8 +4709,14 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
     const workspaces = discoverAgentWorkspaces();
     const forwarding = aiForwarded
       && workspaces.some((workspace) => workspace.mountName === item.hostName);
-    const symbol = forwarding ? '⚡' : aiForwarded ? '○' : undefined;
-    treeItem.description = symbol ? `Agent State: ${symbol}` : undefined;
+    const forwardingError = forwardingRecoveryError?.mountName === item.hostName || !!cliSetupError;
+    treeItem.description = forwarding ? 'Agent 转发中'
+      : forwardingError ? 'Agent 转发错误' : aiForwarded ? 'Agent 等待工作区' : 'Agent 未连接';
+    treeItem.iconPath = new vscode.ThemeIcon(
+      'circle-filled',
+      new vscode.ThemeColor(forwardingError ? 'testing.iconFailed'
+        : forwarding ? 'testing.iconPassed' : aiForwarded ? 'testing.iconQueued' : 'disabledForeground')
+    );
     treeItem.contextValue = item.user.trim()
       ? [
         'safs.connection', 'safs.user',
@@ -4708,7 +4724,7 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
         aiForwarded ? 'aiEnabled' : 'aiDisabled'
       ].join('.')
       : 'safs.user.missingCredentials';
-    treeItem.iconPath = new vscode.ThemeIcon('account');
+    if (!item.user.trim()) treeItem.iconPath = new vscode.ThemeIcon('account');
     treeItem.tooltip = item.user
       ? `SSH 账号：${item.user}\n配置：${item.hostName}`
       : '点击新增账号，也可点击主机旁的 +。';
@@ -5520,6 +5536,8 @@ async function configureGlobalCliConnection(
 }
 
 async function uninstallGlobalCli(context: vscode.ExtensionContext): Promise<string> {
+  await context.globalState.update(cliAutoPrepareDisabledKey, true);
+  await cliPreparation.invalidate();
   const agentHome = os.homedir();
   const cliPlatform = process.platform;
   const executable = globalNodeCli(agentHome, cliPlatform);
@@ -5556,8 +5574,17 @@ async function installGlobalCliSkill(executable: string, target: NodeCliSkillTar
   bridgeOutput?.info(`[Agent CLI] ${result.stdout.trim()}`);
 }
 
-async function configureAgentInterface(
-  context: vscode.ExtensionContext
+function configureAgentInterface(
+  context: vscode.ExtensionContext, force = false, interactive = true
+): Promise<{ cliExecutable?: string }> {
+  return cliPreparation.get(async () => {
+    await context.globalState.update(cliAutoPrepareDisabledKey, false);
+    return performAgentInterfacePreparation(context, interactive);
+  }, force);
+}
+
+async function performAgentInterfacePreparation(
+  context: vscode.ExtensionContext, interactive: boolean
 ): Promise<{ cliExecutable?: string }> {
   const router = await ensureAgentHttpRouter(context);
   let executable: string;
@@ -5569,6 +5596,8 @@ async function configureAgentInterface(
     });
   } catch (error) {
     const detail = redactSensitiveText(error instanceof Error ? error.message : String(error));
+    cliSetupError = detail;
+    if (!interactive) throw error;
     const missingNode = error instanceof NodeRuntimeUnavailableError;
     const action = await vscode.window.showErrorMessage(
       missingNode ? 'SAFS CLI 需要 Node.js 18 或以上版本' : 'SAFS CLI 安装或更新失败',
@@ -5585,6 +5614,7 @@ async function configureAgentInterface(
     }
     throw error;
   }
+  cliSetupError = undefined;
   bridgeOutput?.appendLine(`[Agent CLI] 已安装用户级 safs 命令；接口=${agentInterface()}。`);
   return { cliExecutable: executable };
 }
@@ -5601,7 +5631,7 @@ async function updateAiForwardEnabled(
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: enabledValue
-      ? 'SAFS：正在启用 Agent 转发'
+      ? 'SAFS：正在准备 Agent 转发'
       : 'SAFS：正在关闭 Agent 转发'
   }, async () => {
     const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
@@ -5610,10 +5640,11 @@ async function updateAiForwardEnabled(
       return;
     }
     changed = true;
-    shouldInstallIntegration = enabledValue && enabled.size === 0;
-    // Complete installation before persisting the enabled flag so failures
-    // leave this mount available for a direct retry.
-    if (shouldInstallIntegration) {
+    shouldInstallIntegration = enabledValue;
+    // Complete CLI preparation before persisting the enabled flag so failures
+    // leave this mount available for retry. Preparation is shared and cached
+    // within this extension host.
+    if (enabledValue) {
       cliExecutable = (await configureAgentInterface(vscodeContext)).cliExecutable;
     }
     if (enabledValue) enabled.add(mount.name);
@@ -5651,14 +5682,12 @@ async function updateAiForwardEnabled(
   if (enabledValue) {
     if (!shouldInstallIntegration) {
       agentTrace('Preference', '已有其他挂载启用，跳过重复 Agent 集成安装');
-      notifyAgentForwardingEnabled(mount);
       return;
     }
     if (cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
     }
 
-    notifyAgentForwardingEnabled(mount);
     return;
   }
   const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
@@ -5668,27 +5697,6 @@ async function updateAiForwardEnabled(
   await refreshAgentCommandTerminalState();
 }
 
-function notifyAgentForwardingEnabled(mount: MountConfig): void {
-  void guard(async () => {
-    if (vscodeContext.globalState.get<boolean>(agentForwardingHintKey, false)) return;
-    const config = await readConfig();
-    const label = mountConnectionLabel(resolveMount(config, mount).hostConfig, config.host_aliases);
-    const shortcuts = remoteShortcutKeys(platformAdapter.kind);
-    const selected = await vscode.window.showInformationMessage(
-      `SAFS：已为“${label}”启用 Agent 转发。请打开对应的远程目录或远程终端，Agent 才能操作该远程目标。快捷键：${shortcuts.openFolder} / ${shortcuts.openTerminal}。`,
-      '打开远程目录', '打开远程终端', '我知道了'
-    );
-    // Use the mount that was enabled, rather than the currently focused target.
-    if (selected === '打开远程目录') {
-      await openDirectoryItem(mount);
-    } else if (selected === '打开远程终端') {
-      await openTerminal(vscodeContext, mount);
-    } else if (selected === '我知道了') {
-      await vscodeContext.globalState.update(agentForwardingHintKey, true);
-    }
-  });
-}
-
 async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): Promise<void> {
   const operation = aiForwardUpdate.catch(() => undefined).then(
     () => updateAiForwardEnabled(mount, enabledValue)
@@ -5696,6 +5704,36 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
   aiForwardUpdate = operation;
   try { await operation; }
   finally { await refreshAgentCommandTerminalState(); }
+}
+
+async function restartAgentForwarding(mount: MountConfig): Promise<void> {
+  if (forwardingRecoveryError?.mountName === mount.name) forwardingRecoveryError = undefined;
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: 'SAFS：正在重启 Agent 转发'
+  }, async () => {
+    const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
+    if (!enabled.has(mount.name)) await setAiForwardEnabled(mount, true);
+    await configureAgentInterface(vscodeContext, true);
+    startAgentHttpRouterLeadership(vscodeContext);
+    await ensureAgentHttpRouter(vscodeContext);
+
+    const location = currentRemoteLocation();
+    const terminal = activeAgentCommandTerminal();
+    const terminalInfo = terminal ? managedRemoteTerminals.get(terminal) : undefined;
+    const activeMountName = location?.mountName ?? terminalInfo?.mount.name;
+    if (activeMountName === mount.name) {
+      await agentWorkspacePublisher.remove();
+      await backend?.stop();
+      backend = undefined;
+      backendBoundMountName = undefined;
+      await ensureFolder(mount);
+      const server = await ensureAgentBackendServer(vscodeContext);
+      if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
+    }
+  });
+  await refreshAgentCommandTerminalState();
+  refreshTree();
 }
 
 async function prepareAgentCwd(mount: MountConfig): Promise<void> {
@@ -5862,6 +5900,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void refreshAgentCommandTerminalState().catch((error) => logAsyncFailure('刷新连接状态失败', error));
     }
   );
+  if (!context.globalState.get<boolean>(cliAutoPrepareDisabledKey, false)) {
+    void configureAgentInterface(context, false, false).catch(error => {
+      logAsyncFailure('后台准备 SAFS CLI 失败，打开远程工作区时可重试', error);
+    });
+  }
   // 回收空闲 SFTP 连接（safs.sftp.idleConnectionTtl 秒，0 关闭），避免多主机
   // 长期挂载时连接无限累积。
   const idleTtlSec = settings().get<number>('sftp.idleConnectionTtl', 600);
@@ -6073,7 +6116,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('installAgentForwarding', async () => {
     startAgentHttpRouterLeadership(context);
-    const result = await configureAgentInterface(context);
+    const result = await configureAgentInterface(context, true);
     if (result.cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${result.cliExecutable}`);
     }
@@ -6187,16 +6230,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await removeSyncedDirectory(vscodeContext, item.mountName, item.path);
     tree.refresh();
   });
-  command('enableAiForwardItem', async (mount) => {
-    await setAiForwardEnabled(mountForTreeElement(
+  command('restartAgentForwardItem', async (mount) => {
+    await restartAgentForwarding(mountForTreeElement(
       mount as MountConfig | HostConfig | HostGroupItem | UserItem
-    ), true);
-    tree.refresh();
-  });
-  command('disableAiForwardItem', async (mount) => {
-    await setAiForwardEnabled(mountForTreeElement(
-      mount as MountConfig | HostConfig | HostGroupItem | UserItem
-    ), false);
+    ));
     tree.refresh();
   });
 
@@ -6333,51 +6370,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Agent CLI: keep one in-extension fixed HTTP router alive, then start the
   // dynamic backend only in an enabled remote window.
   await guard(async () => {
-    const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
     const current = currentRemoteLocation();
+    let enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
+    if (current && !enabled.has(current.mountName)) {
+      const config = await readConfig();
+      const mount = config.mounts.find((candidate) => candidate.name === current.mountName);
+      if (mount) {
+        agentTrace('Activate', `远程工作区 ${mount.name} 自动启用 Agent 转发`);
+        await setAiForwardEnabled(mount, true);
+        enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
+      }
+    }
     agentTrace(
       'Activate',
       `当前远程挂载=${current?.mountName ?? '<none>'}，启用列表=${[...enabled].join(',') || '<empty>'}`
     );
-    // Keep an existing CLI current after extension upgrades. Fresh installs
-    // still require an explicit Agent-forwarding enable action.
-    if (cliEnabled()) {
-      const executable = globalNodeCli(os.homedir(), process.platform);
-      const skill = path.join(globalNodeCliSkill(os.homedir()), 'SKILL.md');
-      const [cliExists, skillExists] = await Promise.all([
-        access(executable).then(() => true, () => false),
-        access(skill).then(() => true, () => false)
-      ]);
-      if (cliExists) {
-        try {
-          await ensureGlobalCliVersion(context, executable, process.platform, os.homedir());
-          await updateInstalledNodeCliSkills(os.homedir(), (target) => installGlobalCliSkill(executable, target));
-        } catch (error) {
-          // A failed update must not prevent existing forwarding from starting.
-          logAsyncFailure('启动时更新 SAFS CLI 失败', error);
-        }
-      }
-      if (enabled.size > 0 && (!cliExists || !skillExists)) {
-        agentTrace(
-          'Activate',
-          `CLI/Skill 已不存在，清除卸载前遗留的 Agent 转发状态：${[...enabled].join(',')}`
-        );
-        enabled.clear();
-        await context.globalState.update(aiForwardMountsKey, []);
-        await context.globalState.update(cliInstallKey, undefined);
-        tree.refresh();
-      }
-      agentTrace('Activate', `${agentInterface()} 模式已启用，已检查现有 CLI；首次安装需打开 Agent 转发`);
-    }
     if (enabled.size > 0) {
       agentTrace('Activate', '启动或连接固定 HTTP CLI 路由器');
       startAgentHttpRouterLeadership(context);
-      const router = await ensureAgentHttpRouter(context);
-      if (cliEnabled()) {
-        await configureGlobalCliConnection(
-          context, globalNodeCli(os.homedir(), process.platform), cliRouterUrl(router.url)
-        );
-      }
+      await ensureAgentHttpRouter(context);
       if (current && enabled.has(current.mountName)) {
         agentTrace('Activate', `挂载 ${current.mountName} 已启用，启动窗口动态 CLI 后端`);
         const config = await readConfig();
@@ -6391,7 +6402,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         agentTrace('Activate', '当前不是已启用的远程窗口，仅提供固定 HTTP 路由');
       }
     } else {
-      agentTrace('Activate', '当前没有启用 Agent 转发的远程挂载，不启动路由或检查 Node.js');
+      agentTrace('Activate', '当前没有启用 Agent 转发的远程挂载，本地 CLI 在后台准备');
     }
   });
   startAgentWorkspacePublishing(context);
