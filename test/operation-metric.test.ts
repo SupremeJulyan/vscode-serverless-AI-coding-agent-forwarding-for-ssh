@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { operationMetric } from '../src/operation-metric';
+import { operationMetric } from '../src/shared/operation-metric';
 
 test('performance diagnostics expose only numeric measurements and never fail operations', () => {
   let output = '';

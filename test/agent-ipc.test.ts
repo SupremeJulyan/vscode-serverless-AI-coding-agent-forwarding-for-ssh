@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ipcPath, ipcUrl, listenIpc, ipcFetch } from '../src/agent-ipc';
+import { ipcPath, ipcUrl, listenIpc, ipcFetch } from '../src/agent/agent-ipc';
 
 const exec = promisify(execFile);
 test('CLI uses IPC and resolves placeholder cwd, explicit IDs and retained output', async () => {
@@ -70,6 +70,26 @@ test('CLI uses IPC and resolves placeholder cwd, explicit IDs and retained outpu
     assert.ok(seen.some(v => v.name === 'remote_list'));
     const response = await ipcFetch(ipcUrl(socket));
     assert.equal(response.status, 200);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('IPC fetch preserves SSE headers so a slow directory response parses correctly', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safs-ipc-sse-'));
+  const socket = ipcPath(root);
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'x-safs-diagnostic': 'present' });
+    response.end(': keepalive\n\ndata: {"jsonrpc":"2.0","id":1,"result":{"entries":[]}}\n\n');
+  });
+  try {
+    await listenIpc(server, socket);
+    const response = await ipcFetch(ipcUrl(socket));
+    assert.equal(response.headers.get('content-type'), 'text/event-stream');
+    assert.equal(response.headers.get('x-safs-diagnostic'), 'present');
+    assert.match(await response.text(), /^: keepalive/);
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

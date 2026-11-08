@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readTextRange, RemoteReadOptions } from '../src/remote-read';
+import { readTextRange, RemoteReadOptions } from '../src/remote/remote-read';
 const read = (text: string, options: Partial<RemoteReadOptions>) => {
   const bytes = Buffer.from(text);
   return readTextRange(bytes.length, async (offset, length) => bytes.subarray(offset, offset + length), { path: 'x', ...options });

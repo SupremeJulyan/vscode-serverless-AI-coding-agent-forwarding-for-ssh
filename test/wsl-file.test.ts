@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as path from 'node:path';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import * as os from 'node:os';
-import { parseWslUncPath, readTextFile, writeTextFile } from '../src/wsl-file';
+import { parseWslUncPath, readTextFile, writeTextFile } from '../src/platform/wsl-file';
 
 test('parseWslUncPath maps wsl.localhost UNC to distro and linux path', () => {
   assert.deepEqual(parseWslUncPath('\\\\wsl.localhost\\Ubuntu\\home\\user'), {

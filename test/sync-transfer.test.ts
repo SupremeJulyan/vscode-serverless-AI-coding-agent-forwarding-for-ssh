@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
-import { RemoteSyncManager, RemoteSyncTask } from '../src/remote-sync';
+import { RemoteSyncManager, RemoteSyncTask } from '../src/sync/remote-sync';
 import { SftpSession } from '../src/sftp/session';
 
 async function setup(t: { after(fn: () => Promise<void>): void }, failScan = false) {

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- 移植 Tabby 的原生 russh SSH/SFTP 会话架构，统一终端、命令、SFTP 的认证与连接复用；删除 ssh2、系统 SSH/SFTP 和 SCP 回退实现。
+- 新增 keyboard-interactive、加密私钥口令存储、原生跳板与代理配置，以及按 Enter 填入保存的 sudo 密码。
+- 兼容性变更：导入项统一使用 SAFS 主机密钥信任记录；服务器须提供 SFTP。范围读取因上游接口缺少 seek 而分块跳过前缀。
+
 ## 2.1.4
 
 - 修复 SSH config 导入配置在负载节点上重复校验主机密钥：直接按 `ssh 别名` 连接，使用 OpenSSH 配置的认证和 known_hosts 策略，移除 SAFS 额外密钥预探测和身份参数覆盖。

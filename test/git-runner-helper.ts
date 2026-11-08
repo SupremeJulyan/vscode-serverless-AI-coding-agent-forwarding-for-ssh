@@ -1,4 +1,4 @@
-import type { GitRunner } from '../src/remote-git';
+import type { GitRunner } from '../src/git/remote-git';
 
 /** Let existing command-level fixtures also emulate framed multi-command SSH execution. */
 export function mockGitBatch(runner: GitRunner): GitRunner {

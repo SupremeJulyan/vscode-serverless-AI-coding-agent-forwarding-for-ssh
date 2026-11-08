@@ -3,7 +3,7 @@ import test from 'node:test';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { registerAgentMcpTools } from '../src/agent-mcp-tools';
+import { registerAgentMcpTools } from '../src/agent/agent-mcp-tools';
 
 test('core profile keeps typed editing and output continuation but omits extended tools', async () => {
   const server = new McpServer({ name: 'test', version: '1' });

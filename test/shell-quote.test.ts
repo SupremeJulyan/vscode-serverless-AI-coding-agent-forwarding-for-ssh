@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { shellQuote } from '../src/shell-quote';
+import { shellQuote } from '../src/shared/shell-quote';
 
 test('shellQuote keeps arbitrary text in one POSIX shell word', () => {
   assert.equal(shellQuote('plain path'), "'plain path'");

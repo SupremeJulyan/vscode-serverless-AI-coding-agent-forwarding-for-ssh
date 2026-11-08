@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { proxyEnvironmentWarning } from '../src/proxy-environment';
+import { proxyEnvironmentWarning } from '../src/platform/proxy-environment';
 
 test('detects proxy environments that do not bypass every loopback host', () => {
   assert.deepEqual(proxyEnvironmentWarning({

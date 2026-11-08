@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CommandOutputMarkerStripper } from '../src/command-output-marker';
+import { CommandOutputMarkerStripper } from '../src/terminal/command-output-marker';
 
 function collect(stripper: CommandOutputMarkerStripper, chunks: string[]): string {
   const output: Buffer[] = [];

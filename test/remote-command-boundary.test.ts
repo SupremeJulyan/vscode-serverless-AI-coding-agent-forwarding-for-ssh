@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { remoteCommandBoundaryViolation } from '../src/remote-command-boundary';
+import { remoteCommandBoundaryViolation } from '../src/security/remote-command-boundary';
 
 const root = '/A/B';
 

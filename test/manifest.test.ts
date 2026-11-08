@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { defaultHighRiskCommandPatterns } from '../src/high-risk-commands';
+import { defaultHighRiskCommandPatterns } from '../src/security/high-risk-commands';
 
 interface ExtensionManifest {
   version: string;
@@ -214,13 +214,13 @@ test('shows separate Agent forwarding actions for enabled and disabled mounts', 
 });
 
 test('packages Agent integration without the legacy JS stdio router or Codex plugin', async () => {
-  await access(new URL('../src/agent-http-router.ts', import.meta.url));
+  await access(new URL('../src/agent/agent-http-router.ts', import.meta.url));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const nodeCliSource = await readFile(
     new URL('../src/safs-cli.ts', import.meta.url), 'utf8'
   );
   const nodeCliIntegrationSource = await readFile(
-    new URL('../src/node-cli-install.ts', import.meta.url), 'utf8'
+    new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8'
   );
   const vscodeIgnore = await readFile(new URL('../.vscodeignore', import.meta.url), 'utf8');
   assert.equal(extensionSource.includes('mcp-router.cjs'), false);
@@ -239,7 +239,7 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
 
 test('Agent integration installs the bundled CLI Skill without probing Agent installations', async () => {
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const nodeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
+  const nodeCliSource = await readFile(new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8');
   assert.ok(nodeCliSource.includes('globalNodeCliSkill'));
   assert.ok(extensionSource.includes("['install', '--skills', '-g']"));
   assert.equal(extensionSource.includes('nativeCliUsagePrompt'), false);
@@ -254,7 +254,7 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   assert.equal(extensionSource.includes('configureDetectedAgents'), false);
   assert.equal(extensionSource.includes('recordObservedAgentSource'), false);
   assert.equal(extensionSource.includes('runAgentMcpOperation'), false);
-  await assert.rejects(access(new URL('../src/agent-mcp-registry.ts', import.meta.url)));
+  await assert.rejects(access(new URL('../src/agent/agent-mcp-registry.ts', import.meta.url)));
 });
 
 test('the history view keeps refresh and remote actions without duplicate editing actions', async () => {
@@ -345,9 +345,9 @@ test('packages session-only remote shell integration scripts', async () => {
 });
 
 test('SAFS MCP is opt-in for remote context instead of mandatory in every workspace', async () => {
-  const direct = await readFile(new URL('../src/agent-mcp.ts', import.meta.url), 'utf8');
-  const router = await readFile(new URL('../src/agent-http-router.ts', import.meta.url), 'utf8');
-  const tools = await readFile(new URL('../src/agent-mcp-tools.ts', import.meta.url), 'utf8');
+  const direct = await readFile(new URL('../src/agent/agent-mcp.ts', import.meta.url), 'utf8');
+  const router = await readFile(new URL('../src/agent/agent-http-router.ts', import.meta.url), 'utf8');
+  const tools = await readFile(new URL('../src/agent/agent-mcp-tools.ts', import.meta.url), 'utf8');
   assert.equal(tools.includes('anthropic/alwaysLoad'), false);
   assert.equal(tools.includes('At the start of every conversation'), false);
   assert.equal(tools.includes('Before reading files, editing, searching'), false);
@@ -483,7 +483,7 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.equal(extensionSource.includes('legacyAgentInterfaceMigrationTarget'), false);
   assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
   assert.ok(extensionSource.includes('检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。'));
-  const nodeCliSource = await readFile(new URL('../src/node-cli-install.ts', import.meta.url), 'utf8');
+  const nodeCliSource = await readFile(new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8');
   assert.ok(nodeCliSource.includes('user-level Streamable HTTP MCP'));
   assert.equal(nodeCliSource.includes('switch the proxy to rule-based mode'), false);
 });
@@ -520,7 +520,7 @@ test('handles high-risk Agent commands without per-command prompts', async () =>
 
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const policySource = await readFile(
-    new URL('../src/mcp-command-policy.ts', import.meta.url), 'utf8'
+    new URL('../src/security/mcp-command-policy.ts', import.meta.url), 'utf8'
   );
   assert.equal(extensionSource.includes('SAFS：确认高风险远程 Shell 操作'), false);
   assert.equal(extensionSource.includes('允许本次执行'), false);

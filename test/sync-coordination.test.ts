@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
-import { SyncCoordinator } from '../src/sync-coordination';
+import { SyncCoordinator } from '../src/sync/sync-coordination';
 
 test('only one coordinator owns a sync task and readiness is shared', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'safs-sync-coordination-'));

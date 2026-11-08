@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deleteRemoteTree, ensureRemoteDir } from '../src/remote-tree';
+import { deleteRemoteTree, ensureRemoteDir } from '../src/remote/remote-tree';
 import { SftpSession } from '../src/sftp/session';
 
 function fakeSession(entries: Record<string, 'file' | 'directory'>): {

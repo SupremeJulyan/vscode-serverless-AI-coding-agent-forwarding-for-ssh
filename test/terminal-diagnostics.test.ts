@@ -1,43 +1,17 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { mkdtemp } from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import test from 'node:test';
 import {
   cleanTerminalDiagnostic, decodeTerminalDiagnostic, isRemoteDirectoryPermissionDenied,
   isTransientTerminalConnectionFailure,
-  nextAutoReconnectAttempt, shouldRecoverTerminalExit, terminalDiagnosticPlan,
+  nextAutoReconnectAttempt, shouldRecoverTerminalExit,
   terminalReconnectDelayMs
-} from '../src/terminal-diagnostics';
+} from '../src/terminal/terminal-diagnostics';
 
 test('classifies remote directory permission failures as non-retryable', () => {
   assert.equal(isRemoteDirectoryPermissionDenied("cd: /home/share/chenle: Permission denied"), true);
   assert.equal(isRemoteDirectoryPermissionDenied('Connection reset by peer'), false);
 });
 
-const plan = {
-  command: 'ssh', args: ['-p', '22', 'alice@dev'], env: { KEEP: 'yes' }
-};
-
-test('Unix terminal diagnostics mirror stderr through bash without flattening arguments', () => {
-  const wrapped = terminalDiagnosticPlan('linux', '/usr/bin/ssh', plan, '/tmp/safs.log');
-  assert.equal(wrapped.command, '/bin/bash');
-  assert.deepEqual(wrapped.args.slice(-4), ['/usr/bin/ssh', '-p', '22', 'alice@dev']);
-  assert.equal(wrapped.env?.KEEP, 'yes');
-  assert.equal(wrapped.env?.SAFS_TERMINAL_ERROR_LOG, '/tmp/safs.log');
-  assert.match(wrapped.args[1], /tee -a/);
-});
-
-test('Windows terminal diagnostics use PowerShell and preserve native arguments', () => {
-  const wrapped = terminalDiagnosticPlan('windows', 'C:\\Windows\\ssh.exe', plan, 'C:\\safs.log');
-  assert.equal(wrapped.command, 'powershell.exe');
-  assert.deepEqual(wrapped.args.slice(-4), [
-    'C:\\Windows\\ssh.exe', '-p', '22', 'alice@dev'
-  ]);
-  assert.match(wrapped.args[4], /SAFS_TERMINAL_ERROR_LOG/);
-});
 
 test('terminal diagnostics strip ANSI and retain the most recent bounded output', () => {
   assert.deepEqual(cleanTerminalDiagnostic('\u001b[31mfirst\u001b[0m\r\nsecond', 8), {
@@ -52,7 +26,7 @@ test('terminal diagnostics decode UTF-8 and Windows PowerShell UTF-16LE output',
   ])), '错误');
 });
 
-test('system SSH exit 0 is recovered when automatic reconnect is enabled', () => {
+test('SSH exit 0 is recovered when automatic reconnect is enabled', () => {
   assert.equal(shouldRecoverTerminalExit({
     processExit: true,
     exitCode: 0,
@@ -69,7 +43,7 @@ test('system SSH exit 0 is recovered when automatic reconnect is enabled', () =>
   }), false);
 });
 
-test('terminal recovery excludes user/window closure but auto-recovers clean ssh2 exits', () => {
+test('terminal recovery excludes user/window closure but auto-recovers clean SSH exits', () => {
   const base = {
     exitCode: 1,
     cleanExit: false,
@@ -122,20 +96,4 @@ test('backs off terminal reconnects with a bounded delay', () => {
   assert.equal(terminalReconnectDelayMs(2), 2_000);
   assert.equal(terminalReconnectDelayMs(3), 4_000);
   assert.equal(terminalReconnectDelayMs(4), 4_000);
-});
-
-test('Unix wrapper mirrors stderr, persists it, and preserves the SSH exit code', {
-  skip: process.platform === 'win32'
-}, async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-terminal-log-'));
-  const logFile = path.join(directory, 'stderr.log');
-  const wrapped = terminalDiagnosticPlan('linux', '/bin/sh', {
-    command: '/bin/sh', args: ['-c', 'echo diagnostic >&2; exit 23']
-  }, logFile);
-  const result = spawnSync(wrapped.command, wrapped.args, {
-    env: { ...process.env, ...wrapped.env }, encoding: 'utf8'
-  });
-  assert.equal(result.status, 23);
-  assert.match(result.stderr, /diagnostic/);
-  assert.match(readFileSync(logFile, 'utf8'), /diagnostic/);
 });

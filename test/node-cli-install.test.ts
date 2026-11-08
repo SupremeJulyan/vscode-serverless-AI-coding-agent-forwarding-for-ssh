@@ -9,7 +9,7 @@ import {
   parseNodeCliVersion, removeGlobalNodeCliSkill, removeNodeCli, withoutSafsPathBlock,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan, updateInstalledNodeCliSkills
-} from '../src/node-cli-install';
+} from '../src/cli/node-cli-install';
 
 test('updates every installed global Skill target without installing absent targets', async () => {
   const home = await mkdtemp(join(tmpdir(), 'safs-skill-update-'));

@@ -1,25 +1,18 @@
 import { readFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { Writable } from 'node:stream';
 import { Client, ConnectConfig, FileEntryWithStats, HostVerifier, SFTPWrapper, Stats } from 'ssh2';
-import { expandHome, HostConfig } from '../config';
-import { keyboardInteractivePasswordReplies } from '../authentication';
-import { defaultSshClientIdent, serverHostKeyAlgorithms } from '../ssh-algorithms';
-import { vpnRelayPoolPath } from '../wsl-bridge';
+import * as vscode from 'vscode';
+import { expandHome, HostConfig } from '../config/config';
+import { keyboardInteractivePasswordReplies } from '../config/authentication';
+import { defaultSshClientIdent, serverHostKeyAlgorithms } from '../ssh/algorithms';
+import { detectPlatform } from '../platform/platform';
+import { hostVerifierFor } from '../security/host-key';
+import { acquireWslVpnRelay } from '../ssh/vpn-relay';
 import { ScpSession } from './scp-session';
 import {
   SftpDirectoryEntry, SftpFileStat, SftpFileType, SftpSession, SftpWriteOptions
 } from './session';
 import { assertSafeRemoteEntryName } from './uri';
-
-const execFileAsync = promisify(execFile);
-
-interface RelayLease {
-  host: string;
-  port: number;
-  release(): Promise<void>;
-}
 
 function fileType(attributes: Stats): SftpFileType {
   if (attributes.isFile()) return 'file';
@@ -396,45 +389,6 @@ export class Ssh2SftpSession implements SftpSession {
   }
 }
 
-async function acquireWslVpnRelay(host: HostConfig): Promise<RelayLease> {
-  const script = vpnRelayPoolPath();
-  const targetPort = host.port ?? 22;
-  const holder = `vscode-sftp-${process.pid}-${host.name}`;
-  const command = [
-    'source "$1"',
-    'vpn_relay_acquire "$2" "$3" "$4"'
-  ].join(' && ');
-  const { stdout } = await execFileAsync(
-    'bash',
-    ['-c', command, 'safs-relay', script, host.ip, String(targetPort), holder],
-    { timeout: 30_000 }
-  );
-  const fields = stdout.trim().split(/\s+/);
-  const localPort = Number(fields[1]);
-  if (!Number.isInteger(localPort) || localPort <= 0 || localPort > 65535) {
-    throw new Error(`WSL VPN 中继返回了无效端口：${stdout.trim()}`);
-  }
-  return {
-    host: '127.0.0.1',
-    port: localPort,
-    release: async () => {
-      await execFileAsync(
-        'bash',
-        [
-          '-c',
-          'source "$1" && vpn_relay_release "$2" "$3" "$4"',
-          'safs-relay',
-          script,
-          host.ip,
-          String(targetPort),
-          holder
-        ],
-        { timeout: 30_000 }
-      ).then(() => undefined, () => undefined);
-    }
-  };
-}
-
 /** Errors meaning the SFTP subsystem is unusable: the server rejects it or
  * a gateway MOTD/`garbage corrupts the version handshake. These trigger the
  * exec/SCP fallback. */
@@ -454,7 +408,7 @@ export function isRetryableSsh2ConnectionError(error: unknown): boolean {
   return retryableConnectionPattern.test(errorMessage(error));
 }
 
-export async function connectSftp(
+async function connectSftpSsh2(
   host: HostConfig,
   useWslVpnRelay = false,
   signal?: AbortSignal,
@@ -512,6 +466,22 @@ export async function connectSftp(
       await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
     }
   }
+}
+
+/** Connect with the explicit SAFS endpoint and ssh2; no OpenSSH config lookup. */
+export async function connectSftp(
+  host: HostConfig,
+  signal?: AbortSignal,
+  onSftpFallback?: (reason: string) => void
+): Promise<SftpSession> {
+  return connectSftpSsh2(
+    host,
+    detectPlatform() === 'wsl',
+    signal,
+    vscode.workspace.getConfiguration('safs').get<string>('sshClientIdent', defaultSshClientIdent),
+    hostVerifierFor(host),
+    onSftpFallback
+  );
 }
 
 function attemptConnect(

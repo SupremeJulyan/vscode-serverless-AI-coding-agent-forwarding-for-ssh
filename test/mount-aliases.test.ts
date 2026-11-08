@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   hierarchicalHostName, legacyMountNames, mountAliasCandidates, mountConnectionLabel, mountNameFor
-} from '../src/mount-aliases';
-import { HostConfig } from '../src/config';
+} from '../src/config/mount-aliases';
+import { HostConfig } from '../src/config/config';
 
 const host = (overrides: Partial<HostConfig> = {}): HostConfig => ({
   name: '192.0.2.10(dev_alice)',

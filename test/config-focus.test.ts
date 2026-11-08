@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isConfigFocus } from '../src/config-focus';
+import { isConfigFocus } from '../src/config/config-focus';
 
 test('accepts well-formed config focus arguments', () => {
   assert.equal(isConfigFocus({ kind: 'entry', name: '192.0.2.10(dev_alice)' }), true);

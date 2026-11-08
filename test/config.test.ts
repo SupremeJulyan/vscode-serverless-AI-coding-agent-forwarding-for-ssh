@@ -6,7 +6,7 @@ import test from 'node:test';
 import {
   ensureConfigFile, expandHome, parseConfig, parseSshLogin, resolveMount, saveConfig,
   removeAccountConfig, removeMountConfig
-} from '../src/config';
+} from '../src/config/config';
 
 test('parses and resolves a mount through its host reference', () => {
   const config = parseConfig({
@@ -180,7 +180,7 @@ test('hierarchical config groups accounts and preserves credentials, paths and c
 });
 
 test('loading legacy config migrates it automatically and keeps a backup', async () => {
-  const { loadConfig } = await import('../src/config');
+  const { loadConfig } = await import('../src/config/config');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-migrate-'));
   const configPath = path.join(directory, 'config.json');
   const legacy = JSON.stringify({ hosts: [{ name: 'old', ip: '10.0.0.1', user: 'alice', password: 'secret' }],

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { unwrapCliToolResult } from '../src/agent-http-router';
+import { unwrapCliToolResult } from '../src/agent/agent-http-router';
 
 test('CLI result adapter preserves structured success and tool errors', () => {
   assert.deepEqual(unwrapCliToolResult({

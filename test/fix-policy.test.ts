@@ -45,7 +45,7 @@ test('opening a remote directory in a new window preserves the source window ter
 });
 
 test('sync ownership retries silently and SFTP negotiation has no fixed timeout', async () => {
-  const sync = await readFile(new URL('../src/remote-sync.ts', import.meta.url), 'utf8');
+  const sync = await readFile(new URL('../src/sync/remote-sync.ts', import.meta.url), 'utf8');
   assert.equal(sync.includes('同步任务由另一个 VS Code 窗口管理'), false);
   assert.ok(sync.includes('pendingAcquireTimers'));
 
@@ -55,7 +55,7 @@ test('sync ownership retries silently and SFTP negotiation has no fixed timeout'
 });
 
 test('directory sync watches both the root entry and its descendants', async () => {
-  const sync = await readFile(new URL('../src/remote-sync.ts', import.meta.url), 'utf8');
+  const sync = await readFile(new URL('../src/sync/remote-sync.ts', import.meta.url), 'utf8');
   assert.ok(sync.includes("new vscode.RelativePattern(path.dirname(task.localDir), '*')"));
   assert.ok(sync.includes("new vscode.RelativePattern(task.localDir, '**/*')"));
   assert.ok(sync.includes('previousRootType !== isFile'));

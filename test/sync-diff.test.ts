@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SftpSession } from '../src/sftp/session';
-import { diffFingerprints, linesToMap, scanRemote } from '../src/sync-diff';
+import { diffFingerprints, linesToMap, scanRemote } from '../src/sync/sync-diff';
 
 interface FakeNode {
   type: 'file' | 'directory';

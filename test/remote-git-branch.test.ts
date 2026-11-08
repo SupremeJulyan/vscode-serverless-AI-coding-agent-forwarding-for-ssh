@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { GitRunner, RemoteGit } from '../src/remote-git';
-import { createBranch, listBranches, parseBranches, switchBranch } from '../src/remote-git-branch';
+import { GitRunner, RemoteGit } from '../src/git/remote-git';
+import { createBranch, listBranches, parseBranches, switchBranch } from '../src/git/remote-git-branch';
 
 test('parses, filters and sorts local and already-fetched remote branches', async () => {
   const output = [

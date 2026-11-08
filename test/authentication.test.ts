@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   configEntryOffset, isAuthenticationFailure, isNetworkFailure, passwordValueOffset
-} from '../src/authentication';
+} from '../src/config/authentication';
 
 test('recognizes common SSH password authentication failures', () => {
   assert.equal(isAuthenticationFailure(new Error('Permission denied, please try again.')), true);

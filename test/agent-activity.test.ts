@@ -3,8 +3,8 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import {
   AgentActivityStore, agentActivityLimit, summarizeAgentActivityInput
-} from '../src/agent-activity';
-import { activityViewHtml, AgentActivityViewProvider } from '../src/agent-activity-view';
+} from '../src/agent/agent-activity';
+import { activityViewHtml, AgentActivityViewProvider } from '../src/agent/agent-activity-view';
 
 class MemoryState {
   readonly values = new Map<string, unknown>();

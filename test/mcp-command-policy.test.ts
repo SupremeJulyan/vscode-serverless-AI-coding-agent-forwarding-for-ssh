@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   evaluateMcpCommandPolicy, readMcpCommandPolicySettings
-} from '../src/mcp-command-policy';
+} from '../src/security/mcp-command-policy';
 
 test('reads command policy with deny as the fail-safe action', () => {
   const values: Record<string, unknown> = {

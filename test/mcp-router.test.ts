@@ -3,9 +3,9 @@ import * as http from 'node:http';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { AgentHttpRouter, agentTaggedMcpUrl, workspaceIdFor } from '../src/agent-http-router';
-import { AgentMcpServer } from '../src/agent-mcp';
-import { DiscoveredAgentWorkspace } from '../src/agent-discovery';
+import { AgentHttpRouter, agentTaggedMcpUrl, workspaceIdFor } from '../src/agent/agent-http-router';
+import { AgentMcpServer } from '../src/agent/agent-mcp';
+import { DiscoveredAgentWorkspace } from '../src/agent/agent-discovery';
 
 function callbacks(label: string) {
   return {

@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   findRemotePathCandidates, findRemoteTerminalPaths, resolveRemoteTerminalCwdReport,
   resolveRemoteTerminalPath
-} from '../src/terminal-links';
+} from '../src/terminal/terminal-links';
 
 test('finds absolute and relative compiler paths with locations', () => {
   assert.deepEqual(

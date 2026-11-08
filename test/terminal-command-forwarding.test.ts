@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs';
 import test from 'node:test';
 import {
   TerminalCommandOutputCapture, terminalForwardingCommand
-} from '../src/terminal-command-forwarding';
+} from '../src/terminal/terminal-command-forwarding';
 
 test('builds a marker-wrapped command with a bounded remote cwd', () => {
   const plan = terminalForwardingCommand(

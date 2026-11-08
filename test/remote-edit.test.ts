@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyRemoteTextEdits, textSha256 } from '../src/remote-edit';
+import { applyRemoteTextEdits, textSha256 } from '../src/remote/remote-edit';
 
 test('applies multiple exact remote edits transactionally and in order', () => {
   assert.deepEqual(applyRemoteTextEdits('one\ntwo\nthree\n', [

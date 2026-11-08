@@ -275,3 +275,21 @@ test('does not retry non-connection errors', async () => {
   await assert.rejects(session.stat('/srv/missing'), /ENOENT/);
   assert.equal(attempts, 1);
 });
+
+test('does not replay a mutation whose remote outcome is uncertain', async () => {
+  let writes = 0;
+  let connections = 0;
+  const pool = new SftpConnectionPool(async hostName => {
+    connections++;
+    const session = fakeSession(hostName, () => undefined);
+    session.writeFile = async () => { writes++; throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }); };
+    return session;
+  });
+  const session = await pool.get('dev');
+  await assert.rejects(session.writeFile('file', Buffer.from('content'), { create: true, overwrite: true }), /connection reset/);
+  assert.equal(writes, 1);
+  assert.equal(connections, 1);
+  await pool.get('dev');
+  assert.equal(connections, 2);
+  await pool.close();
+});

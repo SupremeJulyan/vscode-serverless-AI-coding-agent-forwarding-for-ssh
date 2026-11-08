@@ -6,7 +6,7 @@ import test from 'node:test';
 import {
   appendMcpCommandLog, appendMcpToolLog, formatMcpCommandLogLine,
   formatMcpToolLogLine, mcpLogDirectory, mcpLogFilePath
-} from '../src/mcp-log';
+} from '../src/agent/mcp-log';
 
 test('writes redacted commands together with their audit hashes', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-mcp-log-'));
