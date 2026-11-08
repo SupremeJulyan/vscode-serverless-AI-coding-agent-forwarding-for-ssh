@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { testLoopbackProxy } from '../src/proxy-diagnostic';
+import { testLoopbackProxy } from '../src/platform/proxy-diagnostic';
 
 test('diagnostic verifies direct access, proxy interception and NO_PROXY bypass', async () => {
   const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/_proxy$/i.test(key)));

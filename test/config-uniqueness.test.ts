@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { configUniquenessTextIssues } from '../src/config-uniqueness';
-import { parseConfig } from '../src/config';
+import { configUniquenessTextIssues } from '../src/config/config-uniqueness';
+import { parseConfig } from '../src/config/config';
 
 test('duplicate IPs with different names highlight both IP fields and reject loading', () => {
   const value = { hosts: [

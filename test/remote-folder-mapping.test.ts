@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import {
   isWorkspaceUriPath, remotePathForUri, workspacePathForRemote, RemoteFolder
 } from '../src/sftp/filesystem-provider';
-import { ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory } from '../src/agent-cwd';
+import { ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory } from '../src/agent/agent-cwd';
 
 test('root mount maps home and outside-home directories without colliding with restored URIs', async () => {
   const storage = await mkdtemp(path.join(os.tmpdir(), 'safs-root-mapping-'));

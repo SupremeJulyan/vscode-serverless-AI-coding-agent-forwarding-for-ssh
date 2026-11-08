@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { pageDirectory, searchResult } from '../src/remote-results';
+import { pageDirectory, searchResult } from '../src/remote/remote-results';
 
 test('directory pages are stable, complete and reject stale or cross-path cursors', () => {
   const entries = ['c', 'a', 'b'].map(name => ({ name, type: 'file' }));
@@ -28,7 +28,7 @@ test('search distinguishes failure from no matches and counts only complete capt
 });
 
 test('directory batches share the entry limit and retain resumable item cursors', async () => {
-  const { listDirectories } = await import('../src/remote-results');
+  const { listDirectories } = await import('../src/remote/remote-results');
   const result = await listDirectories(['missing', '/a', '/b'], 2, async ({ path, limit }) => {
     if (path === 'missing') throw new Error('missing');
     return pageDirectory(['a', 'b', 'c'].map(name => ({ name, type: 'file' })), path, { limit });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { matchHighRiskCommand } from '../src/high-risk-commands';
+import { matchHighRiskCommand } from '../src/security/high-risk-commands';
 
 test('matches destructive commands', () => {
   const commands = [

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { accountTargetIndex } from '../src/host-accounts';
-import { BridgeConfig } from '../src/config';
+import { accountTargetIndex } from '../src/config/host-accounts';
+import { BridgeConfig } from '../src/config/config';
 
 const config = (hosts: Array<{ name: string; ip: string; user: string }>): BridgeConfig => ({
   hosts, mounts: []

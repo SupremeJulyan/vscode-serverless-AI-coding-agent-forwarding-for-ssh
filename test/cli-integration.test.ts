@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cliConfigPath, updateCliInstructions, writeCliConnection, writeCliConnectionFile } from '../src/cli-integration';
+import { cliConfigPath, updateCliInstructions, writeCliConnection, writeCliConnectionFile } from '../src/cli/cli-integration';
 
 test('refreshes stale CLI connection settings and recreates a missing connection file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-cli-refresh-'));

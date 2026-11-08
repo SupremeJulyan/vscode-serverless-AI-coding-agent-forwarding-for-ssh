@@ -4,8 +4,8 @@ import { Readable } from 'node:stream';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
-import { downloadRemoteDirectoryTree } from '../src/remote-download';
-import { downloadPartPath } from '../src/resume-plan';
+import { downloadRemoteDirectoryTree } from '../src/transfer/remote-download';
+import { downloadPartPath } from '../src/transfer/resume-plan';
 import { SftpSession } from '../src/sftp/session';
 
 interface FakeEntry {

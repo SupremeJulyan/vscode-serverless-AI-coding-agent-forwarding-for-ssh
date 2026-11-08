@@ -6,10 +6,10 @@ import ts from 'typescript';
 import {
   addRecordedMcpAgentName, normalizeAgentInterface, recordedMcpAgentNames,
   shouldCopyMcpUninstallPrompt
-} from '../src/agent-interface';
-import { agentTaggedMcpUrl } from '../src/agent-http-router';
-import { streamableHttpMcpInstallPrompt } from '../src/node-cli-install';
-import { UiOperationGate } from '../src/ui-operation';
+} from '../src/agent/agent-interface';
+import { agentTaggedMcpUrl } from '../src/agent/agent-http-router';
+import { streamableHttpMcpInstallPrompt } from '../src/cli/node-cli-install';
+import { UiOperationGate } from '../src/ui/ui-operation';
 
 async function uninstallPromptHarness() {
   const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');

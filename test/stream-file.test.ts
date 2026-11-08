@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import { PassThrough, Readable } from 'node:stream';
-import { pipeStreams, writeStreamToFile } from '../src/stream-file';
+import { pipeStreams, writeStreamToFile } from '../src/transfer/stream-file';
 
 test('streams a source into a file and reports deltas that sum to the total', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-stream-'));

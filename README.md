@@ -18,7 +18,7 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 
 ## 快速开始
 
-### 1. 添加 SSH 配置
+### 1. 添加主机账号
 
 1. 安装并启用 SAFS 扩展。
 2. 点击左侧活动栏的 **SAFS** 图标。
@@ -26,9 +26,9 @@ SAFS 让你在 VS Code 中通过 SFTP 浏览、编辑远程文件，并通过 SS
 4. 在已有主机旁点击 **＋**，可以继续追加账号。
 5. 首次连接时核对并确认服务器主机密钥指纹。
 
-SAFS 会自动扫描 `~/.ssh/config` 及其 `Include` 文件，并导入字面量 `Host` 条目的主机名、账号、端口和私钥。导入账号自动标记 `source: "ssh-config"`，统一使用系统 SSH/SFTP，直接按 `ssh 别名` 连接，由 OpenSSH 从 SSH config 读取账号、端口、私钥、代理、证书和 SSH agent，并使用其主机密钥策略和 known_hosts；导入配置不执行 SAFS 的额外密钥探测，也不使用 `safs.hostKeyChangedAction` 覆盖策略；通配符 `Host` 仅作为配置规则使用，不会单独出现在 SAFS 列表中。
+SSH、终端、命令和 SFTP 全部使用 `ssh2`，不会启动系统 `ssh` 命令作为回退。SAFS 只使用 SAFS 配置中的主机地址、端口和账号，不导入或读取 `~/.ssh/config`，也不自动使用 SSH agent；需要 agent 时显式设置 `auth: "agent"` 或 `agent_socket`。即使 SAFS 中填写的地址和 SSH config 别名相同，也按该地址直连，不会应用 SSH config 规则。若服务器没有可用的 SFTP 子系统，文件传输会在同一 `ssh2` 连接上使用内置 SCP 适配器。
 
-直接在 SAFS 中添加或手动写入 `~/.safs/config.json` 的账号默认使用内置 `ssh2`，不根据全局 SSH 配置、SSH agent 或是否填写密码/私钥推断通道。原有 WSL VPN 中继及实际连接失败后的兼容回退规则不变。
+账号支持 `auth`（auto/password/publickey/agent/keyboard-interactive）、`agent_socket`、`proxy_command`、`jump_host`、`socks_proxy` 和 `http_proxy`。`jump_host` 应引用 SAFS 中配置的主机账号；多跳以逗号分隔。sudo 提示匹配当前登录用户后，按 Enter 填入保存密码；其他输入取消，可用 `safs.autoSudoPassword` 关闭。终端 sudo 不改变 SFTP 登录身份。
 
 配置保存在 `~/.safs/config.json`。一般使用界面添加即可；需要手动维护时，可运行 `SAFS: 打开配置`：
 
@@ -149,7 +149,7 @@ SAFS 提供 MCP 和 CLI 两种 Agent 接口，让 Agent 安全、高效地调用
 - 本地命令行和只支持 `file://` 的扩展不能直接访问 `safs://`；需要时请使用双向同步。
 - SFTP 没有原生文件变更通知，SAFS 通过轮询检测远程修改。
 - 支持Agent转发的 safs MCP/CLI 依赖本地 VS Code 持续运行，并保持对应挂载的转发已启用。
-- 服务器没有 SFTP 子系统时会回退到 SCP/exec；基础文件操作仍可用，但性能和兼容性可能不同。
+- SFTP 优先使用服务器子系统；不支持时使用同一 `ssh2` 连接上的 SCP 适配器，不调用系统 SSH/SFTP 命令。
 - MCP 工具能限制结构化文件操作，但无法拦截 Agent 自己调用的其他本地工具。
 
 ## SAFS 与免密 SSH alias 对比
@@ -165,7 +165,7 @@ SAFS 提供 MCP 和 CLI 两种 Agent 接口，让 Agent 安全、高效地调用
 | 写入边界 | 结构化写工具限制在当前工作区，另有高风险命令规则 | 默认拥有 SSH 账号的全部权限，没有额外工作区边界 |
 | 安全控制 | 主机密钥确认、本地 MCP Token、高危命令拦截与脱敏日志 | 可充分利用 OpenSSH；安全性取决于密钥、账号和服务器权限 |
 | 文件传输 | 内置可视化上传、下载和双向同步 | `scp`/`rsync` 成熟通用，适合脚本化和批量传输 |
-| 兼容性 | 对密码、私钥、部分 VPN/网关和无 SFTP 环境做了兼容 | OpenSSH 能连接即可；特殊网络和交互认证需自行编排 |
+| 兼容性 | 支持密码、私钥、交互认证、跳板和代理；服务器须提供 SFTP | OpenSSH 能连接即可；特殊网络和交互认证需自行编排 |
 | 依赖 | 必须运行 VS Code 与 SAFS；Agent 需支持 MCP 或 SAFS CLI | 只依赖 SSH 客户端和密钥，对编辑器与 Agent 要求较少 |
 | 更适合 | 交互式开发，让 Agent 安全操作当前项目 | 已有 SSH 运维体系、CI 脚本和跨工具自动化 |
 
@@ -174,3 +174,9 @@ SAFS 提供 MCP 和 CLI 两种 Agent 接口，让 Agent 安全、高效地调用
 - 需要文件树、编辑器、同步，并希望 Agent 明确绑定当前工作区：选择 **SAFS**。
 - 已有成熟的 SSH 密钥和权限体系，只需执行命令或现有脚本：**SSH alias** 更简单。
 - 两者可以并用：日常编辑与 Agent 文件操作走 SAFS，已审查的运维脚本或批量传输走 SSH/rsync。
+
+原生预编译模块覆盖 Windows/macOS x64、arm64 及 Linux glibc x64、arm64、arm；WSL 使用 Linux 模块。
+
+第三方移植来源与许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+[源码架构与模块目录](ARCHITECTURE.md)

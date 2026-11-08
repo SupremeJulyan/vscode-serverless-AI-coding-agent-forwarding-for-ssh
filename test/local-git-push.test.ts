@@ -4,12 +4,12 @@ import * as assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { RemoteGit, GitRunner } from '../src/remote-git';
-import { createRemoteGitBundle } from '../src/remote-git-bundle';
+import { RemoteGit, GitRunner } from '../src/git/remote-git';
+import { createRemoteGitBundle } from '../src/git/remote-git-bundle';
 import {
   declareShallowBoundaries, describeShallowPushFailure, localGitRunner, pushThroughLocalGit,
   resolveShallowBoundaries, resolvePushTarget, validatePushUrl
-} from '../src/local-git-push';
+} from '../src/git/local-git-push';
 
 import { execGitFixture as exec } from './git-fixture-exec';
 

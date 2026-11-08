@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import { symlinkOrSkip } from './symlink-helper';
-import { assertLocalSyncPath, localPathForRemote } from '../src/sync-path';
+import { assertLocalSyncPath, localPathForRemote } from '../src/sync/sync-path';
 
 test('localPathForRemote keeps materialized paths below the sync root', () => {
   const root = path.join(os.tmpdir(), 'sync-root');

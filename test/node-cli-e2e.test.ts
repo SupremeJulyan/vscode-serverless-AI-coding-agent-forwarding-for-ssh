@@ -4,10 +4,10 @@ import test from 'node:test';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
-import { AgentHttpRouter, workspaceIdFor } from '../src/agent-http-router';
-import { cliConfigPath, writeCliConnection } from '../src/cli-integration';
-import { executeCaptured as capture } from '../src/process';
+import { AgentMcpServer, AgentToolError } from '../src/agent/agent-mcp';
+import { AgentHttpRouter, workspaceIdFor } from '../src/agent/agent-http-router';
+import { cliConfigPath, writeCliConnection } from '../src/cli/cli-integration';
+import { executeCaptured as capture } from '../src/platform/process';
 
 function executeCaptured(plan: Parameters<typeof capture>[0], ...rest: Parameters<typeof capture> extends [any, ...infer R] ? R : never) {
   return capture({ ...plan, command: process.execPath, args: [plan.command, ...(plan.args ?? [])] }, ...rest);

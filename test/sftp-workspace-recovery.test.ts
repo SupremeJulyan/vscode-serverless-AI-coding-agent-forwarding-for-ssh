@@ -82,3 +82,79 @@ test('network failures recover while authentication and cancellation do not', ()
     'System SFTP connection was cancelled'
   ]) assert.equal(isConnectionError(new Error(message)), false, message);
 });
+
+test('slow Explorer stat requests and overlapping watch ticks share one remote operation', async context => {
+  const registry = new RemoteFolderRegistry();
+  registry.set({ mountName: 'dev', hostName: 'dev', remoteRoot: '/', workspaceRoot: '/stage' });
+  let stats = 0;
+  let complete!: () => void;
+  const waiting = new Promise<void>(resolve => { complete = resolve; });
+  const session = {
+    realpath: async (value: string) => value,
+    stat: async () => { stats++; await waiting; return { type: 'directory', size: 0, mtime: 10, ctime: 10 }; }
+  };
+  const provider = new SftpFileSystemProvider({ get: async () => session } as unknown as SftpConnectionPool, registry, 0, 60_000);
+  context.after(() => provider.dispose());
+  const uri = { scheme: 'safs', path: '/stage', toString: () => remoteUri('dev', '/stage'),
+    with: () => ({ toString: () => remoteUri('dev', '/') }) } as unknown as vscode.Uri;
+  provider.watch(uri, { recursive: false, excludes: [] });
+  const firstPoll = (provider as any).pollWatches();
+  const reads = [provider.stat(uri), provider.stat(uri)];
+  await new Promise(resolve => setImmediate(resolve));
+  for (let tick = 0; tick < 10; tick++) await (provider as any).pollWatches();
+  assert.equal(stats, 1);
+  complete();
+  await Promise.all([firstPoll, ...reads]);
+});
+
+test('concurrent directory requests coalesce and failed requests can be retried', async context => {
+  const registry = new RemoteFolderRegistry();
+  registry.set({ mountName: 'dev', hostName: 'dev', remoteRoot: '/', workspaceRoot: '/stage' });
+  let lists = 0;
+  let complete!: () => void;
+  const waiting = new Promise<void>(resolve => { complete = resolve; });
+  let fail = true;
+  const session = { readDirectoryResolved: async () => {
+    lists++; await waiting;
+    if (fail) throw new Error('temporary failure');
+    return { path: '/', entries: [] };
+  } };
+  const provider = new SftpFileSystemProvider({ get: async () => session } as unknown as SftpConnectionPool, registry, 0, 60_000);
+  context.after(() => provider.dispose());
+  const uri = { scheme: 'safs', path: '/stage', toString: () => remoteUri('dev', '/stage') } as unknown as vscode.Uri;
+  const first = provider.readDirectory(uri), second = provider.readDirectory(uri);
+  const failed = Promise.allSettled([first, second]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(lists, 1);
+  complete();
+  assert.ok((await failed).every(result => result.status === 'rejected'));
+  fail = false;
+  assert.deepEqual(await provider.readDirectory(uri), []);
+  assert.equal(lists, 2);
+});
+
+test('the first watch snapshot does not restart an Explorer directory load', async context => {
+  const registry = new RemoteFolderRegistry();
+  registry.set({ mountName: 'dev', hostName: 'dev', remoteRoot: '/', workspaceRoot: '/stage' });
+  let complete!: () => void;
+  const waiting = new Promise<void>(resolve => { complete = resolve; });
+  let lists = 0;
+  const session = {
+    realpath: async (value: string) => value,
+    stat: async () => ({ type: 'directory', size: 0, mtime: 10, ctime: 10 }),
+    readDirectoryResolved: async () => { lists++; await waiting; return { path: '/', entries: [] }; }
+  };
+  const provider = new SftpFileSystemProvider({ get: async () => session } as unknown as SftpConnectionPool, registry, 30_000, 60_000);
+  context.after(() => provider.dispose());
+  const uri = { scheme: 'safs', path: '/stage', toString: () => remoteUri('dev', '/stage'),
+    with: () => ({ toString: () => remoteUri('dev', '/') }) } as unknown as vscode.Uri;
+  provider.watch(uri, { recursive: false, excludes: [] });
+  const refreshed: Promise<unknown>[] = [];
+  provider.onDidChangeFile(() => { refreshed.push(provider.readDirectory(uri)); });
+  const original = provider.readDirectory(uri);
+  await (provider as any).pollWatches();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(lists, 1, 'the initial watch event must reuse the pending directory request');
+  complete();
+  await Promise.all([original, ...refreshed]);
+});

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { TrailingOperationQueue } from '../src/trailing-operation-queue';
+import { TrailingOperationQueue } from '../src/shared/trailing-operation-queue';
 
 test('event arriving during an operation causes one trailing rerun', async () => {
   const queue = new TrailingOperationQueue();

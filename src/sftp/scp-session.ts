@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { Client } from 'ssh2';
-import { shellQuote } from '../shell-quote';
+import { shellQuote } from '../shared/shell-quote';
 import {
   SftpDirectoryEntry, SftpFileStat, SftpFileType, SftpSession, SftpWriteOptions
 } from './session';

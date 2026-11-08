@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { orderedBatch } from '../src/ordered-batch';
+import { orderedBatch } from '../src/shared/ordered-batch';
 
 test('reads overlap, mutations are barriers, and results preserve input order', async () => {
   const events: string[] = [];

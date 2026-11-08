@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   downloadPartPath, isTransferPartName, partNameFor, partSourceLabel, partToken, planResume,
   pruneTransferParts, shouldKeepPart, uploadPartName, RESUME_MIN_BYTES
-} from '../src/resume-plan';
+} from '../src/transfer/resume-plan';
 
 const signature = (size: number, mtimeMs = 1000) => ({ size, mtimeMs });
 const TOKEN = 'abcdef0123456789';

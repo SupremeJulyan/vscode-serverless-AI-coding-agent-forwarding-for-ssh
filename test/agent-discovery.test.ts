@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import {
   AgentWorkspacePublisher, agentDiscoveryDirectory, discoverAgentWorkspaces
-} from '../src/agent-discovery';
+} from '../src/agent/agent-discovery';
 
 test('publishes a private, versioned remote workspace record and removes it', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'safs-discovery-'));

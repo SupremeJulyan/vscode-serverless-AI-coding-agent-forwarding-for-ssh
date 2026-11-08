@@ -3,7 +3,7 @@ import * as assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rename, rm, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { gitCommand, isGitConflict, parseGitStatus, RemoteGit, GitRunner } from '../src/remote-git';
+import { gitCommand, isGitConflict, parseGitStatus, RemoteGit, GitRunner } from '../src/git/remote-git';
 
 import { execGitFixture as exec } from './git-fixture-exec';
 async function fixture(t: Parameters<Parameters<typeof test>[1]>[0]) {

@@ -4,8 +4,8 @@ import { mkdtemp, mkdir, stat, writeFile, rm, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { Writable } from 'node:stream';
-import { uploadRemoteTree } from '../src/remote-upload';
-import { uploadPartName } from '../src/resume-plan';
+import { uploadRemoteTree } from '../src/transfer/remote-upload';
+import { uploadPartName } from '../src/transfer/resume-plan';
 import { SftpSession } from '../src/sftp/session';
 
 function remote(failWrite = false, failCommit = false, existingPermissions = 0o640) {

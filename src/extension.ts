@@ -1,21 +1,20 @@
-import { operationMetric } from './operation-metric';
-import { untilCancelled, UiOperationGate } from './ui-operation';
-import { registerConfigDiagnostics } from './config-diagnostics';
-import { startSshConfigImport } from './ssh-config-import';
-import { createRemoteGitBundle } from './remote-git-bundle';
+import { operationMetric } from './shared/operation-metric';
+import { untilCancelled, UiOperationGate } from './ui/ui-operation';
+import { registerConfigDiagnostics } from './config/config-diagnostics';
+import { createRemoteGitBundle } from './git/remote-git-bundle';
 import {
   applySuccessfulPushReceipt, recordSuccessfulPush, localGitRunner, pushReceiptKey,
   pushThroughLocalGit, resolvePushTarget, resolveShallowBoundaries,
   successfulPushReceipt, SuccessfulPushReceipt, validatePushUrl
-} from './local-git-push';
+} from './git/local-git-push';
 import {
   pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget,
   localGitAuthenticationError, LocalGitAuthenticationError
-} from './local-git-pull';
-import { RemoteGit } from './remote-git';
-import { RemoteGitScm } from './remote-git-scm';
-import { RemoteGitHistory } from './remote-git-history';
-import { updateCliInstructions, writeCliConnectionFile } from './cli-integration';
+} from './git/local-git-pull';
+import { RemoteGit } from './git/remote-git';
+import { RemoteGitScm } from './git/remote-git-scm';
+import { RemoteGitHistory } from './git/remote-git-history';
+import { updateCliInstructions, writeCliConnectionFile } from './cli/cli-integration';
 import {
   ensureUnixCliPath, globalNodeCli, globalNodeCliSkill, installNodeCli, removeNodeCli,
   NodeRuntimeUnavailableError, requireNodeRuntime, updateInstalledNodeCliSkills, NodeCliSkillTarget,
@@ -23,10 +22,10 @@ import {
   parseNodeCliVersion,
   streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
-} from './node-cli-install';
-import { searchCommand, RemoteSearchOptions } from './remote-search';
-import { readTextRange, RemoteReadOptions } from './remote-read';
-import { pageDirectory, searchResult } from './remote-results';
+} from './cli/node-cli-install';
+import { searchCommand, RemoteSearchOptions } from './remote/remote-search';
+import { readTextRange, RemoteReadOptions } from './remote/remote-read';
+import { pageDirectory, searchResult } from './remote/remote-results';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -36,57 +35,51 @@ import * as vscode from 'vscode';
 import {
   BridgeConfig, deriveMounts, ensureConfigFile, expandHome, HostConfig, loadConfig, MountConfig,
   parseSshLogin, removeAccountConfig, removeMountConfig, resolveMount, saveConfig
-} from './config';
+} from './config/config';
 import {
   hierarchicalHostName, mountAliasCandidates, mountConnectionLabel, mountNameFor
-} from './mount-aliases';
-import { ConfigFocus, isConfigFocus } from './config-focus';
-import { accountTargetIndex } from './host-accounts';
-import { decryptPassword, encryptPassword, isEncryptedPassword } from './password';
+} from './config/mount-aliases';
+import { ConfigFocus, isConfigFocus } from './config/config-focus';
+import { accountTargetIndex } from './config/host-accounts';
+import { decryptPassword, encryptPassword, isEncryptedPassword } from './security/password';
 import {
-  AskpassCredentials, createAskpassCredentials, platformUsesAskpass
-} from './askpass';
+  agentHttpRouterPort, createPlatformAdapter, platformExtensionStateKey
+} from './platform/platform';
+import { executeCaptured, missingExecutableName } from './platform/process';
+import { SshTerminal } from './ssh/terminal';
 import {
-  CommandPlan, agentHttpRouterPort, createPlatformAdapter, platformExtensionStateKey
-} from './platform';
-import { executeCaptured, missingExecutableName, resolveExecutable } from './process';
-import {
-  closeSsh2ExecSessions, executeSsh2Command, Ssh2ConnectionError,
-  type Ssh2CommandResult, Ssh2Terminal
-} from './ssh2-terminal';
+  closeSshConnections, executeSshCommand, type SshCommandResult
+} from './ssh/command';
 import {
   configEntryOffset, passwordValueOffset
-} from './authentication';
-import { AgentMcpServer, AgentToolError } from './agent-mcp';
-import { writeWorkspaceId } from './workspace-id';
-import { AgentHttpRouter, agentTaggedMcpUrl, workspaceIdFor } from './agent-http-router';
-import { AgentActivityStore } from './agent-activity';
-import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent-activity-view';
+} from './config/authentication';
+import { AgentMcpServer, AgentToolError } from './agent/agent-mcp';
+import { writeWorkspaceId } from './agent/workspace-id';
+import { AgentHttpRouter, agentTaggedMcpUrl, workspaceIdFor } from './agent/agent-http-router';
+import { AgentActivityStore } from './agent/agent-activity';
+import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent/agent-activity-view';
 import {
   addRecordedMcpAgentName, normalizeAgentInterface, recordedMcpAgentNames,
   shouldCopyMcpUninstallPrompt, type AgentInterface
-} from './agent-interface';
-import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent-discovery';
+} from './agent/agent-interface';
+import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent/agent-discovery';
 import {
   ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory,
   writeLastRemoteDirectory
-} from './agent-cwd';
+} from './agent/agent-cwd';
 import { connectSftp } from './sftp/client';
-import { connectSystemScp } from './sftp/system-session';
-import { connectSystemSftp } from './sftp/system-sftp';
 import { SftpSession } from './sftp/session';
-import { writeStreamToFile, pipeStreams } from './stream-file';
+import { writeStreamToFile, pipeStreams } from './transfer/stream-file';
 import {
   cleanupDownloadPart, commitDownloadPart, prepareDownloadResume
-} from './resume-store';
-import { downloadRemoteDirectoryTree } from './remote-download';
-import { sameResumePrefix } from './resume-checksum';
-import { uploadRemoteTree } from './remote-upload';
-import { defaultSshClientIdent, ensureSshCapabilities } from './ssh-algorithms';
+} from './transfer/resume-store';
+import { downloadRemoteDirectoryTree } from './transfer/remote-download';
+import { sameResumePrefix } from './transfer/resume-checksum';
+import { uploadRemoteTree } from './transfer/remote-upload';
 import { isConnectionError, SftpConnectionPool } from './sftp/connection-pool';
-import { RemoteSyncManager, RemoteSyncTask } from './remote-sync';
-import { scanRemote } from './sync-diff';
-import { SyncCoordinator } from './sync-coordination';
+import { RemoteSyncManager, RemoteSyncTask } from './sync/remote-sync';
+import { scanRemote } from './sync/sync-diff';
+import { SyncCoordinator } from './sync/sync-coordination';
 import {
   remotePathForUri, RemoteFolder, RemoteFolderRegistry, SftpFileSystemProvider,
   workspacePathForRemote, isWorkspaceUriPath
@@ -95,48 +88,38 @@ import {
   isRemotePathInsideRoot, mountAuthorityAlias, parseRemoteUri, remoteFileSystemScheme, remoteUri,
   RemoteUriLocation, setMountAliasResolver
 } from './sftp/uri';
-import { ensureWslBridgeExecutable, setWslBundlePath } from './wsl-bridge';
-import { setRemoteShellIntegrationBundlePath } from './remote-shell-integration';
-import { hostVerifierFor, setKnownHostsFilePath } from './host-key';
-import {
-  isOpenSshHostKeyVerificationFailure, maxOpenSshHostKeyRetries,
-  runWithOpenSshHostKeyRetry, verifySystemSshHostKey
-} from './system-ssh-host-key';
-import {
-  hasRequiredWslDependencies, installWslDependencies
-} from './dependency-installer';
-import { appendMcpCommandLog, appendMcpToolLog } from './mcp-log';
+import { setWslBundlePath } from './platform/wsl-bridge';
+import { setRemoteShellIntegrationBundlePath } from './terminal/remote-shell-integration';
+import { setKnownHostsFilePath } from './security/host-key';
+import { appendMcpCommandLog, appendMcpToolLog } from './agent/mcp-log';
 import {
   validateLocalDownloadTarget, validateLocalUploadSource
-} from './local-transfer-path';
-import { redactSensitiveText } from './redact';
+} from './transfer/local-transfer-path';
+import { redactSensitiveText } from './security/redact';
 import {
   applyRemoteTextEdits, maxRemoteEditFileBytes, RemoteTextEdit, textSha256
-} from './remote-edit';
-import { shellQuote } from './shell-quote';
+} from './remote/remote-edit';
+import { shellQuote } from './shared/shell-quote';
 import {
   evaluateMcpCommandPolicy, readMcpCommandPolicySettings
-} from './mcp-command-policy';
-import { remoteCommandBoundaryViolation } from './remote-command-boundary';
-import { testLoopbackProxy } from './proxy-diagnostic';
-import { remoteConnectionShortcutHint, remoteShortcutKeys } from './shortcut-hint';
+} from './security/mcp-command-policy';
+import { remoteCommandBoundaryViolation } from './security/remote-command-boundary';
+import { testLoopbackProxy } from './platform/proxy-diagnostic';
+import { remoteConnectionShortcutHint, remoteShortcutKeys } from './ui/shortcut-hint';
 import {
   TerminalCommandOutputCapture, terminalForwardingCommand
-} from './terminal-command-forwarding';
+} from './terminal/terminal-command-forwarding';
 import {
   cleanTerminalDiagnostic, decodeTerminalDiagnostic, isRemoteDirectoryPermissionDenied,
   isTransientTerminalConnectionFailure,
-  nextAutoReconnectAttempt, shouldRecoverTerminalExit, terminalDiagnosticPlan,
+  nextAutoReconnectAttempt, shouldRecoverTerminalExit,
   terminalReconnectDelayMs
-} from './terminal-diagnostics';
-import {
-  isSshAuthenticationFailure, shouldFallbackToSystemSsh, shouldUseBuiltinSshTerminal
-} from './terminal-routing';
-import { selectSshTransport } from './ssh-transport';
+} from './terminal/terminal-diagnostics';
+import { isSshAuthenticationFailure } from './terminal/terminal-routing';
 import {
   findRemotePathCandidates, findRemoteTerminalPaths, resolveRemoteTerminalCwdReport,
   resolveRemoteTerminalPath
-} from './terminal-links';
+} from './terminal/terminal-links';
 
 const commandPrefix = 'safs';
 const platformAdapter = createPlatformAdapter();
@@ -161,12 +144,11 @@ let aiForwardUpdate: Promise<void> = Promise.resolve();
 const mcpUninstallPrompts = new UiOperationGate();
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
-const addSshConfigAction = 'Add SSH Config';
+const addHostAccountAction = '添加主机账号';
 const reconnectRemoteTerminalAction = '重连终端';
 const viewSafsLogAction = '查看 SAFS 日志';
-const addTerminalLinkMountAction = '添加 SSH 配置';
+const addTerminalLinkMountAction = '添加主机账号';
 const openTerminalLinkConfigAction = '打开配置';
-const terminalCredentialTtlMs = 5 * 60 * 1000;
 const logClearIntervalMs = 24 * 60 * 60 * 1000;
 /** 普通退出只恢复一次，避免认证失败等永久错误触发反复登录。 */
 const maxTerminalAutoReconnectAttempts = 1;
@@ -217,14 +199,10 @@ let lastReadConfig: BridgeConfig | undefined;
 const managedRemoteTerminals = new Map<vscode.Terminal, {
   mount: MountConfig;
   remoteCwd: string;
-  retryWithSystemSsh?: boolean;
-  usesSystemSsh?: boolean;
-  importedSshConfig?: boolean;
   connectionError?: string;
-  hostKeyRetries?: number;
   startedAt: number;
-  /** 内置 ssh2 终端实例：live-sync 用它安全补发 cd（shell 就绪前入队）。 */
-  pty?: import('./ssh2-terminal').Ssh2Terminal;
+  /** SSH 终端实例：live-sync 用它安全补发 cd（shell 就绪前入队）。 */
+  pty?: SshTerminal;
   diagnostic?: { file: string; command: string };
 }>();
 /** 自动重连计数（key：mount\0remoteCwd），防止异常退出时无限自动重连。 */
@@ -266,9 +244,7 @@ function refreshSafsEntryLabel(): void {
       return;
     }
     safsStatusBar.text = transport === 'scp' ? '$(remote) SAFS SCP' : '$(remote) SAFS SFTP';
-    safsStatusBar.tooltip = transport === 'scp'
-      ? '传输通道：SCP/exec（服务器未提供 SFTP 子系统）'
-      : '传输通道：SFTP';
+    safsStatusBar.tooltip = `传输通道：${transport.toUpperCase()}（ssh2）`;
     const location = currentRemoteLocation();
     const folder = location && registry?.get(location.mountName);
     const host = lastReadConfig?.hosts.find(candidate => candidate.name === folder?.hostName);
@@ -408,7 +384,7 @@ function configPath(): string {
 
 /**
  * 扩展独立的 known_hosts 文件（与配置文件同目录）。
- * prompt 模式下系统 ssh 用它做 OpenSSH 原生校验兜底（见 system-ssh-host-key.ts）。
+ * 所有原生 SSH 会话在实际连接上校验此信任记录。
  */
 function knownHostsFilePath(): string {
   return path.join(path.dirname(configPath()), 'known_hosts');
@@ -423,43 +399,11 @@ async function readConfig(): Promise<BridgeConfig> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new ConfigActionRequiredError(
         `No config file was found at ${configPath()}.`,
-        [addSshConfigAction]
+        [addHostAccountAction]
       );
     }
     const message = error instanceof Error ? error.message : String(error);
     throw new ConfigActionRequiredError(`Cannot read ${configPath()}: ${message}`);
-  }
-}
-
-function planDisplayName(plan: CommandPlan): string {
-  const args = plan.args.map((argument, index) => {
-    const previous = plan.args[index - 1]?.toLowerCase();
-    return previous === '-command' && argument.includes('\n') ? '<script>' : argument;
-  });
-  return [plan.command, ...args].join(' ');
-}
-
-function redactAgentMcpText(value: string): string {
-  return redactSensitiveText(value);
-}
-
-async function executeAgentMcpCommand(
-  plan: CommandPlan, signal?: AbortSignal, maxOutputBytes = 1024 * 1024
-): Promise<Awaited<ReturnType<typeof executeCaptured>>> {
-  const displayName = redactAgentMcpText(planDisplayName(plan));
-  bridgeOutput?.debug(`[Agent MCP] $ ${displayName}`);
-  try {
-    const result = await executeCaptured(
-      { ...plan, cwd: plan.cwd ?? os.homedir() }, signal, maxOutputBytes
-    );
-    bridgeOutput?.debug(
-      `[Agent MCP] [${result.exitCode === 0 ? '完成' : `失败: exit ${result.exitCode}`}] ${displayName}`
-    );
-    return result;
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    bridgeOutput?.appendLine(`[Agent MCP] [失败] ${displayName}: ${detail}`);
-    throw error;
   }
 }
 
@@ -518,23 +462,6 @@ async function decryptHostPassword(context: vscode.ExtensionContext, encrypted: 
   return decrypted;
 }
 
-async function bridgeMasterPasswordEnv(
-  context: vscode.ExtensionContext, host: HostConfig
-): Promise<Record<string, string>> {
-  if (platformAdapter.kind !== 'wsl' || !host.password) return {};
-  const encrypted = isEncryptedPassword(host.password);
-  if (encrypted) {
-    // This validates a stored value and prompts again immediately if it is
-    // stale, rather than failing inside the non-interactive bridge process.
-    await decryptHostPassword(context, host.password);
-    const masterPassword = await context.secrets.get(masterPasswordSecret);
-    if (!masterPassword) throw new Error('无法读取配置加密主口令');
-    return { WSL_VPN_MASTER_PASSWORD: masterPassword };
-  }
-  const masterPassword = await promptMasterPassword(context, true);
-  return { WSL_VPN_MASTER_PASSWORD: masterPassword };
-}
-
 async function resolveStoredHostPassword(
   context: vscode.ExtensionContext, config: BridgeConfig, host: HostConfig
 ): Promise<HostConfig> {
@@ -571,7 +498,7 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
   if (config.mounts.length === 0) {
     throw new ConfigActionRequiredError(
       'No remote folders are configured yet.',
-      [addSshConfigAction]
+      [addHostAccountAction]
     );
   }
   const picked = await vscode.window.showQuickPick(config.mounts.map((mount) => {
@@ -635,7 +562,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   requireConfiguredHostLogin(resolved.hostConfig);
   const session = await pool.get(resolved.hostConfig.name);
   refreshSafsEntryLabel();
-  // realpath + stat 一步完成（SCP 回退下合并为单条 exec）。
+  // Resolve the canonical path and inspect the directory.
   const { path: defaultRemotePath, stat } = await session.statResolved('.');
   if (stat.type !== 'directory') throw new Error(`远程路径不是目录：${defaultRemotePath}`);
   const remoteRoot = '/';
@@ -769,7 +696,7 @@ async function handleSafsTerminalLink(link: SafsTerminalLink): Promise<void> {
       openTerminalLinkConfigAction
     );
     if (selected === addTerminalLinkMountAction) {
-      await vscode.commands.executeCommand(`${commandPrefix}.addSshConfig`);
+      await vscode.commands.executeCommand(`${commandPrefix}.addHostAccount`);
     } else if (selected === openTerminalLinkConfigAction) {
       await vscode.commands.executeCommand(`${commandPrefix}.openConfig`);
     }
@@ -1826,12 +1753,12 @@ async function downloadRemoteFile(
   }))?.fsPath;
   if (!target) return false;
   // 续传准备：残片名由「远端 size+mtime」推导，远端一变名字就变、旧残片自动失效；
-  // 只有 SFTP 通道能做范围读，SCP 回退直接全量。
+  // Resume using the native file stream.
   let resume = await prepareDownloadResume({
     remoteName: remotePath,
     remote,
     localTarget: target,
-    canRange: session.transport !== 'scp',
+    canRange: true,
     log: (message) => bridgeOutput?.appendLine(message)
   });
   if (resume.offset > 0) {
@@ -1953,13 +1880,12 @@ async function downloadRemoteDirectory(
     let lastReportAt = 0;
     progress.report({ message: '正在发现文件并开始下载…' });
     try {
-      // SFTP 支持多个并行文件流；SCP 回退会整文件缓冲，且旧网关对并发 channel
-      // 敏感，因此自动串行。有限队列会施加背压，不会为整棵树一次性创建 Promise。
+      // Bound concurrency and apply backpressure while discovering the tree.
       const result = await downloadRemoteDirectoryTree({
         session,
         remoteRoot: remotePath,
         localRoot: selectedTargetRoot,
-        concurrency: session.transport === 'sftp' ? 4 : 1,
+        concurrency: 4,
         signal: controller.signal,
         secureLocalRoot,
         onProgress: (state) => {
@@ -2433,7 +2359,7 @@ async function prepareOpenedTerminalForAgent(
 async function executeWithTerminalShellIntegration(
   terminal: vscode.Terminal, command: string, remoteCwd: string | undefined,
   signal: AbortSignal | undefined, maxOutputBytes: number
-): Promise<Ssh2CommandResult> {
+): Promise<SshCommandResult> {
   const integration = terminal.shellIntegration;
   if (!integration) {
     throw new Error('所选 SAFS 终端的 Shell Integration 已失效，请停止终端转发或重新选择');
@@ -2444,9 +2370,9 @@ async function executeWithTerminalShellIntegration(
     plan.startMarker, plan.endMarkerPrefix, maxOutputBytes
   );
   if (signal?.aborted) throw new Error('Remote terminal command was cancelled');
-  return new Promise<Ssh2CommandResult>((resolve, reject) => {
+  return new Promise<SshCommandResult>((resolve, reject) => {
     let settled = false;
-    const finish = (result?: Ssh2CommandResult, error?: Error) => {
+    const finish = (result?: SshCommandResult, error?: Error) => {
       if (settled) return;
       settled = true;
       signal?.removeEventListener('abort', abort);
@@ -2547,7 +2473,7 @@ function liveAgentCommandTerminalCwd(
 async function executeWithAgentCommandTerminal(
   mountName: string, command: string, remoteCwd: string,
   signal: AbortSignal | undefined, maxOutputBytes: number
-): Promise<Ssh2CommandResult | undefined> {
+): Promise<SshCommandResult | undefined> {
   const terminal = agentCommandTerminal;
   if (!terminal) return undefined;
   const info = managedRemoteTerminals.get(terminal);
@@ -2660,29 +2586,6 @@ async function executeTerminalOnlyCommand(input: {
   }
 }
 
-async function createTerminalDiagnostic(
-  context: vscode.ExtensionContext, mountName: string, command: string
-): Promise<{ file: string; command: string } | undefined> {
-  try {
-    const directory = path.join(context.globalStorageUri.fsPath, 'terminal-logs');
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const safeMount = mountName.replace(/[^a-z0-9._-]+/gi, '_').slice(0, 50) || 'remote';
-    return {
-      file: path.join(
-        directory, `${safeMount}-${Date.now()}-${randomBytes(6).toString('hex')}.stderr.log`
-      ),
-      command
-    };
-  } catch (error) {
-    bridgeOutput?.appendLine(
-      `[终端诊断] 无法创建诊断目录，终端 stderr 将无法持久化：${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-    return undefined;
-  }
-}
-
 async function recoverTerminalDiagnostics(context: vscode.ExtensionContext): Promise<void> {
   const directory = path.join(context.globalStorageUri.fsPath, 'terminal-logs');
   let names: string[];
@@ -2770,7 +2673,7 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
   if (!reopen) return;
   const diagnosticText = await logManagedTerminalExit(terminal, reopen);
   const status = terminal.exitStatus;
-  if (!reopen.retryWithSystemSsh && isRemoteDirectoryPermissionDenied(
+  if (isRemoteDirectoryPermissionDenied(
     `${reopen.connectionError ?? ''}\n${diagnosticText}`
   )) {
     await vscode.window.showErrorMessage(
@@ -2802,33 +2705,7 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
   const remoteCwd = location && location.mountName === reopen.mount.name
     ? location.remotePath
     : reopen.remoteCwd;
-  if (isOpenSshHostKeyVerificationFailure(diagnosticText)) {
-    if (reopen.importedSshConfig) return;
-    const retry = reopen.hostKeyRetries ?? 0;
-    if (retry < maxOpenSshHostKeyRetries) {
-      bridgeOutput?.appendLine(
-        `[主机密钥] 终端连接命中尚未记录的负载节点，重新探测并重连（${
-          retry + 1
-        }/${maxOpenSshHostKeyRetries}）`
-      );
-      await openTerminal(
-        vscodeContext, reopen.mount, remoteCwd, undefined, true, true, retry + 1
-      );
-      return;
-    }
-    void vscode.window.showErrorMessage(
-      'SAFS：远程终端遇到未确认的负载节点，已停止重连。'
-    );
-    return;
-  }
-  if (reopen.retryWithSystemSsh) {
-    // The built-in ssh2 transport may fail during PTY negotiation. Retrying
-    // with the system SSH client is an implementation detail and must stay
-    // silent (the terminal itself is the user-visible result).
-    await openTerminal(vscodeContext, reopen.mount, remoteCwd, undefined, true, true);
-    return;
-  }
-  if (reopen.usesSystemSsh && isSshAuthenticationFailure(diagnosticText)) {
+  if (isSshAuthenticationFailure(diagnosticText)) {
     const selected = await vscode.window.showErrorMessage(
       'SAFS：远程终端认证失败，请检查 SSH 配置、账号或密钥。', viewSafsLogAction
     );
@@ -2866,8 +2743,7 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
     );
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     await openTerminal(
-      vscodeContext, reopen.mount, remoteCwd, undefined, false,
-      reopen.usesSystemSsh ?? false, reopen.hostKeyRetries ?? 0
+      vscodeContext, reopen.mount, remoteCwd, undefined, false
     );
     return;
   }
@@ -2883,20 +2759,9 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
   }
 }
 
-/**
- * Warm the OpenSSH capability cache used to build legacy algorithm flags.
- * WSL terminals go through the bundled bridge script, which does its own
- * version probing, so they do not need this.
- */
-async function warmSshCliCapabilities(): Promise<void> {
-  if (platformAdapter.kind === 'wsl') return;
-  await ensureSshCapabilities(await resolveExecutable('ssh'));
-}
-
 async function openTerminal(
   context: vscode.ExtensionContext, requestedMount?: MountConfig, requestedRemoteCwd?: string,
-  loadedConfig?: BridgeConfig, forceNew = false, forceSystemSsh = false,
-  hostKeyRetries = 0
+  loadedConfig?: BridgeConfig, forceNew = false
 ): Promise<{ terminal: vscode.Terminal; created: boolean } | undefined> {
   const config = loadedConfig ?? await readConfig();
   const location = requestedMount ? undefined : currentRemoteLocation();
@@ -2956,163 +2821,29 @@ async function openTerminal(
   try {
     const resolved = resolveMount(config, mount);
     requireConfiguredHostLogin(resolved.hostConfig);
-    let credentials: AskpassCredentials | undefined;
     if (resolved.hostConfig.password) {
       resolved.hostConfig = await timedPhase(
         `${mount.name} 终端凭据准备`,
         () => resolveStoredHostPassword(context, config, resolved.hostConfig)
       );
     }
-    // Direct password terminals use ssh2 on all platforms. The actual terminal
-    // connection performs the VS Code host-key confirmation, avoiding the race
-    // where ssh-keyscan verifies one backend and system ssh reaches another.
-    const importedSshConfig = resolved.hostConfig.source === 'ssh-config';
-    const useBuiltinSsh = shouldUseBuiltinSshTerminal(
-      platformAdapter.kind, resolved.hostConfig, forceSystemSsh
+    let terminal!: vscode.Terminal;
+    const pty = new SshTerminal(
+      resolved.hostConfig, resolved.hostConfig.password, remoteCwd,
+      error => {
+        bridgeOutput?.error(`[终端] ${mount.name} 连接失败：${error.message}`);
+        const entry = managedRemoteTerminals.get(terminal);
+        if (entry) entry.connectionError = error.message;
+      },
+      message => bridgeOutput?.appendLine(`[SSH] ${message}`),
+      reportedCwd => {
+        const entry = managedRemoteTerminals.get(terminal);
+        if (entry) { entry.remoteCwd = reportedCwd; queueAgentCommandTerminalRefresh(terminal, reportedCwd); }
+      },
+      remoteConnectionShortcutHint(platformAdapter.kind)
     );
-    if (!useBuiltinSsh && resolved.hostConfig.password
-      && platformUsesAskpass(platformAdapter.kind)) {
-      credentials = await createAskpassCredentials(resolved.hostConfig.password);
-    }
-    const bridgePasswordEnv = useBuiltinSsh
-      ? {}
-      : await bridgeMasterPasswordEnv(context, resolved.hostConfig);
-    // Probe the installed OpenSSH first so the legacy algorithm flags in the
-    // plan match what this client understands (macOS/Linux ship a wide range
-    // of OpenSSH versions, and old or new clients reject the fixed flags).
-    if (!useBuiltinSsh) await warmSshCliCapabilities();
-    // 主机密钥校验：系统 ssh 路径无法弹 VS Code 对话框，由扩展在
-    // 连接前 ssh-keyscan 探测当前后端密钥并与扩展 known_hosts 文件比对（仅 prompt 模式；
-    // accept 走 known_hosts 空设备静默接受，reject 走系统 ssh 严格校验）。
-    let hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
-      'hostKeyChangedAction', 'prompt'
-    );
-    if (!useBuiltinSsh && !importedSshConfig && hostKeyPolicy === 'prompt') {
-      const verification = await verifySystemSshHostKey(
-        hostKeyPolicy, resolved.hostConfig, platformAdapter.kind,
-        (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`),
-        undefined, undefined,
-        { WSL_VPN_SSH_CONFIG: configPath() }
-      );
-      if (!verification.ok) {
-        bridgeOutput?.error(`[主机密钥] ${verification.reason}`);
-        void vscode.window.showErrorMessage(
-          'SAFS：SSH 主机密钥验证失败。', viewSafsLogAction
-        ).then((selected) => {
-          if (selected === viewSafsLogAction) bridgeOutput?.show(true);
-        });
-        return undefined;
-      }
-    }
-    const plan = platformAdapter.terminal(resolved.hostConfig, remoteCwd, {
-      respectSshConfig: importedSshConfig,
-      reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
-      bridgeMasterPassword: bridgePasswordEnv.WSL_VPN_MASTER_PASSWORD,
-      bridgeConfigPath: configPath(),
-      hostKeyPolicy,
-      ...(!importedSshConfig && hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
-    });
-    const resolvedTerminalCommand = useBuiltinSsh
-      ? plan.command : await resolveExecutable(plan.command, plan.env);
-    const diagnostic = useBuiltinSsh
-      ? undefined
-      : await createTerminalDiagnostic(
-          context, mount.name,
-          redactSensitiveText(planDisplayName({ ...plan, command: resolvedTerminalCommand }))
-        );
-    const terminalPlan = diagnostic
-      ? terminalDiagnosticPlan(
-          platformAdapter.kind, resolvedTerminalCommand, plan, diagnostic.file
-        )
-      : { ...plan, command: resolvedTerminalCommand };
-    const terminalCommand = useBuiltinSsh
-      ? terminalPlan.command : await resolveExecutable(terminalPlan.command, terminalPlan.env);
-    bridgeOutput?.info(
-      `[终端] 正在启动 ${mount.name}；通道=${useBuiltinSsh ? 'ssh2' : '系统 SSH'}；cwd=${remoteCwd ?? remoteRoot}`
-    );
-    if (!useBuiltinSsh) {
-      bridgeOutput?.debug(
-        `[终端] 启动命令：$ ${
-          redactSensitiveText(planDisplayName({ ...plan, command: resolvedTerminalCommand }))
-        }`
-      );
-    }
-    const terminalStartedAt = performance.now();
-    let builtinPty: import('./ssh2-terminal').Ssh2Terminal | undefined;
-    const terminal = useBuiltinSsh
-      ? (() => {
-        let created!: vscode.Terminal;
-        const pty = new Ssh2Terminal(
-          resolved.hostConfig, resolved.hostConfig.password, remoteCwd,
-          (error) => {
-            bridgeOutput?.error(
-              `[终端] 内置 ssh2 终端 ${mount.name} 失败：${error.stack ?? error.message}`
-            );
-            const entry = managedRemoteTerminals.get(created);
-            if (entry) entry.connectionError = error.message;
-            // A gateway may reject the pty/shell negotiation, or reset the
-            // ssh2 connection before authentication completes. Mark this
-            // terminal for a system-ssh retry instead of repeatedly using the
-            // same built-in transport. Authentication failures do not match
-            // either connection-level pattern and therefore do not fall back.
-            if (shouldFallbackToSystemSsh(error)) {
-              if (entry) {
-                entry.retryWithSystemSsh = true;
-                return true;
-              }
-            }
-            return false;
-          },
-          (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`),
-          (reportedCwd) => {
-            const entry = managedRemoteTerminals.get(created);
-            if (entry) {
-              entry.remoteCwd = reportedCwd;
-              queueAgentCommandTerminalRefresh(created, reportedCwd);
-            }
-          },
-          remoteConnectionShortcutHint(platformAdapter.kind)
-        );
-        created = vscode.window.createTerminal({
-          name: terminalName,
-          pty,
-          isTransient: true
-        });
-        builtinPty = pty;
-        return created;
-      })()
-      : vscode.window.createTerminal({
-        name: terminalName,
-        shellPath: terminalCommand,
-        shellArgs: terminalPlan.args,
-        env: {
-          SSH_BRIDGE_MOUNT_NAME: mount.name,
-          [terminalIdentityEnv]: terminalId,
-          // 主口令已通过 plan.env（WslAdapter 按 bridgeMasterPassword 注入）交给
-          // ssh-bridge；这里不再重复注入，避免交互式终端环境里可被读取。
-          ...terminalPlan.env,
-          ...credentials?.env
-        },
-        cwd: os.homedir(),
-        isTransient: true
-      });
-    performanceLine(`${mount.name} SSH 终端创建（不含远端握手）`, terminalStartedAt);
-    managedRemoteTerminals.set(terminal, {
-      mount, remoteCwd, pty: builtinPty, diagnostic, hostKeyRetries, importedSshConfig,
-      startedAt: Date.now(), usesSystemSsh: !useBuiltinSsh
-    });
-    if (credentials) {
-      const disposable = vscode.window.onDidCloseTerminal((closed) => {
-        if (closed === terminal) {
-          disposable.dispose();
-          void credentials?.cleanup();
-        }
-      });
-      setTimeout(() => {
-        disposable.dispose();
-        void credentials?.cleanup();
-      }, terminalCredentialTtlMs);
-    }
+    terminal = vscode.window.createTerminal({ name: terminalName, pty, isTransient: true });
+    managedRemoteTerminals.set(terminal, { mount, remoteCwd, pty, startedAt: Date.now() });
     terminal.show();
     await prepareOpenedTerminalForAgent(terminal, managedRemoteTerminals.get(terminal)!);
     return { terminal, created: true };
@@ -3176,22 +2907,8 @@ function configFocusForArgument(argument: unknown): ConfigFocus | undefined {
   return configFocusForElement(mountsTreeView?.selection[0]);
 }
 
-/** 导入的树条目编辑其 SSH 源配置；显式的错误定位仍编辑 SAFS 配置。 */
 async function openConfigForArgument(argument: unknown): Promise<void> {
-  const value = Array.isArray(argument) ? argument[0] : argument;
   const focus = configFocusForArgument(argument);
-  if (!isConfigFocus(value) && focus) {
-    const config = await readConfig();
-    const mount = config.mounts.find(candidate => candidate.name === focus.name);
-    const host = config.hosts.find(candidate => candidate.name === (mount?.host ?? focus.name));
-    if (host?.source === 'ssh-config') {
-      const document = await vscode.workspace.openTextDocument(
-        vscode.Uri.file(path.join(os.homedir(), '.ssh', 'config'))
-      );
-      await vscode.window.showTextDocument(document);
-      return;
-    }
-  }
   await openConfig(focus);
 }
 
@@ -3215,7 +2932,7 @@ async function openConfig(focus?: ConfigFocus): Promise<void> {
   );
 }
 
-// ---- Add SSH Config ----
+// ---- Add Host Account ----
 
 interface InputOptions {
   title: string;
@@ -3237,8 +2954,8 @@ async function input(options: InputOptions): Promise<string | undefined> {
 const required = (label: string) => (value: string): string | undefined =>
   value.trim() ? undefined : `${label}不能为空`;
 
-async function addSshConfig(context: vscode.ExtensionContext): Promise<void> {
-  const title = 'Add SSH Config';
+async function addHostAccount(context: vscode.ExtensionContext): Promise<void> {
+  const title = 'Add Host Account';
   await ensureConfigFile(configPath());
   const config = await loadConfig(configPath());
   const name = await input({
@@ -3475,9 +3192,6 @@ async function addHostCredentials(
     name: generatedName,
     user: normalizedUser
   };
-  if (index < 0 || !targetHost.user.trim() || normalizedUser !== targetHost.user) {
-    delete updated.source;
-  }
   if (password) {
     updated.password = await encryptPassword(
       password, await promptMasterPassword(context, true)
@@ -3526,7 +3240,7 @@ function requireConfiguredHostLogin(host: HostConfig): void {
     // 带上主机名：错误提示里的「打开配置」会定位到这条记录（没有 password 字段时退回条目行）。
     throw new ConfigActionRequiredError(
       `主机"${host.name}"尚未配置账号，请在新视图中点击主机旁的 +。`,
-      [addSshConfigAction, openConfigAction],
+      [addHostAccountAction, openConfigAction],
       host.name
     );
   }
@@ -4027,8 +3741,7 @@ async function executeRemoteCommand(
   const resolved = resolveMount(await readConfig(), mount);
   requireConfiguredHostLogin(resolved.hostConfig);
   const outputMarker = `__SAFS_COMMAND_OUTPUT_${randomBytes(16).toString('hex')}__`;
-  let credentials: AskpassCredentials | undefined;
-  try {
+  {
     if (resolved.hostConfig.password) {
       const config = await readConfig();
       resolved.hostConfig = await resolveStoredHostPassword(context, config, resolved.hostConfig);
@@ -4046,74 +3759,10 @@ async function executeRemoteCommand(
       }, commandTimeoutMs)
       : undefined;
     try {
-      let result;
-      const importedSshConfig = resolved.hostConfig.source === 'ssh-config';
-      let useSystemSsh = selectSshTransport(
-        platformAdapter.kind, resolved.hostConfig
-      ) === 'system';
-      if (!useSystemSsh) {
-        bridgeOutput?.appendLine(
-          `[Agent MCP] $ ${redactSensitiveText(input.command)} (cwd: ${remoteCwd})`
-        );
-        try {
-          result = await executeSsh2Command(
-            resolved.hostConfig, resolved.hostConfig.password,
-            remoteCwd, input.command, controller.signal, maxOutputBytes, outputMarker
-          );
-          bridgeOutput?.appendLine(
-            `[Agent MCP] [${result.exitCode === 0 ? '完成' : `失败: exit ${result.exitCode}`}] ${redactSensitiveText(input.command)}`
-          );
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          if (controller.signal.aborted || !(error instanceof Ssh2ConnectionError)
-            || !shouldFallbackToSystemSsh(error)) throw error;
-          bridgeOutput?.appendLine(`[Agent MCP] SSH 连接准备失败，自动尝试系统 SSH：${detail}`);
-          useSystemSsh = true;
-        }
-      }
-      if (useSystemSsh) {
-        if (resolved.hostConfig.password && platformUsesAskpass(platformAdapter.kind)) {
-          credentials = await createAskpassCredentials(resolved.hostConfig.password);
-        }
-        await warmSshCliCapabilities();
-        const hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
-          'hostKeyChangedAction', 'prompt'
-        );
-        const verifyCurrentSystemSshHostKey = async (): Promise<void> => {
-          const verification = await verifySystemSshHostKey(
-            hostKeyPolicy, resolved.hostConfig, platformAdapter.kind,
-            (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`),
-            undefined, undefined,
-            { WSL_VPN_SSH_CONFIG: configPath() }
-          );
-          if (!verification.ok) throw new Error(verification.reason);
-        };
-        if (!importedSshConfig && hostKeyPolicy === 'prompt') {
-          await verifyCurrentSystemSshHostKey();
-        }
-        const plan = platformAdapter.exec(resolved.hostConfig, remoteCwd, input.command, {
-          respectSshConfig: importedSshConfig,
-          reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
-          bridgeConfigPath: configPath(),
-          hostKeyPolicy,
-          outputMarker,
-          ...(!importedSshConfig && hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
-        });
-        plan.env = {
-          ...plan.env,
-          ...await bridgeMasterPasswordEnv(context, resolved.hostConfig),
-          ...credentials?.env
-        };
-        const runSystemSsh = () => executeAgentMcpCommand(
-          plan, controller.signal, maxOutputBytes
-        );
-        result = !importedSshConfig && hostKeyPolicy === 'prompt'
-          ? await runWithOpenSshHostKeyRetry(
-              runSystemSsh, verifyCurrentSystemSshHostKey,
-              (message) => bridgeOutput?.appendLine(`[主机密钥] ${message}`)
-            )
-          : await runSystemSsh();
-      }
+      const result = await executeSshCommand(
+        resolved.hostConfig, resolved.hostConfig.password, remoteCwd, input.command,
+        controller.signal, maxOutputBytes, outputMarker
+      );
       if (timedOut) {
         throw new Error(`Remote command timed out after ${commandTimeoutMs}ms.`);
       }
@@ -4126,8 +3775,6 @@ async function executeRemoteCommand(
       if (timeout) clearTimeout(timeout);
       cancellation?.dispose();
     }
-  } finally {
-    await credentials?.cleanup();
   }
 }
 
@@ -5366,7 +5013,7 @@ async function deleteConfigItem(
 
 // ---- AI Agent Forwarding (aligned with main) ----
 
-async function forwardedFolders(context: vscode.ExtensionContext): Promise<import('./agent-mcp').RemoteFolderInfo[]> {
+async function forwardedFolders(context: vscode.ExtensionContext): Promise<import('./agent/agent-mcp').RemoteFolderInfo[]> {
   const config = await readConfig();
   const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
   const current = currentRemoteLocation();
@@ -6179,7 +5826,7 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
     logAsyncFailure('命令失败', error);
     if (error instanceof ConfigActionRequiredError) {
       const selected = await vscode.window.showErrorMessage(
-        error.actions.includes(addSshConfigAction)
+        error.actions.includes(addHostAccountAction)
           ? 'SAFS：尚未配置远程目录。'
           : 'SAFS：配置无法读取，请打开配置检查。',
         ...error.actions
@@ -6190,8 +5837,8 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
           `${commandPrefix}.openConfig`,
           error.hostName ? { kind: 'password', name: error.hostName } satisfies ConfigFocus : undefined
         );
-      } else if (selected === addSshConfigAction) {
-        await vscode.commands.executeCommand(`${commandPrefix}.addSshConfig`);
+      } else if (selected === addHostAccountAction) {
+        await vscode.commands.executeCommand(`${commandPrefix}.addHostAccount`);
       }
       return;
     }
@@ -6235,46 +5882,6 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
   }
 }
 
-async function ensureSystemDependencies(): Promise<void> {
-  const platform = platformAdapter.kind;
-  if (platform !== 'wsl' || await hasRequiredWslDependencies()) return;
-  const platformName = 'WSL';
-  bridgeOutput?.appendLine(
-    `检测到 ${platformName} 系统依赖缺失，开始自动安装`
-  );
-  try {
-    await vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification,
-      title: 'SAFS：正在安装系统依赖',
-      cancellable: false
-    }, async (progress) => {
-      const reporter = {
-        log: (message: string) => {
-          if (!message) return;
-          bridgeOutput?.appendLine(message);
-          progress.report({ message: '正在安装所需组件…' });
-        },
-        progress: (message: string, increment?: number) =>
-          progress.report({ message, increment })
-      };
-      await installWslDependencies(reporter);
-    });
-    bridgeOutput?.appendLine(`${platformName} 系统依赖自动安装完成`);
-    void vscode.window.showInformationMessage(
-      `SAFS：${platformName} 依赖安装完成。`
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    bridgeOutput?.appendLine(`[依赖安装失败] ${detail}`);
-    const selected = await vscode.window.showErrorMessage(
-      `SAFS：${platformName} 依赖安装失败。`,
-      '查看输出'
-    );
-    if (selected === '查看输出') bridgeOutput?.show(true);
-  }
-}
-
-// ---- Activate / Deactivate ----
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   vscodeContext = context;
@@ -6336,85 +5943,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.workspaceFolders?.map((folder) => folder.uri.toString()).join(', ') || '<none>'
   }`);
 
-  // WSL: point the bundled scripts at resources/wsl/. VSIX packaging can
-  // strip the executable bit from ssh-bridge (Windows builds store 0666), so
-  // re-assert it before any terminal spawns the bridge.
+  // Retain WSL VPN routing helpers; SSH sessions are native on every platform.
   setWslBundlePath(vscode.Uri.joinPath(context.extensionUri, 'resources', 'wsl').fsPath);
   setRemoteShellIntegrationBundlePath(
     vscode.Uri.joinPath(context.extensionUri, 'resources', 'shell-integration').fsPath
   );
   setKnownHostsFilePath(knownHostsFilePath());
-  await ensureWslBridgeExecutable();
-  // 依赖安装后台执行，不阻塞窗口激活（apt install 可能耗时数分钟）；
-  // 终端路径另有 hasRequiredWslDependencies 守卫。
-  void ensureSystemDependencies();
-
   registry = new RemoteFolderRegistry();
   refreshTree = () => undefined;
   pool = new SftpConnectionPool(
     async (hostName, signal) => {
       const host = await resolvedHost(context, hostName);
-      const importedSshConfig = host.source === 'ssh-config';
-      const connectWithSystemSsh = async (reason: string): Promise<SftpSession> => {
-        const hostKeyPolicy = settings().get<'accept' | 'prompt' | 'reject'>(
-          'hostKeyChangedAction', 'prompt'
-        );
-        if (!importedSshConfig && hostKeyPolicy === 'prompt') {
-          const verification = await verifySystemSshHostKey(
-            hostKeyPolicy, host, platformAdapter.kind,
-            (entry) => bridgeOutput?.appendLine(`[主机密钥] ${entry}`),
-            undefined, undefined, { WSL_VPN_SSH_CONFIG: configPath() }
-          );
-          if (!verification.ok) throw new Error(verification.reason);
-        }
-        await warmSshCliCapabilities();
-        bridgeOutput?.appendLine(`[SFTP] ${host.name} ${reason}`);
-        const connectionOptions: import('./platform').ConnectionOptions = {
-          respectSshConfig: importedSshConfig,
-          reuseSshConnection: settings().get<boolean>('reuseSshConnection', true),
-          bridgeConfigPath: configPath(), hostKeyPolicy,
-          ...(!importedSshConfig && hostKeyPolicy === 'prompt' ? { userKnownHostsFile: knownHostsFilePath() } : {})
-        };
-        try {
-          return await connectSystemSftp(host, platformAdapter, connectionOptions, signal);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (signal?.aborted
-            || !/subsystem request failed|subsystem.*(?:not found|not supported|disabled)/i.test(message)) {
-            throw error;
-          }
-          bridgeOutput?.appendLine(
-            `[SFTP] ${host.name} SFTP 子系统不可用，回退 SCP：${message}`
-          );
-          return connectSystemScp(host, platformAdapter, connectionOptions, signal);
-        }
-      };
-      let session: SftpSession;
-      if (selectSshTransport(platformAdapter.kind, host) === 'system') {
-        session = await connectWithSystemSsh(importedSshConfig
-          ? 'SSH config 导入配置，使用系统 SSH/SFTP'
-          : 'WSL VPN 配置，使用系统 SSH/SFTP');
-      } else {
-        bridgeOutput?.appendLine(`[SFTP] ${host.name} SAFS 手动配置，使用内置 ssh2`);
-        try {
-          session = await connectSftp(
-            host, platformAdapter.kind === 'wsl', signal,
-            settings().get<string>('sshClientIdent', defaultSshClientIdent),
-            hostVerifierFor(host, message => bridgeOutput?.appendLine(`[主机密钥] ${message}`)),
-            reason => bridgeOutput?.appendLine(
-              `[SFTP] ${host.name} SFTP 子系统不可用，回退到 SCP/exec：${reason}`
-            )
-          );
-        } catch (error) {
-          if (signal?.aborted || !shouldFallbackToSystemSsh(error)) throw error;
-          const message = error instanceof Error ? error.message : String(error);
-          session = await connectWithSystemSsh(`ssh2 连接失败，尝试系统 SSH/SFTP：${message}`);
-        }
-      }
+      const session = await connectSftp(host, signal, message => bridgeOutput?.appendLine(`[SFTP] ${redactSensitiveText(message)}`));
       agentTrace('SFTP', `${host.name} 传输通道：${session.transport}`);
       return session;
     },
-    // 连接/重连/断开即时刷新底栏入口（SFTP↔SCP）与树视图；心跳仅作兜底。
+    // 连接/重连/断开即时刷新底栏入口与树视图；心跳仅作兜底。
     () => {
       refreshTree();
       refreshSafsEntryLabel();
@@ -6519,28 +6063,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const tree = new RemoteFoldersProvider(context);
   refreshTree = () => tree.refresh();
-  const sshImporter = startSshConfigImport({
-    root: path.join(os.homedir(), '.ssh', 'config'),
-    target: configPath(),
-    log: message => bridgeOutput?.appendLine(`[SSH 自动导入] ${message}`),
-    canWrite: () => !vscode.workspace.textDocuments.some(document =>
-      document.uri.scheme === 'file'
-      && path.resolve(document.uri.fsPath) === path.resolve(configPath())
-      && document.isDirty
-    ),
-    changed: async () => {
-      await registerMountAliases();
-      refreshTree();
-      refreshSafsEntryLabel();
-      await refreshAgentCommandTerminalState();
-    }
-  });
-  context.subscriptions.push(sshImporter, vscode.workspace.onDidSaveTextDocument(document => {
-    if (document.uri.scheme === 'file'
-      && path.resolve(document.uri.fsPath) === path.resolve(configPath())) {
-      sshImporter.resume();
-    }
-  }));
   // 用 createTreeView 而不是 registerTreeDataProvider：视图标题栏的「打开配置」
   // 需要读当前选中项，才能定位到 config.json 里对应的那一行。
   mountsTreeView = vscode.window.createTreeView(`${commandPrefix}.mounts`, {
@@ -6632,8 +6154,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await addRemoteDirectoryConfig(context);
     tree.refresh();
   });
-  command('addSshConfig', async () => {
-    await addSshConfig(context);
+  command('addHostAccount', async () => {
+    await addHostAccount(context);
     tree.refresh();
   });
   command('addHostCredentials', async (host) => {
@@ -6677,7 +6199,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await copyMcpUninstallPromptAndNotify(context);
   });
   command('refreshExplorer', async () => {
-    sshImporter.refresh();
     const config = await readConfig();
     const activeHosts = new Set((vscode.workspace.workspaceFolders ?? [])
       .filter(workspace => workspace.uri.scheme === remoteFileSystemScheme)
@@ -7038,5 +6559,5 @@ export async function deactivate(): Promise<void> {
   await httpRouterStart?.catch(() => undefined);
   await httpRouter?.stop();
   await pool?.close();
-  closeSsh2ExecSessions();
+  closeSshConnections();
 }

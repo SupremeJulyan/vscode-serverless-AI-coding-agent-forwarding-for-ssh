@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { RemoteOutputStore } from '../src/remote-output';
+import { RemoteOutputStore } from '../src/remote/remote-output';
 
 test('retained output reconstructs UTF-8 across pages without executing again', () => {
   const store = new RemoteOutputStore();

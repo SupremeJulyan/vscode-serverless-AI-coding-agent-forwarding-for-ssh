@@ -145,6 +145,10 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
   private readonly changes = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
   private readonly statCache = new Map<string, CacheEntry<vscode.FileStat>>();
   private readonly directoryCache = new Map<string, CacheEntry<[string, vscode.FileType][]>>();
+  private readonly statRequests = new Map<string, Promise<vscode.FileStat>>();
+  private readonly directoryRequests = new Map<string, Promise<[string, vscode.FileType][]>>();
+  private cacheGeneration = 0;
+  private polling = false;
   private readonly watched = new Map<string, WatchedResource>();
   private readonly watchTimer: NodeJS.Timeout;
   readonly onDidChangeFile = this.changes.event;
@@ -163,6 +167,9 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
   }
 
   refresh(uri: vscode.Uri): void {
+    this.cacheGeneration++;
+    this.statRequests.clear();
+    this.directoryRequests.clear();
     this.statCache.clear();
     this.directoryCache.clear();
     this.changes.fire([{ type: vscode.FileChangeType.Changed, uri }]);
@@ -234,28 +241,53 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
   }
 
   private invalidate(uri: vscode.Uri): void {
+    this.cacheGeneration++;
     const key = uri.toString();
     this.statCache.delete(key);
     this.directoryCache.delete(key);
+    this.statRequests.delete(key);
+    this.directoryRequests.delete(key);
     const parent = uri.with({ path: path.posix.dirname(uri.path) }).toString();
     this.directoryCache.delete(parent);
     this.statCache.delete(parent);
+    this.statRequests.delete(parent);
+    this.directoryRequests.delete(parent);
   }
 
-  async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
+  private coalesce<T>(requests: Map<string, Promise<T>>, key: string, action: () => Promise<T>): Promise<T> {
+    const existing = requests.get(key);
+    if (existing) return existing;
+    const pending = Promise.resolve().then(action).finally(() => {
+      if (requests.get(key) === pending) requests.delete(key);
+    });
+    requests.set(key, pending);
+    return pending;
+  }
+
+  stat(uri: vscode.Uri): Promise<vscode.FileStat> {
+    const generation = this.cacheGeneration;
+    return this.coalesce(this.statRequests, uri.toString(), () => this.loadStat(uri, generation));
+  }
+
+  private async loadStat(uri: vscode.Uri, generation: number): Promise<vscode.FileStat> {
     const key = uri.toString();
     const cached = this.valid(this.statCache, key);
     if (cached) return cached;
     try {
       const { session, remotePath } = await this.resolve(uri);
-      const value = this.store(this.statCache, key, fileStat(await session.stat(remotePath)));
-      return value;
+      const value = fileStat(await session.stat(remotePath));
+      return generation === this.cacheGeneration ? this.store(this.statCache, key, value) : value;
     } catch (error) {
       providerError(error, uri);
     }
   }
 
-  async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
+  readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
+    const generation = this.cacheGeneration;
+    return this.coalesce(this.directoryRequests, uri.toString(), () => this.loadDirectory(uri, generation));
+  }
+
+  private async loadDirectory(uri: vscode.Uri, generation: number): Promise<[string, vscode.FileType][]> {
     const key = uri.toString();
     const cached = this.valid(this.directoryCache, key);
     if (cached) return cached;
@@ -276,7 +308,7 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
         // 预填子项 stat 缓存：列举已带完整元数据（size/mtime/mode），随后编辑器/
         // 资源管理器对子项的 stat 直接命中，不再产生网络请求（打开文件少一次往返）。
         // 符号链接除外：其真实类型需按需 stat（与 realpath 缓存同策略，防不一致）。
-        if (entry.type !== 'symbolic-link') {
+        if (entry.type !== 'symbolic-link' && generation === this.cacheGeneration) {
           this.store(
             this.statCache,
             vscode.Uri.joinPath(uri, entry.name).toString(),
@@ -284,7 +316,7 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
           );
         }
       }
-      return this.store(this.directoryCache, key, result);
+      return generation === this.cacheGeneration ? this.store(this.directoryCache, key, result) : result;
     } catch (error) {
       providerError(error, uri);
     }
@@ -448,16 +480,18 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
   }
 
   private async pollWatches(): Promise<void> {
-    // 并行轮询所有 watch 项：串行版在网关（SCP 回退，每条 exec 秒级）下会让
-    // 单次慢操作拖住全部 watch 项，且长时间占满会话并发额度，用户操作排队。
-    // 并发上限由会话自身的 channel 信号量（ScpSession 5）天然约束。
+    // A slow native SFTP request must not spawn another polling wave every
+    // timer tick. Explorer reads also share pending stat/list operations.
+    if (this.polling) return;
+    this.polling = true;
+    try {
     const targets = [...this.watched.values()];
     await Promise.allSettled(targets.map(async (watched) => {
       try {
         const stat = await this.stat(watched.uri);
         const snapshot = `${stat.type}:${stat.mtime}:${stat.size}`;
         if (watched.snapshot !== snapshot) {
-          this.invalidate(watched.uri);
+          if (watched.snapshot !== undefined) this.invalidate(watched.uri);
           this.changes.fire([{ type: vscode.FileChangeType.Changed, uri: watched.uri }]);
         }
         watched.snapshot = snapshot;
@@ -473,9 +507,13 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
         }
       }
     }));
+    } finally { this.polling = false; }
   }
 
   dispose(): void {
+    this.cacheGeneration++;
+    this.statRequests.clear();
+    this.directoryRequests.clear();
     clearInterval(this.watchTimer);
     this.changes.dispose();
     this.statCache.clear();

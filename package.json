@@ -50,7 +50,7 @@
     "onCommand:safs.openConfig",
     "onCommand:safs.addRemoteDirectory",
     "onCommand:safs.cloneGitRepository",
-    "onCommand:safs.addSshConfig",
+    "onCommand:safs.addHostAccount",
     "onCommand:safs.addHostCredentials",
     "onCommand:safs.renameHost",
     "onCommand:safs.copyStreamableHttpUrl",
@@ -106,8 +106,8 @@
         "title": "打开配置"
       },
       {
-        "command": "safs.addSshConfig",
-        "title": "SAFS：添加 SSH 配置",
+        "command": "safs.addHostAccount",
+        "title": "SAFS：添加主机账号",
         "icon": "$(add)"
       },
       {
@@ -391,7 +391,7 @@
           "command": "safs.openConfig"
         },
         {
-          "command": "safs.addSshConfig"
+          "command": "safs.addHostAccount"
         },
         {
           "command": "safs.syncToLocal",
@@ -799,16 +799,6 @@
     "configuration": {
       "title": "SAFS",
       "properties": {
-        "safs.sshClientIdent": {
-          "type": "string",
-          "default": "OpenSSH_9.6",
-          "markdownDescription": "SSH 客户端标识字符串（`SSH-2.0-` 之后的部分）。部分 NSG/网关按客户端指纹白名单放行，默认的 `ssh2js` 标识可能被拒绝（表现为 `Unable to start subsystem: sftp` / `Unable to request a pseudo-terminal`）。默认伪装为 `OpenSSH_9.6`；如仍被拒可尝试 `PuTTY_Release_0.78` 等常见客户端标识。"
-        },
-        "safs.reuseSshConnection": {
-          "type": "boolean",
-          "default": true,
-          "description": "Reuse OpenSSH connections between remote terminals and command executions."
-        },
         "safs.hostKeyChangedAction": {
           "type": "string",
           "enum": [
@@ -817,7 +807,7 @@
             "accept"
           ],
           "default": "prompt",
-          "markdownDescription": "SSH 主机密钥的处理方式（负载均衡 VIP 每次可能连接到不同后端、各后端密钥不同）：`prompt`（默认）首次连接与每次遇到新主机密钥（后端轮换/重装）都弹窗确认（突出显示目标主机 IP:端口、旧/新密钥指纹），接受后记录，已确认的密钥不再询问；`accept` 完全静默接受并记录新密钥；`reject` 密钥变化直接拒绝连接。该设置作用于所有传输路径：内置 ssh2 通道（Windows 终端、SFTP 文件系统与命令执行）的主机密钥校验，以及系统 ssh 路径（WSL/Linux/macOS 终端与命令执行，accept→静默、prompt→连接前探测指纹并弹窗、reject→StrictHostKeyChecking=yes 严格校验）。"
+          "markdownDescription": "所有 SSH、终端和 SFTP 连接统一使用 SAFS 的主机密钥信任记录（~/.safs/known_hosts）。prompt 首次或密钥变化时确认，accept 接受并记录，reject 拒绝未受信任的密钥；不执行额外的密钥预探测。"
         },
         "safs.sftp.cacheTtl": {
           "type": "number",
@@ -945,6 +935,11 @@
           "default": "",
           "scope": "resource",
           "description": "本地中转推送的目标 HTTPS/SSH 地址。留空使用远端仓库的 push URL；可用于替换仅远端可识别的 SSH 主机别名。凭据请配置在本地 Git 中。"
+        },
+        "safs.autoSudoPassword": {
+          "type": "boolean",
+          "default": true,
+          "description": "识别当前 SSH 用户的 sudo 密码提示后，按 Enter 填入保存的密码；输入其他内容取消。只接受用户终端输入，不由 Agent 输入触发。"
         }
       }
     },
@@ -984,7 +979,8 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",
-    "@types/ssh2": "^1.15.5",
+    "@types/shell-quote": "^1.7.5",
+    "@types/ssh2": "^1.15.6",
     "@types/vscode": "^1.93.0",
     "@vscode/vsce": "^3.6.2",
     "esbuild": "^0.25.0",
@@ -995,6 +991,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^5.2.1",
     "jsonc-parser": "^3.3.1",
+    "shell-quote": "1.8.3",
     "ssh2": "^1.17.0",
     "zod": "^4.4.3"
   }

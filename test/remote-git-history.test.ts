@@ -2,7 +2,7 @@ import { mockGitBatch } from './git-runner-helper';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as path from 'node:path';
-import { RemoteGit, GitRunner } from '../src/remote-git';
+import { RemoteGit, GitRunner } from '../src/git/remote-git';
 
 const vscode = require('vscode');
 
@@ -55,7 +55,7 @@ Object.assign(vscode, {
 
 const {
   RemoteGitHistory, parseGitLog, parseHistoryFiles, displayRefs, relativeTime
-} = require('../src/remote-git-history') as typeof import('../src/remote-git-history');
+} = require('../src/git/remote-git-history') as typeof import('../src/git/remote-git-history');
 
 const commitId = (seed: string) => seed.repeat(40).slice(0, 40);
 const idFor = (index: number) => index.toString(16).padStart(40, '0');
@@ -169,7 +169,7 @@ test('tree lists commits, expands files into diffs and pages further', async () 
 });
 
 test('tree pages commits and groups multiple repositories', async t => {
-  const { historyPageSize } = require('../src/remote-git-history') as typeof import('../src/remote-git-history');
+  const { historyPageSize } = require('../src/git/remote-git-history') as typeof import('../src/git/remote-git-history');
   const all = Array.from({ length: 150 }, (_, index) =>
     logRecord(idFor(index), index === 149 ? '' : idFor(index + 1), `subject ${index}`));
   const remote = repository({ log: limit => all.slice(0, limit).join(''), show: '' });

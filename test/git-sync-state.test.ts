@@ -3,14 +3,14 @@ import * as assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { RemoteGit } from '../src/remote-git';
+import { RemoteGit } from '../src/git/remote-git';
 import {
   applyObservedPushState, readGitSyncState, syncStateLabel, trackingRef
-} from '../src/git-sync-state';
+} from '../src/git/git-sync-state';
 import {
   applySuccessfulPushReceipt, recordSuccessfulPush, resolvePushTarget, successfulPushReceipt
-} from '../src/local-git-push';
-import { resolveFetchTarget, resolvePullTarget } from '../src/local-git-pull';
+} from '../src/git/local-git-push';
+import { resolveFetchTarget, resolvePullTarget } from '../src/git/local-git-pull';
 import { execGitFixture as exec } from './git-fixture-exec';
 async function fixture(t: any) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'safs-sync-state-'));

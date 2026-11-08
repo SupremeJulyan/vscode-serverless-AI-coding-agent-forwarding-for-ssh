@@ -20,7 +20,7 @@ export function isConnectionError(error: unknown): boolean {
     || code === 'ECONNREFUSED') {
     return true;
   }
-  return /\b(?:ECONNRESET|EPIPE|ECONNABORTED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ECONNREFUSED)\b|socket hang up|connection (?:reset|closed|terminated|timed out)|network is unreachable|no route to host|no response from server|system sftp closed|sftp.*(?:timeout|timed out)|ssh-keyscan 未返回|OpenSSH 未返回主机密钥|ssh-bridge probe 未返回/i
+  return /\b(?:ECONNRESET|EPIPE|ECONNABORTED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ECONNREFUSED)\b|socket hang up|connection (?:reset|closed|terminated|timed out)|network is unreachable|no route to host|no response from server|sftp.*(?:timeout|timed out)/i
     .test(error.message);
 }
 
@@ -41,11 +41,11 @@ class RetryingSftpSession implements SftpSession {
   }
 
   get transport(): 'sftp' | 'scp' {
-    // 重连后传输通道可能变化（如 SFTP 中途失效回退 SCP），实时读取当前会话。
+    // Return the current session state after reconnecting.
     return this.session.transport;
   }
 
-  private withRetry<T>(op: (session: SftpSession) => Promise<T>): Promise<T> {
+  private withRetry<T>(op: (session: SftpSession) => Promise<T>, replay = true): Promise<T> {
     const failedSession = this.session;
     return op(failedSession).catch(async (error: unknown) => {
       if (!isConnectionError(error)) throw error;
@@ -54,6 +54,11 @@ class RetryingSftpSession implements SftpSession {
       // on this or another wrapper may have replaced the pool entry while waiting
       // to enter its catch handler; invalidating that newer session would turn
       // a successful recovery into another disconnect/reconnect cycle.
+      if (!replay) {
+        // A mutation may already have committed before the connection failed.
+        await this.pool.invalidate(this.hostName, failedSession);
+        throw error;
+      }
       const fresh = await this.pool.reconnect(this.hostName, undefined, failedSession);
       this.session = fresh;
       return op(fresh);
@@ -95,37 +100,37 @@ class RetryingSftpSession implements SftpSession {
   writeFile(
     remotePath: string, content: Uint8Array, options: SftpWriteOptions, signal?: AbortSignal
   ): Promise<void> {
-    return this.withRetry((session) => session.writeFile(remotePath, content, options, signal));
+    return this.withRetry((session) => session.writeFile(remotePath, content, options, signal), false);
   }
 
   replaceFile(
     sourcePath: string, targetPath: string, mode?: number, signal?: AbortSignal
   ): Promise<void> {
     return this.withRetry(
-      (session) => session.replaceFile(sourcePath, targetPath, mode, signal)
+      (session) => session.replaceFile(sourcePath, targetPath, mode, signal), false
     );
   }
 
   writeFileStream(
     remotePath: string, options: SftpWriteOptions, signal?: AbortSignal
   ): Promise<NodeJS.WritableStream> {
-    return this.withRetry((session) => session.writeFileStream(remotePath, options, signal));
+    return this.withRetry((session) => session.writeFileStream(remotePath, options, signal), false);
   }
 
   chmod(remotePath: string, mode: number, signal?: AbortSignal): Promise<void> {
-    return this.withRetry((session) => session.chmod(remotePath, mode, signal));
+    return this.withRetry((session) => session.chmod(remotePath, mode, signal), false);
   }
 
   createDirectory(remotePath: string, signal?: AbortSignal): Promise<void> {
-    return this.withRetry((session) => session.createDirectory(remotePath, signal));
+    return this.withRetry((session) => session.createDirectory(remotePath, signal), false);
   }
 
   deleteFile(remotePath: string, signal?: AbortSignal): Promise<void> {
-    return this.withRetry((session) => session.deleteFile(remotePath, signal));
+    return this.withRetry((session) => session.deleteFile(remotePath, signal), false);
   }
 
   deleteDirectory(remotePath: string, signal?: AbortSignal): Promise<void> {
-    return this.withRetry((session) => session.deleteDirectory(remotePath, signal));
+    return this.withRetry((session) => session.deleteDirectory(remotePath, signal), false);
   }
 
   readFileRange(
@@ -144,7 +149,7 @@ class RetryingSftpSession implements SftpSession {
     sourcePath: string, targetPath: string, overwrite: boolean, signal?: AbortSignal
   ): Promise<void> {
     return this.withRetry(
-      (session) => session.rename(sourcePath, targetPath, overwrite, signal)
+      (session) => session.rename(sourcePath, targetPath, overwrite, signal), false
     );
   }
 
@@ -176,7 +181,7 @@ export class SftpConnectionPool {
     return entry?.state ?? 'disconnected';
   }
 
-  /** 活动会话的传输通道（'sftp' 或 SCP/exec 回退）；未连接返回 undefined，不触发新连接。 */
+  /** Active native transport; never connects as a side effect. */
   transport(hostName: string): 'sftp' | 'scp' | undefined {
     const entry = this.entries.get(hostName);
     return entry?.session?.isAlive() ? entry.session.transport : undefined;

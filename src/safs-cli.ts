@@ -3,8 +3,8 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import * as http from 'node:http';
-import { resolveWorkspaceId } from './workspace-id';
-import { help, commandHelp } from './cli-help';
+import { resolveWorkspaceId } from './agent/workspace-id';
+import { help, commandHelp } from './cli/cli-help';
 
 declare const CLI_VERSION: string;
 declare const CLI_SKILL: string;

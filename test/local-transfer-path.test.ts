@@ -6,7 +6,7 @@ import test from 'node:test';
 import { symlinkOrSkip } from './symlink-helper';
 import {
   isLocalPathInside, validateLocalDownloadTarget, validateLocalUploadSource
-} from '../src/local-transfer-path';
+} from '../src/transfer/local-transfer-path';
 
 test('local transfer paths stay inside the automatic Agent staging root', async () => {
   const base = await mkdtemp(path.join(os.tmpdir(), 'safs-local-transfer-'));

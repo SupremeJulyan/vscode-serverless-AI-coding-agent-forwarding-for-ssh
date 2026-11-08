@@ -3,8 +3,8 @@ import test from 'node:test';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { executeCaptured } from '../src/process';
-import { searchCommand, RemoteSearchOptions } from '../src/remote-search';
+import { executeCaptured } from '../src/platform/process';
+import { searchCommand, RemoteSearchOptions } from '../src/remote/remote-search';
 
 test('search executes content and filename modes without hiding errors', {
   skip: process.platform === 'win32' ? 'Remote search integration requires a Unix shell and filesystem paths' : false

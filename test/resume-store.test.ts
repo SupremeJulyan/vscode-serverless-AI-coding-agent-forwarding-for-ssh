@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rename, rm, utimes, writeFile } from 'node:fs/promis
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
-import { commitDownloadPart, prepareDownloadResume } from '../src/resume-store';
-import { downloadPartPath, RESUME_MIN_BYTES } from '../src/resume-plan';
+import { commitDownloadPart, prepareDownloadResume } from '../src/transfer/resume-store';
+import { downloadPartPath, RESUME_MIN_BYTES } from '../src/transfer/resume-plan';
 
 test('failed download commit preserves the old target and complete part and rejects', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'safs-commit-'));

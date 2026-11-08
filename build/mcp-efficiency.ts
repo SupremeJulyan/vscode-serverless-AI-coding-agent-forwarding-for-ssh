@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { registerAgentMcpTools, AgentToolProfile, routedAgentMcpInstructions } from '../src/agent-mcp-tools';
-import { readTextRange } from '../src/remote-read';
-import { RemoteOutputStore } from '../src/remote-output';
-import { readTextBatch } from '../src/remote-read-batch';
+import { registerAgentMcpTools, AgentToolProfile, routedAgentMcpInstructions } from '../src/agent/agent-mcp-tools';
+import { readTextRange } from '../src/remote/remote-read';
+import { RemoteOutputStore } from '../src/remote/remote-output';
+import { readTextBatch } from '../src/remote/remote-read-batch';
 
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 async function schemas(profile: AgentToolProfile) {

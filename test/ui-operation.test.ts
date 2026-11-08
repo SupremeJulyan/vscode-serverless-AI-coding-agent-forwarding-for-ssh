@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { untilCancelled, UiOperationGate } from '../src/ui-operation';
+import { untilCancelled, UiOperationGate } from '../src/ui/ui-operation';
 
 function cancellation() {
   const listeners = new Set<() => void>();

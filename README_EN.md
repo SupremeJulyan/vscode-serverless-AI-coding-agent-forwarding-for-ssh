@@ -17,7 +17,7 @@ SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote
 
 ## Quick start
 
-### 1. Add an SSH configuration
+### 1. Add a host account
 
 1. Install and enable the SAFS extension.
 2. Click the **SAFS** icon in the Activity Bar.
@@ -25,9 +25,9 @@ SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote
 4. Click **+** beside an existing host to add another account.
 5. On the first connection, verify and accept the server's host-key fingerprint.
 
-SAFS automatically scans `~/.ssh/config` and its `Include` files, importing the alias, account, port, and identity of literal `Host` entries. Imported accounts are marked with `source: "ssh-config"` and consistently use system SSH/SFTP, connecting as `ssh alias`. OpenSSH reads the user, port, identities, proxies, certificates, SSH agents, host-key policy, and known_hosts from SSH config. SAFS does not pre-probe imported aliases or override their policy with `safs.hostKeyChangedAction`. Wildcard `Host` entries remain configuration rules and are not listed as separate SAFS hosts.
+SSH terminals, commands and SFTP all use `ssh2`; SAFS never launches the system `ssh` command as a connection fallback. It uses only the host address, port and account saved in SAFS configuration. It does not import or read `~/.ssh/config`, or automatically use an SSH agent. Explicitly configure `auth: "agent"` or `agent_socket` to use an agent. An address that happens to match an SSH config alias is still connected as the address you entered, without applying SSH config rules. If a server has no usable SFTP subsystem, file operations use SAFS's SCP adapter over the same `ssh2` connection.
 
-Accounts added directly in SAFS or manually written to `~/.safs/config.json` use built-in `ssh2` by default. Global SSH settings, SSH agents, and the presence of passwords or private keys do not determine the transport. Existing WSL VPN relay handling and compatibility fallbacks after actual connection failures remain unchanged.
+Account options include `auth` (auto/password/publickey/agent/keyboard-interactive), `agent_socket`, `proxy_command`, `jump_host`, `socks_proxy` and `http_proxy`. Jump hosts should reference accounts configured in SAFS; separate multiple hops with commas. When a sudo prompt matches the login user, press Enter to paste the saved password, or type something else to cancel. Disable with `safs.autoSudoPassword`. Terminal sudo does not elevate SFTP.
 
 ### 2. Open and edit a remote directory
 
@@ -126,7 +126,7 @@ Structured writes are restricted to the current remote workspace. An SSH command
 - Local command-line tools and extensions that only support `file://` cannot access `safs://` directly; use two-way sync when needed.
 - SFTP has no native file-change notification, so SAFS polls for remote changes.
 - The SAFS MCP/CLI used for Agent Forwarding requires the local VS Code instance to remain running with forwarding enabled for the relevant mount.
-- If the server has no SFTP subsystem, SAFS falls back to SCP/exec. Basic file operations remain available, but performance and compatibility may differ.
+- SFTP is preferred; when unavailable, SAFS uses its SCP adapter over the same `ssh2` connection and does not invoke system SSH/SFTP commands.
 - MCP tools can constrain structured file operations, but they cannot intercept other local tools invoked directly by the Agent.
 
 ## SAFS vs. a passwordless SSH alias
@@ -142,7 +142,7 @@ Another common way to operate a remote host without an Agent service is to confi
 | Write boundaries | Structured writes stay within the workspace, with separate high-risk command rules | Has all permissions of the SSH account by default, with no additional workspace boundary |
 | Security controls | Host-key confirmation, local MCP token, high-risk command blocking, and redacted logs | Full OpenSSH capabilities; security depends on key, account, and server permission design |
 | File transfer | Built-in visual upload, download, and two-way sync | Mature, portable `scp`/`rsync` workflows suit scripts and bulk transfers |
-| Compatibility | Handles passwords, keys, some VPN/gateway cases, and servers without SFTP | Works wherever OpenSSH connects; special networks and interactive auth require custom setup |
+| Compatibility | Supports passwords, keys, interactive auth, jumps and proxies; requires SFTP | Works wherever OpenSSH connects; special networks and interactive auth require custom setup |
 | Dependencies | Requires VS Code and SAFS to stay running; the Agent needs MCP or SAFS CLI support | Requires only an SSH client and key, with fewer editor or Agent requirements |
 | Best suited for | Interactive development with safer Agent access to the current project | Existing SSH operations, CI scripts, and tool-independent automation |
 
@@ -151,3 +151,9 @@ Recommendations:
 - Choose **SAFS** when you need a file tree, editor integration, sync, and an Agent explicitly bound to the current workspace.
 - A **passwordless SSH alias** is simpler when you already have a mature SSH key and permission setup and only need to run commands or existing scripts.
 - They can be combined: use SAFS for daily editing and Agent file operations, and SSH/rsync for reviewed operations scripts or bulk transfers.
+
+Native prebuilds cover Windows/macOS x64 and arm64, plus Linux glibc x64, arm64 and arm. WSL uses the Linux binding.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for upstream attribution and licenses.
+
+[Source architecture and module layout](ARCHITECTURE.md)

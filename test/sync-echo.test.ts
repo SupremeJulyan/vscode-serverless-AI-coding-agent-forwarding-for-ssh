@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DownloadEchoGuard, LocalFileFingerprint } from '../src/sync-echo';
+import { DownloadEchoGuard, LocalFileFingerprint } from '../src/sync/sync-echo';
 
 function stat(
   size: number, mtimeMs: number, ctimeMs: number, directory = false

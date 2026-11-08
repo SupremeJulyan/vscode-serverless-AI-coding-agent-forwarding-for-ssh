@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readTextBatch } from '../src/remote-read-batch';
+import { readTextBatch } from '../src/remote/remote-read-batch';
 
 test('batch budget bounds content and preserves partial failures and unattempted items', async () => {
   const calls: string[] = [];

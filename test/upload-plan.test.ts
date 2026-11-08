@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as path from 'node:path';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
-import { planUploads } from '../src/upload-plan';
+import { planUploads } from '../src/transfer/upload-plan';
 
 async function tempTree(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), 'safs-upload-plan-'));

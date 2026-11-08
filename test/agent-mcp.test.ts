@@ -3,7 +3,7 @@ import * as http from 'node:http';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { AgentMcpServer, AgentToolError } from '../src/agent-mcp';
+import { AgentMcpServer, AgentToolError } from '../src/agent/agent-mcp';
 
 async function freePort(): Promise<number> {
   const server = http.createServer();

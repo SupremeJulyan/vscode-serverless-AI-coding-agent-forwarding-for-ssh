@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   commandExists, commandSearchPath, executeCaptured, executeWithStdin,
   resolveExecutable, windowsCommandInvocation
-} from '../src/process';
+} from '../src/platform/process';
 
 test('searches ~/.local/bin before the inherited extension-host PATH', () => {
   assert.equal(

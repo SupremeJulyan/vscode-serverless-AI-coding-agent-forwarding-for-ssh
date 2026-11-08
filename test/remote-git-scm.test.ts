@@ -72,7 +72,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
       options?.placeHolder?.includes('选择分支') ? items[1] : items[0],
     withProgress: async (_options: unknown, task: () => Promise<void>) => task()
   });
-  const { RemoteGitScm } = require('../src/remote-git-scm') as typeof import('../src/remote-git-scm');
+  const { RemoteGitScm } = require('../src/git/remote-git-scm') as typeof import('../src/git/remote-git-scm');
   let counts = '2\t3';
   const scm = new RemoteGitScm(async uri => mockGitBatch(async command => {
     executions.push({ root: uri.path, command });

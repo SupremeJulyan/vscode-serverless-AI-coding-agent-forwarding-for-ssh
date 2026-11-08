@@ -4,7 +4,7 @@ import {
   assertSafeRemoteEntryName, isRemotePathInsideRoot, legacyMountAuthorityAlias, mountAuthorityAlias,
   normalizeRemotePath, parseRemoteUri, remoteUri, resolvedRemoteRoot, setMountAliasResolver
 } from '../src/sftp/uri';
-import { mountAliasCandidates } from '../src/mount-aliases';
+import { mountAliasCandidates } from '../src/config/mount-aliases';
 
 test('round-trips remote folder names and unusual POSIX paths', () => {
   const uri = remoteUri("项目 A/O'Brien", "/srv/项目 A/O'Brien/[草稿] #1.ts");

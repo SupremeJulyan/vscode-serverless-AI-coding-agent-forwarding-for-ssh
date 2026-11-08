@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { remoteConnectionShortcutHint, remoteShortcutKeys } from '../src/shortcut-hint';
+import { remoteConnectionShortcutHint, remoteShortcutKeys } from '../src/ui/shortcut-hint';
 
 test('shows the contributed directory and terminal shortcuts for each platform', () => {
   assert.deepEqual(remoteShortcutKeys('windows'), {

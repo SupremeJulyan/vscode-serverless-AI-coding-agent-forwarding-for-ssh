@@ -10,7 +10,7 @@
     "encrypt_passwords": {
       "type": "boolean",
       "default": true,
-      "description": "是否由配套 bridge 加密保存密码，建议启用。"
+      "description": "使用 SAFS 主口令加密配置中的密码。"
     },
     "hosts": {
       "type": "array",
@@ -40,7 +40,7 @@
     "mounts": {
       "type": "array",
       "deprecated": true,
-      "description": "已废弃：由 Add SSH Config 自动生成，无需手动维护。新配置文件中无需包含此字段。",
+      "description": "已废弃：SAFS 会根据 hosts 自动生成挂载，无需手动维护。",
       "items": {
         "$ref": "#/definitions/mount"
       }
@@ -179,10 +179,36 @@
           "type": "string",
           "description": "SSH 密码；使用私钥时无需填写，避免提交到版本库。"
         },
-        "source": {
+        "auth": {
           "type": "string",
-          "enum": ["ssh-config"],
-          "description": "由 SSH 配置自动导入；删除 SAFS 配置不会修改 SSH 配置，后续扫描可能重新导入。"
+          "enum": [
+            "auto",
+            "password",
+            "publickey",
+            "agent",
+            "keyboard-interactive"
+          ],
+          "description": "SSH 认证方式；默认自动选择。手动配置仅在显式选择 agent 或配置 agent_socket 时使用 SSH agent。"
+        },
+        "agent_socket": {
+          "type": "string",
+          "description": "显式 SSH agent Unix socket 或 Windows named pipe。"
+        },
+        "proxy_command": {
+          "type": "string",
+          "description": "代理可执行文件及参数；shell 运算符须封装在脚本中。"
+        },
+        "jump_host": {
+          "type": "string",
+          "description": "SAFS 中配置的跳板机连接名（可用 user@host:port，多跳以逗号分隔）。"
+        },
+        "socks_proxy": {
+          "type": "string",
+          "description": "SOCKS 代理 host:port。"
+        },
+        "http_proxy": {
+          "type": "string",
+          "description": "HTTP CONNECT 代理 host:port。"
         }
       },
       "additionalProperties": false
@@ -242,10 +268,36 @@
             "additionalProperties": false
           }
         },
-        "source": {
+        "auth": {
           "type": "string",
-          "enum": ["ssh-config"],
-          "description": "由 SSH 配置自动导入；删除 SAFS 配置不会修改 SSH 配置，后续扫描可能重新导入。"
+          "enum": [
+            "auto",
+            "password",
+            "publickey",
+            "agent",
+            "keyboard-interactive"
+          ],
+          "description": "SSH 认证方式；默认自动选择。手动配置仅在显式选择 agent 或配置 agent_socket 时使用 SSH agent。"
+        },
+        "agent_socket": {
+          "type": "string",
+          "description": "显式 SSH agent Unix socket 或 Windows named pipe。"
+        },
+        "proxy_command": {
+          "type": "string",
+          "description": "代理可执行文件及参数；shell 运算符须封装在脚本中。"
+        },
+        "jump_host": {
+          "type": "string",
+          "description": "SAFS 中配置的跳板机连接名（可用 user@host:port，多跳以逗号分隔）。"
+        },
+        "socks_proxy": {
+          "type": "string",
+          "description": "SOCKS 代理 host:port。"
+        },
+        "http_proxy": {
+          "type": "string",
+          "description": "HTTP CONNECT 代理 host:port。"
         }
       },
       "additionalProperties": false

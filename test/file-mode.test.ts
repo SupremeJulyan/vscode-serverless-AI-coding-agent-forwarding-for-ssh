@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
-import { applyLocalExecutableBits, executableBits, grantExecutableBits } from '../src/file-mode';
+import { applyLocalExecutableBits, executableBits, grantExecutableBits } from '../src/transfer/file-mode';
 
 test('executable bits mirror the source mode class by class', () => {
   assert.equal(executableBits(0o644), 0, '普通文件不该凭空得到可执行位');

@@ -6,7 +6,7 @@ import test from 'node:test';
 import {
   ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory, readLastRemoteDirectory,
   safeAgentCwdName, writeLastRemoteDirectory
-} from '../src/agent-cwd';
+} from '../src/agent/agent-cwd';
 
 test('creates a real cwd below extension storage', async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'agent-cwd-'));

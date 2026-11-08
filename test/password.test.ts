@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decryptPassword, encryptPassword, isEncryptedPassword } from '../src/password';
+import { decryptPassword, encryptPassword, isEncryptedPassword } from '../src/security/password';
 
 test('encrypts and decrypts bridge-compatible password values', async () => {
   const encrypted = await encryptPassword('服务器 password !', 'master secret');

@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import { defaultHighRiskCommandPatterns } from '../src/high-risk-commands';
+import { defaultHighRiskCommandPatterns } from '../src/security/high-risk-commands';
 
 async function main(): Promise<void> {
   const manifestPath = path.resolve(__dirname, '..', 'package.json');
