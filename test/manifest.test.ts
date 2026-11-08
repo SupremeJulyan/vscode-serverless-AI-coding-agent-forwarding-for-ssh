@@ -190,27 +190,24 @@ test('uses distinct conflict-resistant shortcuts on each desktop platform', asyn
   });
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.equal(extensionSource.includes('showRemoteShortcutHintOnce(vscodeContext)'), false);
-  assert.ok(extensionSource.includes("platformStateKey('agentForwardingHintV1')"));
-  assert.ok(extensionSource.includes("'打开远程目录', '打开远程终端', '我知道了'"));
-  assert.ok(extensionSource.includes('globalState.update(agentForwardingHintKey, true)'));
+  assert.ok(extensionSource.includes('远程工作区 ${mount.name} 自动启用 Agent 转发'));
+  assert.ok(extensionSource.includes('await setAiForwardEnabled(mount, true)'));
 });
 
-test('shows separate Agent forwarding actions for enabled and disabled mounts', async () => {
+test('shows a restart action for automatic Agent forwarding', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
-  assert.ok(commands.some((item) => item.command === 'safs.enableAiForwardItem'));
-  assert.ok(commands.some((item) => item.command === 'safs.disableAiForwardItem'));
+  assert.ok(commands.some((item) => item.command === 'safs.restartAgentForwardItem'));
   assert.ok(commands.some(
     (item) => item.command === 'safs.copyStreamableHttpUrl'
   ));
-  assert.equal(commands.some((item) => item.command === 'safs.toggleAiForwardItem'), false);
+  assert.equal(commands.some((item) => item.command === 'safs.enableAiForwardItem'), false);
+  assert.equal(commands.some((item) => item.command === 'safs.disableAiForwardItem'), false);
   const menu = manifest.contributes?.menus?.['view/item/context'] ?? [];
-  assert.ok(menu.some((item) => item.command === 'safs.enableAiForwardItem'
-    && item.when?.includes('aiDisabled')));
-  assert.ok(menu.some((item) => item.command === 'safs.disableAiForwardItem'
-    && item.when?.includes('aiEnabled')));
+  assert.ok(menu.some((item) => item.command === 'safs.restartAgentForwardItem'
+    && item.when?.includes('safs\\.connection')));
 });
 
 test('packages Agent integration without the legacy JS stdio router or Codex plugin', async () => {

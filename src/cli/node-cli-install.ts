@@ -5,7 +5,7 @@ import type { CommandPlan } from '../platform/platform';
 
 export class NodeRuntimeUnavailableError extends Error {
   constructor() {
-    super('未检测到可用的 Node.js 18 或以上版本。安装或升级后，请完全退出所有 VS Code 窗口，再重新打开 VS Code 并启用 Agent 转发；仅重新加载窗口不会更新 PATH。');
+    super('未检测到可用的 Node.js 18 或以上版本。安装或升级后，请完全退出所有 VS Code 窗口，再重新打开 SAFS 远程工作区或终端；仅重新加载窗口不会更新 PATH。');
     this.name = 'NodeRuntimeUnavailableError';
   }
 }
