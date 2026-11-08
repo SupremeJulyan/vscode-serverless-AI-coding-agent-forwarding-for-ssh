@@ -1,3 +1,5 @@
+import { adoptedRemoteSaveResult } from './remote/save-result';
+import { saveConfirmation } from './remote/save-confirmation';
 import { operationMetric } from './shared/operation-metric';
 import { untilCancelled, UiOperationGate } from './ui/ui-operation';
 import { registerConfigDiagnostics } from './config/config-diagnostics';
@@ -3378,8 +3380,13 @@ async function remoteRead(input: RemoteReadOptions & { mountName: string }): Pro
   if (resolved.stat.type !== 'file') {
     throw new Error(`remote_read requires a regular file: ${input.path}`);
   }
-  return { path: resolved.path, ...await readTextRange(resolved.stat.size,
-    (offset, length) => session.readFileRange(resolved.path, offset, length), input) };
+  const result = await readTextRange(resolved.stat.size,
+    (offset, length) => session.readFileRange(resolved.path, offset, length), input);
+  const key = folderUri(folder, requestedPath);
+  if (result.offset === 0 && !result.truncated && !saveConfirmation.attempts.get(key)?.busy) {
+    saveConfirmation.discard(key);
+  }
+  return { path: resolved.path, ...result };
 
 }
 
@@ -3394,23 +3401,12 @@ async function remoteWrite(input: {
   if (!isRemotePathInsideRoot(workspaceRoot, remotePath)) {
     throw agentWorkspaceBoundaryError(`Write path is outside workspaceRoot: ${input.path}`);
   }
-  const session = await pool.get(folder.hostName);
-  let securedPath: string;
-  try {
-    securedPath = await session.realpath(remotePath);
-  } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    if (code !== 2 && code !== 'ENOENT') throw error;
-    const parent = await session.realpath(path.posix.dirname(remotePath));
-    securedPath = path.posix.join(parent, path.posix.basename(remotePath));
-  }
-  if (!isRemotePathInsideRoot(workspaceRoot, securedPath)) {
-    throw agentWorkspaceBoundaryError(`Write path escapes workspaceRoot through a symbolic link: ${input.path}`);
-  }
   const uri = vscode.Uri.parse(folderUri(folder, remotePath));
   const content = new TextEncoder().encode(input.content);
-  await provider.writeFile(uri, content, { create: true, overwrite: true });
-  return { path: remotePath, bytes: content.length };
+  const saved = await provider.saveFile(uri, content, { create: true, overwrite: true }, false, workspaceRoot);
+  return { path: remotePath, ...(saved.remotePreferred
+    ? adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions)
+    : { written: true, bytes: saved.bytes }) };
 }
 
 async function remoteCreate(input: {
@@ -3483,7 +3479,8 @@ async function remoteEdit(input: {
     throw new Error(`remote_edit result exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
   }
   const uri = vscode.Uri.parse(folderUri(folder, entry.remotePath));
-  await provider.writeFile(uri, encoded, { create: false, overwrite: true });
+  const saved = await provider.saveFile(uri, encoded, { create: false, overwrite: true }, input.expectedHash !== undefined);
+  if (saved.remotePreferred) return { path: entry.remotePath, replacements: 0, ...adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions) };
   return {
     path: entry.remotePath,
     replacements: edited.replacements,
@@ -5951,6 +5948,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return mount ? ensureFolder(mount) : undefined;
     }
   );
+  context.subscriptions.push(provider.onDidAcceptRemoteSave(uri => {
+    // Revert after the active save completes so VS Code reloads the remote version.
+    setTimeout(() => {
+      if (!vscode.workspace.textDocuments.some(document => document.uri.toString() === uri.toString())) return;
+      void vscode.commands.executeCommand('workbench.action.files.revert', uri)
+        .then(undefined, error => logAsyncFailure('重新加载远端版本失败', error));
+    }, 0);
+  }));
   const recoveryTimer = setInterval(() => {
     if (restoringRemoteWorkspaces) return;
     restoringRemoteWorkspaces = true;

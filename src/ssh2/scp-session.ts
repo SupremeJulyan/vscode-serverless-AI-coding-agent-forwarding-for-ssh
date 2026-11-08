@@ -598,8 +598,8 @@ export class ScpSession implements SftpSession {
     }
     // 小文件走 exec + base64（与列举/stat 同一条可靠通道——部分网关上 `scp -t`
     // 收不到确认会永久挂起）；大文件走 legacy SCP（二进制更高效，带停滞看门狗）。
-    if (content.length <= scpBase64WriteMaxBytes) {
-      await this.writeViaExec(remotePath, content, mode, options.mode !== undefined, signal);
+    if (!options.create || content.length <= scpBase64WriteMaxBytes) {
+      await this.writeViaExec(remotePath, content, mode, options.mode !== undefined, signal, !options.create);
     } else {
       await this.scpWrite(
         path.posix.dirname(remotePath),
@@ -619,15 +619,18 @@ export class ScpSession implements SftpSession {
     content: Uint8Array,
     mode: number,
     explicitMode: boolean,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    preserveExisting = false
   ): Promise<void> {
+    const guard = preserveExisting
+      ? `test -f ${shellQuote(remotePath)} && test ! -L ${shellQuote(remotePath)} && ` : '';
     const command = explicitMode
       ? `umask 0 && base64 -d > ${shellQuote(remotePath)} && chmod ${mode.toString(8)} -- ${shellQuote(remotePath)}`
       : `base64 -d > ${shellQuote(remotePath)}`;
-    const result = await this.exec(command, Buffer.from(Buffer.from(content).toString('base64')), signal);
+    const result = await this.exec(guard + command, Buffer.from(Buffer.from(content).toString('base64')), signal);
     if (result.code !== 0) {
       const stderr = result.stderr.toString();
-      if (/command not found|base64:.*not found/i.test(stderr)) {
+      if (!preserveExisting && /command not found|base64:.*not found/i.test(stderr)) {
         await this.scpWrite(
           path.posix.dirname(remotePath),
           path.posix.basename(remotePath),
