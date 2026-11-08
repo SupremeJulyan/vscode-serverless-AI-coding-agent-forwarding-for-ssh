@@ -9,23 +9,24 @@ test('refreshes stale CLI connection settings and recreates a missing connection
   const root = await mkdtemp(join(tmpdir(), 'safs-cli-refresh-'));
   const target = join(root, '.safs-connection.json');
   try {
-    await writeCliConnectionFile(target, 'http://127.0.0.1:9848/backend?token=old', 125_000);
-    const url = 'http://127.0.0.1:19999/backend?token=new&source=cli';
-    await writeCliConnectionFile(target, url, 65_000);
-    assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), { version: 1, url, timeoutMs: 65_000 });
+    await writeCliConnectionFile(target, '/tmp/old.sock', 'old', 125_000);
+    const socketPath = '/tmp/new.sock', token = 'new';
+    await writeCliConnectionFile(target, socketPath, token, 65_000);
+    assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), { version: 2, socketPath, token, timeoutMs: 65_000 });
     await rm(target);
-    await writeCliConnectionFile(target, url, 0);
-    assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), { version: 1, url, timeoutMs: 0 });
+    await writeCliConnectionFile(target, socketPath, token, 0);
+    assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), { version: 2, socketPath, token, timeoutMs: 0 });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('CLI configuration is private and legacy instructions are removed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-cli-integration-'));
   try {
-    await writeCliConnection(root, 'http://127.0.0.1:9848/backend?token=secret', 42_000);
+    await writeCliConnection(root, '/tmp/safs.sock', 'secret', 42_000);
     assert.deepEqual(JSON.parse(await readFile(cliConfigPath(root), 'utf8')), {
-      version: 1,
-      url: 'http://127.0.0.1:9848/backend?token=secret',
+      version: 2,
+      socketPath: '/tmp/safs.sock',
+      token: 'secret',
       timeoutMs: 42_000
     });
     if (process.platform !== 'win32') assert.equal((await stat(cliConfigPath(root))).mode & 0o777, 0o600);

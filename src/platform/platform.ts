@@ -1,15 +1,6 @@
 import * as os from 'node:os';
 export type PlatformKind = 'windows' | 'macos' | 'linux' | 'wsl';
 
-export function agentHttpRouterPort(platform: PlatformKind, configuredPort = 0): number {
-  // Normalize legacy shared defaults too, so upgrades separate Windows/WSL
-  // without asking users to reset an existing 9848/9849 setting.
-  if (configuredPort === 0 || configuredPort === 9848 || configuredPort === 9849) {
-    return platform === 'wsl' ? 9849 : 9848;
-  }
-  return configuredPort;
-}
-
 export function platformExtensionStateKey(name: string, platform: PlatformKind): string {
   return `safs.${name}.${platform}`;
 }

@@ -14,6 +14,9 @@ export interface RemoteFolder {
   remoteRoot: string;
   /** Initial directory, independent of the browsable mount root. */
   defaultRemotePath?: string;
+  /** SAFS-only URI root whose basename is the host-account display name. */
+  displayRoot?: string;
+  displayRemoteRoot?: string;
   /** Previous storage namespace retained for restored editor tabs. */
   legacyMapping?: { workspaceRoot: string; remoteRoot: string };
   legacyMappings?: Array<{ workspaceRoot: string; remoteRoot: string }>;
@@ -31,10 +34,16 @@ function isWorkspaceNamespacePath(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith('../') && relative !== '..');
 }
 
-function additionalMappings(folder: RemoteFolder): Array<{ workspaceRoot: string; remoteRoot: string }> {
-  return [...agentCwdMappings(folder.workspaceRoot).map(item => ({
+function placeholderMappings(folder: RemoteFolder): Array<{ workspaceRoot: string; remoteRoot: string }> {
+  return agentCwdMappings(folder.workspaceRoot).map(item => ({
     workspaceRoot: item.localPath.replaceAll('\\', '/').replace(/^(?=[A-Za-z]:\/)/, '/'), remoteRoot: item.remoteRoot
-  })), ...(folder.legacyMappings ?? [])];
+  }));
+}
+
+function additionalMappings(folder: RemoteFolder): Array<{ workspaceRoot: string; remoteRoot: string }> {
+  return [...(folder.displayRoot && folder.displayRemoteRoot
+    ? [{ workspaceRoot: folder.displayRoot, remoteRoot: folder.displayRemoteRoot }]
+    : []), ...placeholderMappings(folder), ...(folder.legacyMappings ?? [])];
 }
 
 export function isWorkspaceUriPath(folder: RemoteFolder, uriPath: string): boolean {
@@ -72,6 +81,17 @@ export function workspacePathForRemote(folder: RemoteFolder, remotePath: string)
   return path.posix.join(
     folder.workspaceRoot, path.posix.relative(folder.remoteRoot, remotePath)
   );
+}
+
+/** Map a remote path to its real local proxy directory, excluding display-only URI aliases. */
+export function placeholderPathForRemote(folder: RemoteFolder, remotePath: string): string {
+  if (!isRemotePathInsideRoot(folder.remoteRoot, remotePath)) return remotePath;
+  const mapped = placeholderMappings(folder)
+    .filter(item => isRemotePathInsideRoot(item.remoteRoot, remotePath))
+    .sort((a, b) => b.remoteRoot.length - a.remoteRoot.length)[0];
+  return mapped
+    ? path.posix.join(mapped.workspaceRoot, path.posix.relative(mapped.remoteRoot, remotePath))
+    : path.posix.join(folder.workspaceRoot, path.posix.relative(folder.remoteRoot, remotePath));
 }
 
 interface CacheEntry<T> {

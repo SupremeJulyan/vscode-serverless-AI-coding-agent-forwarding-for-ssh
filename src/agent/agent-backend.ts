@@ -1,12 +1,10 @@
-import { ipcPath, ipcUrl, listenIpc } from './agent-ipc';
+import { createIpcServer, ipcPath, listenIpc, IpcRequestError } from './agent-ipc';
 import { operationMetric } from '../shared/operation-metric';
 import { listDirectories } from '../remote/remote-results';
 import { readTextBatch } from '../remote/remote-read-batch';
 import { RemoteSearchOptions } from '../remote/remote-search';
 import { RemoteReadOptions } from '../remote/remote-read';
 import { RemoteOutputStore } from '../remote/remote-output';
-import * as http from 'node:http';
-import express from 'express';
 import { type AgentToolProfile, terminalCliOnlyCommandMessage } from './agent-operations';
 import { AgentActivitySource } from './agent-activity';
 
@@ -84,25 +82,19 @@ export class AgentToolError extends Error {
 
 export class AgentBackendServer {
   private readonly outputs = new RemoteOutputStore();
-  private httpServer: http.Server | undefined;
-  private _portUnavailable = false;
+  private server: ReturnType<typeof createIpcServer> | undefined;
 
   constructor(
-    _port: number,
     private readonly token: string,
     private readonly callbacks: AgentBackendCallbacks
   ) {}
 
-  get url(): string {
-    return `${ipcUrl(ipcPath('window-' + process.pid + '-' + this.token))}&token=${encodeURIComponent(this.token)}`;
+  get socketPath(): string {
+    return ipcPath('window-' + process.pid + '-' + this.token);
   }
 
   get running(): boolean {
-    return this.httpServer !== undefined;
-  }
-
-  get portUnavailable(): boolean {
-    return this._portUnavailable;
+    return this.server !== undefined;
   }
 
   private async callOperation(name: string, input: Record<string, unknown>, agentName?: string) {
@@ -271,50 +263,42 @@ export class AgentBackendServer {
 
 
   async start(): Promise<void> {
-    if (this.httpServer) return;
-    const app = express();
-    app.use(express.json({ limit: '1mb' }));
-    app.post('/operations', async (request, response) => {
-      if (request.query.token !== this.token) {
-        response.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-      const name = request.body?.operation;
-      const input = request.body?.input;
+    if (this.server) return;
+    const server = createIpcServer(async ({ action, payload }) => {
+      const envelope = payload as { token?: unknown; value?: unknown };
+      if (envelope.token !== this.token) throw new IpcRequestError('Unauthorized', 'UNAUTHORIZED');
+      if (action !== 'operation') throw new IpcRequestError('Unknown backend action', 'INVALID_ACTION');
+      const body = envelope.value as { operation?: unknown; input?: unknown; agentName?: unknown; source?: unknown };
+      const name = body?.operation;
+      const input = body?.input;
       if (typeof name !== 'string' || !input || typeof input !== 'object' || Array.isArray(input)) {
-        response.status(400).json({ error: 'Invalid operation request' });
-        return;
+        throw new IpcRequestError('Invalid operation request', 'INVALID_REQUEST');
       }
-      const agentName = typeof request.query.agent === 'string'
-        ? request.query.agent.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_') : undefined;
+      const agentName = typeof body.agentName === 'string'
+        ? body.agentName.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_') : undefined;
       if (this.callbacks.toolProfile?.() === 'terminal' && name !== 'run_remote_command') {
-        response.status(403).json({ error: terminalCliOnlyCommandMessage });
-        return;
+        throw new IpcRequestError(terminalCliOnlyCommandMessage, 'TERMINAL_COMMAND_ONLY');
       }
       const started = performance.now();
       try {
         this.callbacks.request?.(agentName);
-        this.callbacks.audit?.({ toolName: name, input, agentName });
-        response.json(await this.callOperation(name, input, agentName));
+        this.callbacks.audit?.({ toolName: name, input: input as Record<string, unknown>, agentName });
+        return await this.callOperation(name, input as Record<string, unknown>, agentName);
       } catch (error) {
-        response.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+        throw new IpcRequestError(error instanceof Error ? error.message : String(error));
       } finally {
         operationMetric(this.callbacks.log, 'cli.operation', started);
       }
     });
-    const server = http.createServer(app);
-    this._portUnavailable = false;
-    await listenIpc(server, ipcPath('window-' + process.pid + '-' + this.token));
-    this.httpServer = server;
-    this.callbacks.log?.(
-      'Agent IPC 已启动'
-    );
+    await listenIpc(server, this.socketPath);
+    this.server = server;
+    this.callbacks.log?.('Agent IPC 服务已启动');
   }
 
   async stop(): Promise<void> {
     this.outputs.clear();
-    const server = this.httpServer;
-    this.httpServer = undefined;
+    const server = this.server;
+    this.server = undefined;
     if (!server) return;
     this.callbacks.log?.('正在停止 CLI');
     await new Promise<void>((resolve, reject) => {
