@@ -1,5 +1,5 @@
+import { saveConfirmation } from '../remote/save-confirmation';
 import * as path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { SftpConnectionPool } from './connection-pool';
 import { SftpFileStat, SftpSession } from './session';
@@ -142,6 +142,8 @@ export class RemoteFolderRegistry {
 }
 
 export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode.Disposable {
+  private readonly remoteAccepted = new vscode.EventEmitter<vscode.Uri>();
+  readonly onDidAcceptRemoteSave = this.remoteAccepted.event;
   private readonly changes = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
   private readonly statCache = new Map<string, CacheEntry<vscode.FileStat>>();
   private readonly directoryCache = new Map<string, CacheEntry<[string, vscode.FileType][]>>();
@@ -326,6 +328,7 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
     try {
       const { session, remotePath } = await this.resolve(uri);
       const value = await session.readFile(remotePath);
+      if (!saveConfirmation.attempts.get(uri.toString())?.busy) saveConfirmation.discard(uri.toString());
       return value;
     } catch (error) {
       providerError(error, uri);
@@ -333,59 +336,79 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
   }
 
   async writeFile(
-    uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }
+    uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }, confirmedRetry = false
   ): Promise<void> {
+    await this.saveFile(uri, content, options, confirmedRetry);
+  }
+
+  async saveFile(
+    uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }, confirmedRetry = false, requiredRoot?: string
+  ): Promise<{ remotePreferred: boolean; bytes: number; remoteContent?: Uint8Array; permissions?: number }> {
     try {
-      const { session, remotePath } = await this.resolve(uri, true);
-      const temporaryPath = `${remotePath}.safs-${randomBytes(6).toString('hex')}`;
-      try {
-        // 临时文件写入：随机名 + 显式 mode（SCP 回退下跳过 exists/权限探测，
-        // 少一条 exec）；覆盖语义由下面针对最终路径的 stat 保证。
-        await session.writeFile(temporaryPath, content, {
-          create: true, overwrite: true, mode: 0o644
-        });
-        let existing: import('./session').SftpFileStat | undefined;
-        if (!options.overwrite) {
-          try {
-            await session.stat(remotePath);
-            throw vscode.FileSystemError.FileExists(uri);
-          } catch (error) {
-            if (error instanceof vscode.FileSystemError) throw error;
-            if (errorCode(error) !== 2 && errorCode(error) !== 'ENOENT') throw error;
+      if (!confirmedRetry && saveConfirmation.attempts.has(uri.toString())) {
+        if (await this.verifyPendingSave(uri, requiredRoot) === 'remote') {
+          const { session, remotePath } = await this.resolve(uri);
+          if (requiredRoot && !isRemotePathInsideRoot(requiredRoot, remotePath)) {
+            throw vscode.FileSystemError.NoPermissions('Write path escapes workspaceRoot through a symbolic link');
           }
-        } else {
-          try {
-            existing = await session.stat(remotePath);
-          } catch (error) {
-            if (!options.create || (errorCode(error) !== 2 && errorCode(error) !== 'ENOENT')) {
-              throw error;
-            }
-          }
+          const remoteContent = await session.readFile(remotePath);
+          const info = await session.stat(remotePath);
+          this.invalidate(uri);
+          this.changes.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+          this.remoteAccepted.fire(uri);
+          return { remotePreferred: true, bytes: remoteContent.byteLength, remoteContent, permissions: info.permissions };
         }
-        if (existing === undefined || existing.type === 'file') {
-          // 常规：新文件或覆盖普通文件——chmod（保留权限）+ mv 合并为一条命令
-          // （SCP 回退下从 3-4 条 exec 降为 1 条）。
-          await session.replaceFile(temporaryPath, remotePath, existing?.permissions);
-        } else {
-          // 目录目标（罕见）：维持原有行为（chmod + rename，rename 会先删目标目录）。
-          if (existing.permissions !== undefined) {
-            await session.chmod(temporaryPath, existing.permissions).catch(() => undefined);
-          }
-          await session.rename(temporaryPath, remotePath, options.overwrite);
-        }
-      } catch (error) {
-        await session.deleteFile(temporaryPath).catch(() => undefined);
-        throw error;
       }
+      const { session, remotePath } = await this.resolve(uri, true);
+      if (requiredRoot && !isRemotePathInsideRoot(requiredRoot, remotePath)) {
+        throw vscode.FileSystemError.NoPermissions('Write path escapes workspaceRoot through a symbolic link');
+      }
+      let existing: SftpFileStat | undefined;
+      try { existing = await session.stat(remotePath); }
+      catch (error) {
+        if (errorCode(error) !== 2 && errorCode(error) !== 'ENOENT') throw error;
+      }
+      if (existing && !options.overwrite) throw vscode.FileSystemError.FileExists(uri);
+      if (!existing && !options.create) throw vscode.FileSystemError.FileNotFound(uri);
+      if (existing && existing.type !== 'file') throw vscode.FileSystemError.NoPermissions('Only regular files can be saved');
+      // Preserve the existing inode, owner, group and ACLs by writing in place.
+      // New files are created exclusively with private permissions.
+      await saveConfirmation.run(uri.toString(), content,
+        existing?.permissions === undefined ? (existing ? undefined : 0o600) : existing.permissions & 0o7777, async signal => {
+      await session.writeFile(remotePath, content, existing
+        ? { create: false, overwrite: true }
+        : { create: true, overwrite: false, mode: 0o600 }, signal);
+      const saved = await session.stat(remotePath);
+      if (saved.size !== content.byteLength) throw new Error('Remote file size changed during save');
+      if (existing?.permissions !== undefined && saved.permissions !== undefined
+        && (saved.permissions & 0o7777) !== (existing.permissions & 0o7777)) {
+        throw new Error('Remote file permissions changed during save');
+      }
+      }, () => session.isAlive(), confirmedRetry);
       this.invalidate(uri);
       this.changes.fire([
         { type: vscode.FileChangeType.Changed, uri },
         { type: vscode.FileChangeType.Changed, uri: vscode.Uri.joinPath(uri, '..') }
       ]);
       this.onMutation?.(uri, 'write');
+      return { remotePreferred: false, bytes: content.byteLength };
     } catch (error) {
       providerError(error, uri);
     }
+  }
+
+  async verifyPendingSave(uri: vscode.Uri, requiredRoot?: string): Promise<'matched' | 'remote' | undefined> {
+    const { session, remotePath } = await this.resolve(uri);
+    if (requiredRoot && !isRemotePathInsideRoot(requiredRoot, remotePath)) {
+      throw vscode.FileSystemError.NoPermissions('Write path escapes workspaceRoot through a symbolic link');
+    }
+    const result = await saveConfirmation.verify(uri.toString(), async () => {
+      const content = await session.readFile(remotePath);
+      const info = await session.stat(remotePath);
+      return { content, permissions: info.permissions === undefined ? undefined : info.permissions & 0o7777 };
+    });
+    this.invalidate(uri);
+    return result;
   }
 
   async createDirectory(uri: vscode.Uri): Promise<void> {
@@ -516,6 +539,7 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
     this.directoryRequests.clear();
     clearInterval(this.watchTimer);
     this.changes.dispose();
+    this.remoteAccepted.dispose();
     this.statCache.clear();
     this.directoryCache.clear();
     this.watched.clear();

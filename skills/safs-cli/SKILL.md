@@ -42,3 +42,5 @@ Workspace selection does not cancel operations targeting other workspace IDs. A 
 - Continue bounded reads with the returned cursor or offset. Continue retained command output with `safs output`; do not rerun a command merely to retrieve truncated output.
 
 Read [references/commands.md](references/commands.md) when selecting or composing SAFS commands.
+
+If a write or edit returns `remotePreferred: true` and `written: false`, the remote version was adopted and your proposed content was not written. Treat the returned `content`, `encoding`, and `hash` as authoritative; if `truncated` is true, continue with `safs read` at `nextOffset`. Update your context before making further edits. Do not blindly repeat the rejected write.

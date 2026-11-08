@@ -221,11 +221,34 @@ export class Ssh2SftpSession implements SftpSession {
     options: SftpWriteOptions,
     signal?: AbortSignal
   ): Promise<void> {
-    const flag = options.create ? (options.overwrite ? 'w' : 'wx') : 'r+';
-    await callback<void>(
-      (done) => this.sftp.writeFile(remotePath, Buffer.from(content), { flag }, done),
-      signal
-    );
+    signal?.throwIfAborted();
+    // Numeric SFTP flags allow WRITE|TRUNC without CREATE for existing files.
+    const flags = 0x02 | 0x10 | (options.create ? 0x08 : 0) | (!options.overwrite ? 0x20 : 0);
+    const handle = await callback<Buffer>(done => this.sftp.open(
+      remotePath, flags, { mode: options.mode ?? 0o600 }, done
+    ), undefined, sftpControlTimeoutMs);
+    try {
+      signal?.throwIfAborted();
+      const chunkBytes = 256 * 1024;
+      const concurrency = 4;
+      const buffer = Buffer.from(content.buffer, content.byteOffset, content.byteLength);
+      for (let start = 0; start < buffer.length; start += chunkBytes * concurrency) {
+        signal?.throwIfAborted();
+        const pending: Promise<void>[] = [];
+        for (let offset = start; offset < Math.min(buffer.length, start + chunkBytes * concurrency); offset += chunkBytes) {
+          const length = Math.min(chunkBytes, buffer.length - offset);
+          pending.push(callback<void>(done => this.sftp.write(handle, buffer, offset, length, offset, done),
+            undefined, sftpWriteChunkTimeoutMs));
+        }
+        // Drain this bounded window before closing the handle, including on errors.
+        const results = await Promise.allSettled(pending);
+        const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failed) throw failed.reason;
+      }
+
+    } finally {
+      await callback<void>(done => this.sftp.close(handle, done), undefined, sftpControlTimeoutMs);
+    }
   }
 
   async replaceFile(
