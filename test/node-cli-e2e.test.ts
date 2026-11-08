@@ -115,7 +115,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
   const routerToken = 'native-router';
   const router = new AgentIpcRouter(ipcPath('e2e-router-' + temporary), routerToken, {
     discover: () => [{
-      instanceId: 'node-window', workspaceRoot: '/project',
+      instanceId: 'node-window', workspaceRoot: '/project', localRoot: temporary,
       workspaceUri: 'safs://dev/project', host: 'dev', focused: true, backendSocketPath: backend.socketPath, backendToken: 'node-test'
     } as any]
   });
