@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { parseConfig, saveConfig, loadConfig } from '../src/config/config';
-import { SudoPasswordMiddleware } from '../src/ssh/sudo';
+import { SudoPasswordMiddleware } from '../src/ssh2/sudo';
 
 test('manual config ignores legacy SSH-config source markers', async () => {
   const host = { name: 'manual', ip: 'same-as-ssh-alias', user: 'alice', password: 'secret' };

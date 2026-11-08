@@ -1,5 +1,5 @@
 import { HostConfig } from './config';
-import { legacyMountAuthorityAlias, mountAuthorityAlias } from '../sftp/uri';
+import { legacyMountAuthorityAlias, mountAuthorityAlias } from '../ssh2/uri';
 
 /**
  * 主机节点的显示名：配置的别名优先，否则退回 IP。

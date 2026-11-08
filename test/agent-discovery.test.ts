@@ -18,7 +18,7 @@ test('publishes a private, versioned remote workspace record and removes it', as
     mountName: 'project',
     workspaceRoot: '/srv/project',
     host: 'dev',
-    mcpUrl: 'http://127.0.0.1:9848/mcp?token=secret'
+    backendUrl: 'http://127.0.0.1:9848/backend?token=secret'
   });
   const filePath = path.join(directory, 'window-one.json');
   const value = JSON.parse(await readFile(filePath, 'utf8'));
@@ -27,7 +27,7 @@ test('publishes a private, versioned remote workspace record and removes it', as
   assert.equal(value.processPlatform, process.platform);
   assert.equal(value.execution, 'remote');
   assert.equal(value.mountName, 'project');
-  assert.equal(value.mcpServerName, undefined);
+  assert.equal(value.backendServerName, undefined);
   assert.equal(typeof value.updatedAt, 'string');
   await publisher.remove();
   await assert.rejects(readFile(filePath, 'utf8'), { code: 'ENOENT' });
@@ -48,7 +48,7 @@ test('discovers fresh windows first and ignores stale records', async () => {
     mountName: instanceId,
     workspaceRoot: `/srv/${instanceId}`,
     host: 'dev',
-    mcpUrl: 'http://127.0.0.1:3000/mcp?token=secret',
+    backendUrl: 'http://127.0.0.1:3000/backend?token=secret',
     updatedAt: new Date(updatedAtMs).toISOString()
   });
   await mkdir(directory, { recursive: true });
@@ -82,7 +82,7 @@ test('ignores records whose updatedAt is in the future', async () => {
     mountName: instanceId,
     workspaceRoot: `/srv/${instanceId}`,
     host: 'dev',
-    mcpUrl: 'http://127.0.0.1:3000/mcp?token=secret',
+    backendUrl: 'http://127.0.0.1:3000/backend?token=secret',
     updatedAt: new Date(updatedAtMs).toISOString()
   });
   await mkdir(directory, { recursive: true });
@@ -105,7 +105,7 @@ test('stopping publication drains pending writes and blocks future heartbeats', 
   const record = {
     focused: true, execution: 'remote' as const,
     workspaceUri: 'safs://project/srv/project', mountName: 'project',
-    workspaceRoot: '/srv/project', host: 'dev', mcpUrl: 'http://127.0.0.1:9848/mcp'
+    workspaceRoot: '/srv/project', host: 'dev', backendUrl: 'http://127.0.0.1:9848/backend'
   };
   await Promise.all([publisher.publish(record), publisher.stop(), publisher.publish(record)]);
   assert.deepEqual(discoverAgentWorkspaces([directory]), []);
@@ -124,7 +124,7 @@ test('ignores a fresh record owned by a terminated process', async () => {
     version: 1, instanceId: 'dead', processId: pid, processPlatform: process.platform,
     focused: true, execution: 'remote',
     workspaceUri: 'safs://project/srv/project', mountName: 'project', workspaceRoot: '/srv/project',
-    host: 'dev', mcpUrl: 'http://127.0.0.1:9848/mcp', updatedAt: new Date().toISOString()
+    host: 'dev', backendUrl: 'http://127.0.0.1:9848/backend', updatedAt: new Date().toISOString()
   }));
   assert.deepEqual(discoverAgentWorkspaces([directory]), []);
 });
@@ -138,7 +138,7 @@ test('foreign platform PIDs are not checked against the local process table', as
     processPlatform: process.platform === 'win32' ? 'linux' : 'win32',
     focused: true, execution: 'remote', workspaceUri: 'safs://project/srv/project',
     mountName: 'project', workspaceRoot: '/srv/project', host: 'dev',
-    mcpUrl: 'http://127.0.0.1:9848/mcp', updatedAt: new Date().toISOString()
+    backendUrl: 'http://127.0.0.1:9848/backend', updatedAt: new Date().toISOString()
   }));
   assert.equal(discoverAgentWorkspaces([directory]).length, 1);
 });

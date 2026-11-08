@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   assertSafeRemoteEntryName, isRemotePathInsideRoot, legacyMountAuthorityAlias, mountAuthorityAlias,
   normalizeRemotePath, parseRemoteUri, remoteUri, resolvedRemoteRoot, setMountAliasResolver
-} from '../src/sftp/uri';
+} from '../src/ssh2/uri';
 import { mountAliasCandidates } from '../src/config/mount-aliases';
 
 test('round-trips remote folder names and unusual POSIX paths', () => {

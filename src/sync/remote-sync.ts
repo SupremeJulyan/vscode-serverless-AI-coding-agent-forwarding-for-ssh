@@ -1,8 +1,8 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { isRemotePathInsideRoot } from '../sftp/uri';
-import { SftpSession } from '../sftp/session';
+import { isRemotePathInsideRoot } from '../ssh2/uri';
+import { SftpSession } from '../ssh2/session';
 import { diffFingerprints, linesToMap, scanRemote } from './sync-diff';
 import { cleanupDownloadPart, commitDownloadPart, prepareDownloadResume } from '../transfer/resume-store';
 import { writeStreamToFile } from '../transfer/stream-file';

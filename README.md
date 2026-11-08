@@ -81,7 +81,7 @@ CLI 通过 Unix socket（Windows 使用命名管道）与扩展通信，无需�
 
 #### 查看 Agent 活动
 
-打开 SAFS 活动栏中的 **Agent 活动**，可以实时查看当前远程窗口实际执行的 MCP/CLI
+打开 SAFS 活动栏中的 **Agent 活动**，可以实时查看当前远程窗口实际执行的 CLI
 操作。顶部动画显示执行中、成功或失败状态，下方时间线按最新操作优先排列，并可按
 操作类型和状态筛选。连续的读取、列目录和搜索会自动折叠。
 
@@ -91,7 +91,7 @@ CLI 通过 Unix socket（Windows 使用命名管道）与扩展通信，无需�
 SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命令继承该终端当前的用户
 权限和环境变量，下方会显示绑定的终端及目录。
 
-关闭时点击 **关闭 Agent 转发**。如果 MCP 是通过提示词或 URL 手动安装的，请运行 `SAFS: 为我的Agent卸载转发功能`。
+关闭时点击 **关闭 Agent 转发**。如果 CLI 是通过提示词或 URL 手动安装的，请运行 `SAFS: 为我的Agent卸载转发功能`。
 
 ## 文件传输与本地同步
 
@@ -126,8 +126,8 @@ SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命�
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | 切换文件时，让已打开的远程终端自动 `cd` 到对应目录 |
 | `safs.terminalAutoReconnect` | `true` | 远程终端意外结束后自动重连；瞬时网络错误会有限退避重试 |
-| `safs.agentMcpToolProfile` | `full` | 改为 `core` 可减少 Agent 工具定义的上下文开销 |
-| `safs.agentMcpTimeoutMs` | `120000` | Agent 命令、搜索和传输的超时；`0` 表示关闭 |
+| `safs.agentBackendToolProfile` | `full` | 改为 `core` 可减少 Agent 工具定义的上下文开销 |
+| `safs.agentBackendTimeoutMs` | `120000` | Agent 命令、搜索和传输的超时；`0` 表示关闭 |
 | `safs.sftp.watchInterval` | `5` | 轮询远程文件变化的间隔（秒） |
 | `safs.hostKeyChangedAction` | `prompt` | 主机密钥变化时询问、拒绝或接受 |
 | `safs.highRiskCommandAction` | `deny` | Agent 命中高风险命令规则时拒绝或放行 |
@@ -138,9 +138,9 @@ SAFS 会读取终端实际目录并把它作为 Agent 的 `workspaceRoot`；命�
 
 SAFS 在本地 VS Code 扩展进程中建立 SSH/SFTP 连接，将远程目录映射为 `safs://` 虚拟文件系统。文件浏览与编辑通过 SFTP 完成，终端和 Agent 命令通过 SSH 执行，因此服务器无需安装 VS Code Server 或 Agent。
 
-SAFS 提供 MCP 和 CLI 两种 Agent 接口，让 Agent 安全、高效地调用插件的文件操作与远程命令能力。两种接口共用插件管理的连接、工作区边界和安全检查，支持结构化文件操作、批量请求与分段读取输出，减少重复连接和不必要的数据传输。
+SAFS 提供 CLI 接口，让 Agent 安全、高效地调用插件的文件操作与远程命令能力。该接口使用插件管理的连接、工作区边界和安全检查，支持结构化文件操作、批量请求与分段读取输出，减少重复连接和不必要的数据传输。
 
-启用 Agent 转发后，每个远程窗口都会启动仅本机可访问的 MCP 服务。多个窗口共用固定的本地路由入口；每次路由操作都显式携带 `workspaceId`，精确指向目标窗口，避免将命令发到错误的服务器或工作区。
+启用 Agent 转发后，每个远程窗口都会启动仅本机可访问的 CLI 服务。多个窗口共用固定的本地路由入口；每次路由操作都显式携带 `workspaceId`，精确指向目标窗口，避免将命令发到错误的服务器或工作区。
 
 结构化写入被限制在当前远程工作区。Agent 发起的 SSH 命令若命中高风险规则，默认会被拒绝并记录脱敏审计日志。但 SSH 命令不是沙箱：获准执行后仍拥有登录账号的权限，建议使用非 root、最小权限账号并禁用免密提权。
 
@@ -148,9 +148,9 @@ SAFS 提供 MCP 和 CLI 两种 Agent 接口，让 Agent 安全、高效地调用
 
 - 本地命令行和只支持 `file://` 的扩展不能直接访问 `safs://`；需要时请使用双向同步。
 - SFTP 没有原生文件变更通知，SAFS 通过轮询检测远程修改。
-- 支持Agent转发的 safs MCP/CLI 依赖本地 VS Code 持续运行，并保持对应挂载的转发已启用。
+- 支持Agent转发的 safs CLI 依赖本地 VS Code 持续运行，并保持对应挂载的转发已启用。
 - SFTP 优先使用服务器子系统；不支持时使用同一 `ssh2` 连接上的 SCP 适配器，不调用系统 SSH/SFTP 命令。
-- MCP 工具能限制结构化文件操作，但无法拦截 Agent 自己调用的其他本地工具。
+- CLI 工具能限制结构化文件操作，但无法拦截 Agent 自己调用的其他本地工具。
 
 ## SAFS 与免密 SSH alias 对比
 
@@ -163,10 +163,10 @@ SAFS 提供 MCP 和 CLI 两种 Agent 接口，让 Agent 安全、高效地调用
 | Agent 工具 | 读取、搜索、精确编辑、传输和命令均为结构化工具 | 主要是自由形式 Shell，灵活但更依赖 Agent 正确解析与修改 |
 | 工作区定位 | 绑定当前 SAFS 窗口和目录，多窗口可明确切换 | alias 只定位主机，工作目录需在命令中自行维护 |
 | 写入边界 | 结构化写工具限制在当前工作区，另有高风险命令规则 | 默认拥有 SSH 账号的全部权限，没有额外工作区边界 |
-| 安全控制 | 主机密钥确认、本地 MCP Token、高危命令拦截与脱敏日志 | 可充分利用 OpenSSH；安全性取决于密钥、账号和服务器权限 |
+| 安全控制 | 主机密钥确认、本地 CLI Token、高危命令拦截与脱敏日志 | 可充分利用 OpenSSH；安全性取决于密钥、账号和服务器权限 |
 | 文件传输 | 内置可视化上传、下载和双向同步 | `scp`/`rsync` 成熟通用，适合脚本化和批量传输 |
 | 兼容性 | 支持密码、私钥、交互认证、跳板和代理；服务器须提供 SFTP | OpenSSH 能连接即可；特殊网络和交互认证需自行编排 |
-| 依赖 | 必须运行 VS Code 与 SAFS；Agent 需支持 MCP 或 SAFS CLI | 只依赖 SSH 客户端和密钥，对编辑器与 Agent 要求较少 |
+| 依赖 | 必须运行 VS Code 与 SAFS；Agent 需支持 SAFS CLI | 只依赖 SSH 客户端和密钥，对编辑器与 Agent 要求较少 |
 | 更适合 | 交互式开发，让 Agent 安全操作当前项目 | 已有 SSH 运维体系、CI 脚本和跨工具自动化 |
 
 选择建议：

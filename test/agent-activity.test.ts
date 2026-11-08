@@ -79,7 +79,7 @@ test('activity lifecycle persists bounded events and redacts failures', async ()
 
   for (let index = 0; index < agentActivityLimit + 5; index += 1) {
     const id = store.start({
-      source: 'mcp', agentName: 'Claude', toolName: 'remote_read',
+      source: 'backend', agentName: 'Claude', toolName: 'remote_read',
       input: { path: `src/${index}.ts` }, mountName: 'dev', workspaceRoot: '/srv/project'
     });
     store.succeed(id, { content: 'must not persist', truncated: false });
@@ -94,7 +94,7 @@ test('activity lifecycle persists bounded events and redacts failures', async ()
 test('reload marks unfinished activity as interrupted', async () => {
   const state = new MemoryState();
   state.values.set('activity', [{
-    version: 1, id: 'running', source: 'mcp', agentName: 'Codex', toolName: 'remote_search',
+    version: 1, id: 'running', source: 'backend', agentName: 'Codex', toolName: 'remote_search',
     category: 'read', status: 'running', startedAt: '2026-09-11T01:00:00.000Z',
     mountName: 'dev', workspaceRoot: '/srv/project', summary: { query: 'TODO' }
   }]);
@@ -182,9 +182,9 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('recoverForwarding').disabled, true);
   send({ mode: 'terminal', availability: 'checking' });
   assert.equal(get('forwardingStatus').textContent, '准备中');
-  send({ interface: 'mcp', mode: 'workspace', label: target, availability: 'ready' });
+  send({ interface: 'backend', mode: 'workspace', label: target, availability: 'ready' });
   assert.equal(get('statusDetail').textContent, '');
-  assert.equal(get('timeline').children[0].textContent, '暂无 Agent 远程操作。提示：在 Agent 中输入 use safs mcp');
+  assert.equal(get('timeline').children[0].textContent, '暂无 Agent 远程操作。提示：在 Agent 中输入 use safs backend');
   assert.equal(get('switchWorkspace').hidden, false);
   assert.equal(get('openTerminalDirectory').hidden, true);
   assert.equal(get('modeCapabilities').hidden, true);

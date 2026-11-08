@@ -57,7 +57,7 @@ Once enabled, the Agent can operate within the current remote workspace:
 
 #### View Agent activity
 
-Open **Agent Activity** in the SAFS Activity Bar to see MCP and CLI operations that are
+Open **Agent Activity** in the SAFS Activity Bar to see CLI operations that are
 actually executed by the current remote window. The status animation shows running,
 successful, and failed operations. The timeline keeps the newest operation first and can be
 filtered by operation type and status. Consecutive reads, directory listings, and searches
@@ -71,7 +71,7 @@ environment; the bound terminal and directory are shown below the status.
 Use **Switch Workspace** to select and open a remote directory in the current window; cancelling
 the picker leaves the current mode unchanged.
 
-To stop forwarding, click **Disable Agent Forwarding**. If MCP was installed manually through a prompt or URL, run `SAFS: Uninstall Agent Forwarding for My Agent`.
+To stop forwarding, click **Disable Agent Forwarding**. If CLI was installed manually through a prompt or URL, run `SAFS: Uninstall Agent Forwarding for My Agent`.
 
 ## File transfer and local sync
 
@@ -103,8 +103,8 @@ Search for `SAFS` in VS Code Settings:
 |---|---:|---|
 | `safs.terminalFollowsActiveFile` | `false` | Automatically `cd` an open remote terminal when the active file changes |
 | `safs.terminalAutoReconnect` | `true` | Reconnect a remote terminal after an unexpected exit, with bounded backoff retries for transient network errors |
-| `safs.agentMcpToolProfile` | `full` | Change to `core` to reduce the Agent context used by tool definitions |
-| `safs.agentMcpTimeoutMs` | `120000` | Timeout for Agent commands, searches, and transfers; `0` disables it |
+| `safs.agentBackendToolProfile` | `full` | Change to `core` to reduce the Agent context used by tool definitions |
+| `safs.agentBackendTimeoutMs` | `120000` | Timeout for Agent commands, searches, and transfers; `0` disables it |
 | `safs.sftp.watchInterval` | `5` | Polling interval for remote file changes, in seconds |
 | `safs.hostKeyChangedAction` | `prompt` | Prompt, reject, or accept when a host key changes |
 | `safs.highRiskCommandAction` | `deny` | Reject or allow Agent commands that match high-risk rules |
@@ -115,9 +115,9 @@ See the SAFS page in VS Code Settings for additional advanced options.
 
 SAFS establishes SSH/SFTP connections inside the local VS Code extension process and maps a remote directory to a `safs://` virtual file system. Browsing and editing use SFTP, while terminals and Agent commands run over SSH. The server therefore needs neither VS Code Server nor an Agent.
 
-SAFS provides MCP and CLI interfaces so Agents can safely and efficiently access the extension's file operations and remote command capabilities. Both interfaces use the extension's managed connections, workspace boundaries, and safety checks. Structured file operations, batch requests, and paginated output reduce repeated connections and unnecessary data transfer.
+SAFS provides CLI interfaces so Agents can safely and efficiently access the extension's file operations and remote command capabilities. Both interfaces use the extension's managed connections, workspace boundaries, and safety checks. Structured file operations, batch requests, and paginated output reduce repeated connections and unnecessary data transfer.
 
-With Agent Forwarding enabled, every remote window starts an MCP service accessible only from the local machine. Multiple windows share a stable local routing endpoint. Each routed operation carries an explicit `workspaceId`, so the router can select the exact window and never fall back to focus or a matching remote path.
+With Agent Forwarding enabled, every remote window starts an CLI service accessible only from the local machine. Multiple windows share a stable local routing endpoint. Each routed operation carries an explicit `workspaceId`, so the router can select the exact window and never fall back to focus or a matching remote path.
 
 Structured writes are restricted to the current remote workspace. An SSH command matching a high-risk rule is denied by default and recorded in a redacted audit log. SSH commands are not a sandbox, however: an allowed command still has all permissions of the login account. Use a non-root, least-privilege account and disable passwordless privilege escalation.
 
@@ -125,9 +125,9 @@ Structured writes are restricted to the current remote workspace. An SSH command
 
 - Local command-line tools and extensions that only support `file://` cannot access `safs://` directly; use two-way sync when needed.
 - SFTP has no native file-change notification, so SAFS polls for remote changes.
-- The SAFS MCP/CLI used for Agent Forwarding requires the local VS Code instance to remain running with forwarding enabled for the relevant mount.
+- The SAFS CLI used for Agent Forwarding requires the local VS Code instance to remain running with forwarding enabled for the relevant mount.
 - SFTP is preferred; when unavailable, SAFS uses its SCP adapter over the same `ssh2` connection and does not invoke system SSH/SFTP commands.
-- MCP tools can constrain structured file operations, but they cannot intercept other local tools invoked directly by the Agent.
+- CLI tools can constrain structured file operations, but they cannot intercept other local tools invoked directly by the Agent.
 
 ## SAFS vs. a passwordless SSH alias
 
@@ -140,10 +140,10 @@ Another common way to operate a remote host without an Agent service is to confi
 | Agent tools | Structured tools for reading, searching, precise edits, transfers, and commands | Mostly free-form shell: flexible, but more dependent on correct Agent parsing and edits |
 | Workspace targeting | Binds to the current SAFS window and directory; explicit switching across windows | The alias identifies only a host; every command must maintain its own working directory |
 | Write boundaries | Structured writes stay within the workspace, with separate high-risk command rules | Has all permissions of the SSH account by default, with no additional workspace boundary |
-| Security controls | Host-key confirmation, local MCP token, high-risk command blocking, and redacted logs | Full OpenSSH capabilities; security depends on key, account, and server permission design |
+| Security controls | Host-key confirmation, local CLI token, high-risk command blocking, and redacted logs | Full OpenSSH capabilities; security depends on key, account, and server permission design |
 | File transfer | Built-in visual upload, download, and two-way sync | Mature, portable `scp`/`rsync` workflows suit scripts and bulk transfers |
 | Compatibility | Supports passwords, keys, interactive auth, jumps and proxies; requires SFTP | Works wherever OpenSSH connects; special networks and interactive auth require custom setup |
-| Dependencies | Requires VS Code and SAFS to stay running; the Agent needs MCP or SAFS CLI support | Requires only an SSH client and key, with fewer editor or Agent requirements |
+| Dependencies | Requires VS Code and SAFS to stay running; the Agent needs SAFS CLI support | Requires only an SSH client and key, with fewer editor or Agent requirements |
 | Best suited for | Interactive development with safer Agent access to the current project | Existing SSH operations, CI scripts, and tool-independent automation |
 
 Recommendations:

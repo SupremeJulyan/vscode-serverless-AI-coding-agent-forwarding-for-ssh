@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SftpConnectionPool } from '../src/sftp/connection-pool';
-import { SftpSession } from '../src/sftp/session';
+import { SftpConnectionPool } from '../src/ssh2/connection-pool';
+import { SftpSession } from '../src/ssh2/session';
 
 function fakeSession(
   hostName: string, close: () => void, isAlive: () => boolean = () => true

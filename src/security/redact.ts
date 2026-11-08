@@ -1,5 +1,5 @@
 /**
- * 对可能包含敏感信息的文本做脱敏，用于输出通道与 MCP 命令日志：
+ * 对可能包含敏感信息的文本做脱敏，用于输出通道与 CLI 命令日志：
  * - Bearer 令牌（`Authorization: Bearer sk-...`、`-H "Authorization: Bearer ..."`）
  * - URL 查询参数令牌（`?token=...`、`&api_key=...`）
  * - 认证请求头（Authorization / x-api-key / x-auth-token 的 `: 值` 或 `= 值`）

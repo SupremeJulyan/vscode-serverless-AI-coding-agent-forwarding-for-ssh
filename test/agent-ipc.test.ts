@@ -77,19 +77,19 @@ test('CLI uses IPC and resolves placeholder cwd, explicit IDs and retained outpu
   }
 });
 
-test('IPC fetch preserves SSE headers so a slow directory response parses correctly', async () => {
+test('IPC fetch preserves JSON response headers and payload', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-ipc-sse-'));
   const socket = ipcPath(root);
   const server = http.createServer((_request, response) => {
-    response.writeHead(200, { 'content-type': 'text/event-stream', 'x-safs-diagnostic': 'present' });
-    response.end(': keepalive\n\ndata: {"jsonrpc":"2.0","id":1,"result":{"entries":[]}}\n\n');
+    response.writeHead(200, { 'content-type': 'application/json', 'x-safs-diagnostic': 'present' });
+    response.end('{"ok":true,"result":{"entries":[]}}');
   });
   try {
     await listenIpc(server, socket);
     const response = await ipcFetch(ipcUrl(socket));
-    assert.equal(response.headers.get('content-type'), 'text/event-stream');
+    assert.equal(response.headers.get('content-type'), 'application/json');
     assert.equal(response.headers.get('x-safs-diagnostic'), 'present');
-    assert.match(await response.text(), /^: keepalive/);
+    assert.deepEqual(await response.json(), { ok: true, result: { entries: [] } });
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

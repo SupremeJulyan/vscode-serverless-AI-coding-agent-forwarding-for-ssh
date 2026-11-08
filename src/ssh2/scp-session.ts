@@ -14,7 +14,7 @@ import { assertSafeRemoteEntryName } from './uri';
  * shell commands over exec channels.
  *
  * Implements the same SftpSession interface as the SFTP client so the
- * filesystem provider and MCP tools keep working unchanged.
+ * filesystem provider and CLI tools keep working unchanged.
  */
 
 interface ExecResult {
@@ -194,6 +194,7 @@ const scpBase64WriteMaxBytes = 2 * 1024 * 1024;
 export class ScpSession implements SftpSession {
   readonly transport = 'scp' as const;
   private alive = true;
+  private readonly markDisconnected = () => { this.alive = false; };
   // NSG 网关上每条 exec 都要新建 shell（含计费/MOTD 注入，秒级），realpath 是
   // 每次操作前 resolve() 的最高频冗余调用。短 TTL 缓存规范路径：同一路径在窗口
   // 期内复用，不再重复 readlink -f；readDirectory 还会顺带把子项（符号链接除外）
@@ -225,16 +226,11 @@ export class ScpSession implements SftpSession {
   constructor(
     readonly hostName: string,
     private readonly client: Client,
-    private readonly releaseRelay?: () => Promise<void>
+    private readonly releaseConnection: () => void
   ) {
-    const disconnected = () => {
-      this.alive = false;
-    };
-    this.client.on('close', disconnected);
-    this.client.on('end', disconnected);
-    this.client.on('error', () => {
-      this.alive = false;
-    });
+    this.client.on('close', this.markDisconnected);
+    this.client.on('end', this.markDisconnected);
+    this.client.on('error', this.markDisconnected);
   }
 
   isAlive(): boolean {
@@ -322,7 +318,6 @@ export class ScpSession implements SftpSession {
         try {
           streamRef?.close();
         } catch { /* ignore */ }
-        this.client.end();
         rejectOnce(new Error(
           `远程命令执行超时（${ScpSession.execTimeoutMs}ms）：${command.slice(0, 160)}`
         ));
@@ -752,8 +747,10 @@ export class ScpSession implements SftpSession {
 
   async close(): Promise<void> {
     this.alive = false;
-    this.client.end();
-    await this.releaseRelay?.();
+    this.client.removeListener('close', this.markDisconnected);
+    this.client.removeListener('end', this.markDisconnected);
+    this.client.removeListener('error', this.markDisconnected);
+    this.releaseConnection();
   }
 
   private async pathExists(remotePath: string, signal?: AbortSignal): Promise<boolean> {
@@ -792,7 +789,6 @@ export class ScpSession implements SftpSession {
           try {
             streamRef?.close();
           } catch { /* ignore */ }
-          this.client.end();
           fail(new Error(`SCP 读取超时（${scpStallTimeoutMs}ms 无数据）`));
         }
       }, 10_000);
@@ -911,7 +907,6 @@ export class ScpSession implements SftpSession {
           try {
             streamRef?.close();
           } catch { /* ignore */ }
-          this.client.end();
           fail(new Error(`SCP 写入超时（${scpStallTimeoutMs}ms 无进度）`));
         }
       }, 10_000);

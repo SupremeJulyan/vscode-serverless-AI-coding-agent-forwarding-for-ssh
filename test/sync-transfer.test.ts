@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import { RemoteSyncManager, RemoteSyncTask } from '../src/sync/remote-sync';
-import { SftpSession } from '../src/sftp/session';
+import { SftpSession } from '../src/ssh2/session';
 
 async function setup(t: { after(fn: () => Promise<void>): void }, failScan = false) {
   const root = await mkdtemp(path.join(tmpdir(), 'safs-sync-transfer-'));

@@ -7,7 +7,6 @@ import {
   NodeRuntimeUnavailableError, requireNodeRuntime, ensureUnixCliPath, globalNodeCli, installNodeCli,
   globalNodeCliSkill, nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion, removeGlobalNodeCliSkill, removeNodeCli, withoutSafsPathBlock,
-  streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan, updateInstalledNodeCliSkills
 } from '../src/cli/node-cli-install';
 
@@ -65,27 +64,6 @@ test('locates platform launchers without restricting the Node CPU architecture',
   assert.equal(globalNodeCli(home, 'freebsd'), join(home, '.local', 'bin', 'safs'));
   assert.equal(globalNodeCli(home, 'win32'), join(home, 'AppData', 'Local', 'SAFS', 'bin', 'safs.cmd'));
   assert.equal(nodeCliConnectionPath(join(home, '.local', 'bin', 'safs')), join(home, '.local', 'bin', '.safs-connection.json'));
-});
-
-test('builds a concise Streamable HTTP MCP installation prompt', () => {
-  const prompt = streamableHttpMcpInstallPrompt(
-    'http://127.0.0.1:9848/mcp?token=secret'
-  );
-  assert.match(prompt, /Streamable HTTP/);
-  assert.match(prompt, /http:\/\/127\.0\.0\.1:9848\/mcp\?token=secret/);
-  assert.match(prompt, /restart the Agent/);
-  assert.doesNotMatch(prompt, /proxy|CLI mode/i);
-  assert.equal(prompt.split('\n').length, 2);
-  assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
-});
-
-test('builds an English MCP uninstall prompt without operational rules', () => {
-  const prompt = streamableHttpMcpUninstallPrompt();
-  assert.match(prompt, /Uninstall the user-level MCP server named "safs"/);
-  assert.match(prompt, /Remove only that MCP entry/);
-  assert.equal(prompt.split('\n').length, 2);
-  assert.equal(prompt.includes('safs exec'), false);
-  assert.doesNotMatch(prompt, /[\u3400-\u9fff]/u);
 });
 
 test('passes the Windows user PATH directory through the environment', () => {

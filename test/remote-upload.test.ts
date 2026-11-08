@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { Writable } from 'node:stream';
 import { uploadRemoteTree } from '../src/transfer/remote-upload';
 import { uploadPartName } from '../src/transfer/resume-plan';
-import { SftpSession } from '../src/sftp/session';
+import { SftpSession } from '../src/ssh2/session';
 
 function remote(failWrite = false, failCommit = false, existingPermissions = 0o640) {
   const files = new Map<string, string>([['/dest/source/a', 'old']]);

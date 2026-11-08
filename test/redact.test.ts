@@ -3,7 +3,7 @@ import test from 'node:test';
 import { redactSensitiveText } from '../src/security/redact';
 
 test('redacts bearer tokens and URL token parameters', () => {
-  const text = 'curl -H "Authorization: Bearer sk-abc123" "http://127.0.0.1:9848/mcp?token=secret&api_key=xyz"';
+  const text = 'curl -H "Authorization: Bearer sk-abc123" "http://127.0.0.1:9848/backend?token=secret&api_key=xyz"';
   const redacted = redactSensitiveText(text);
   assert.ok(!redacted.includes('sk-abc123'));
   assert.ok(!redacted.includes('secret'));

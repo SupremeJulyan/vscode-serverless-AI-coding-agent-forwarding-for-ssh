@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { SftpSession } from '../sftp/session';
+import { SftpSession } from '../ssh2/session';
 
 const HASH_CHUNK_BYTES = 1024 * 1024;
 

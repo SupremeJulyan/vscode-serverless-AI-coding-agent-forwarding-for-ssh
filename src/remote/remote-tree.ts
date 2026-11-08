@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { SftpSession } from '../sftp/session';
+import { SftpSession } from '../ssh2/session';
 
 function isNotFound(error: unknown): boolean {
   const code = (error as { code?: number | string } | undefined)?.code;

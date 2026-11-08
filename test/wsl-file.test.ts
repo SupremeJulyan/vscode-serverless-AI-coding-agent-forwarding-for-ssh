@@ -16,8 +16,8 @@ test('parseWslUncPath maps wsl.localhost UNC to distro and linux path', () => {
     distro: 'Ubuntu', linuxPath: '/home/a'
   });
   assert.deepEqual(
-    parseWslUncPath('\\\\wsl.localhost\\Ubuntu\\home\\user\\.pi\\agent\\mcp.json'),
-    { distro: 'Ubuntu', linuxPath: '/home/user/.pi/agent/mcp.json' }
+    parseWslUncPath('\\\\wsl.localhost\\Ubuntu\\home\\user\\.pi\\agent\\backend.json'),
+    { distro: 'Ubuntu', linuxPath: '/home/user/.pi/agent/backend.json' }
   );
 });
 

@@ -6,7 +6,7 @@ export const agentActivityViewId = 'safs.agentActivity';
 
 export interface AgentTerminalTargetState {
   enabled: boolean;
-  interface?: 'cli' | 'mcp';
+  interface?: 'cli';
   mode?: 'workspace' | 'terminal';
   label?: string;
   availability?: 'disabled' | 'checking' | 'ready' | 'error';
@@ -466,10 +466,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
       }
       if (event.data.type === 'state') acceptState(event.data);
       if (event.data.type === 'terminalTarget') {
-        if (event.data.interface === 'cli' || event.data.interface === 'mcp') {
+        if (event.data.interface === 'cli' || event.data.interface === 'cli') {
           idleHint = event.data.interface === 'cli'
             ? '提示：在 Agent 中输入 /safs-cli'
-            : '提示：在 Agent 中输入 use safs mcp';
+            : '提示：在 Agent 中输入 use safs backend';
           if (!events.length) render();
         }
         const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'

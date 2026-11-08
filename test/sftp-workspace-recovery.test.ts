@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter as NodeEventEmitter } from 'node:events';
 import test from 'node:test';
 import type * as vscode from 'vscode';
-import { SftpConnectionPool, isConnectionError } from '../src/sftp/connection-pool';
-import { remoteUri } from '../src/sftp/uri';
+import { SftpConnectionPool, isConnectionError } from '../src/ssh2/connection-pool';
+import { remoteUri } from '../src/ssh2/uri';
 
 const api = require('vscode');
 class TestEventEmitter<Value> {
@@ -28,7 +28,7 @@ Object.assign(api, {
   }
 });
 
-const { SftpFileSystemProvider, RemoteFolderRegistry } = require('../src/sftp/filesystem-provider') as typeof import('../src/sftp/filesystem-provider');
+const { SftpFileSystemProvider, RemoteFolderRegistry } = require('../src/ssh2/filesystem-provider') as typeof import('../src/ssh2/filesystem-provider');
 
 test('an offline workspace restores its mapping and refreshes Explorer when online', async context => {
   let online = false;

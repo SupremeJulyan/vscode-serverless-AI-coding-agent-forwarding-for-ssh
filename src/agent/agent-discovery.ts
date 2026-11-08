@@ -22,7 +22,7 @@ export interface AgentWorkspaceRecord {
   host: string;
   hostName?: string;
   user?: string;
-  mcpUrl: string;
+  backendUrl: string;
   updatedAt: string;
 }
 
@@ -70,12 +70,12 @@ export function readAgentWorkspaceRecord(
     };
     if (!value.workspaceRoot && value.remoteRoot) value.workspaceRoot = value.remoteRoot;
     const updatedAtMs = Date.parse(value.updatedAt ?? '');
-    if (value.version !== 1 || value.execution !== 'remote' || !value.mcpUrl
+    if (value.version !== 1 || value.execution !== 'remote' || !value.backendUrl
       || !value.instanceId || !value.mountName || !value.workspaceRoot || !Number.isFinite(updatedAtMs)
       || Math.abs(now - updatedAtMs) > maxRecordAgeMs) {
       return undefined;
     }
-    if (!new URL(value.mcpUrl).searchParams.get('socket')) return undefined;
+    if (!new URL(value.backendUrl).searchParams.get('socket')) return undefined;
     if (value.processPlatform && value.processPlatform !== process.platform) return undefined;
     if (!Number.isInteger(value.processId) || value.processId! <= 0) return undefined;
     const samePlatform = value.processPlatform

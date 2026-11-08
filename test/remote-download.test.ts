@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import test from 'node:test';
 import { downloadRemoteDirectoryTree } from '../src/transfer/remote-download';
 import { downloadPartPath } from '../src/transfer/resume-plan';
-import { SftpSession } from '../src/sftp/session';
+import { SftpSession } from '../src/ssh2/session';
 
 interface FakeEntry {
   type: 'file' | 'directory' | 'symbolic-link';
