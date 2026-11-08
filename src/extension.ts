@@ -62,7 +62,7 @@ import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewI
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent/agent-discovery';
 import {
   ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory, legacyAgentCwdPath,
-  writeLastRemoteDirectory
+  readLastRemoteDirectory, writeLastRemoteDirectory
 } from './agent/agent-cwd';
 import { connectSftp } from './ssh2/sftp-client';
 import { SftpSession } from './ssh2/session';
@@ -523,7 +523,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   if (existing) {
     bridgeOutput?.trace(`[SFTP] 复用挂载 ${mount.name}，remoteRoot=${existing.remoteRoot}`);
     await pool.get(existing.hostName);
-    restoreRemoteWorkspaceDisplayRoot(existing);
+    await restoreRemoteWorkspaceDisplayRoot(existing);
     refreshSafsEntryLabel();
     await removeLegacyCliInstructions(existing.workspaceRoot);
     return existing;
@@ -560,7 +560,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
     ] : []
   };
   await ensureAgentCwdSubdirectory(placeholder.localPath, remoteRoot, defaultRemotePath);
-  restoreRemoteWorkspaceDisplayRoot(folder);
+  await restoreRemoteWorkspaceDisplayRoot(folder);
   registry.set(folder);
   agentTrace(
     'SFTP',
@@ -611,12 +611,10 @@ function setRemoteWorkspaceDisplayRoot(folder: RemoteFolder, remoteRoot: string)
     : folder.mountName.replace(/[\\/]/g, '_');
   const placeholderRoot = placeholderPathForRemote(folder, remoteRoot);
   folder.displayRemoteRoot = remoteRoot;
-  folder.displayRoot = path.posix.join(
-    placeholderRoot, '.safs-root', Buffer.from(remoteRoot, 'utf8').toString('base64url'), displayName
-  );
+  folder.displayRoot = path.posix.join(placeholderRoot, displayName);
 }
 
-function restoreRemoteWorkspaceDisplayRoot(folder: RemoteFolder): void {
+async function restoreRemoteWorkspaceDisplayRoot(folder: RemoteFolder): Promise<void> {
   const candidate = (vscode.workspace.workspaceFolders ?? []).find(workspace => {
     if (workspace.uri.scheme !== remoteFileSystemScheme) return false;
     try { return parseRemoteUri(workspace.uri.toString()).mountName === folder.mountName; }
@@ -628,11 +626,15 @@ function restoreRemoteWorkspaceDisplayRoot(folder: RemoteFolder): void {
     : folder.mountName.replace(/[\\/]/g, '_');
   const mapping = candidate && displayMappingFromUri(candidate.uri.path, displayName);
   if (mapping && placeholderPathForRemote(folder, mapping.remoteRoot) === mapping.placeholderRoot) {
-    folder.displayRoot = mapping.displayRoot;
-    folder.displayRemoteRoot = mapping.remoteRoot;
-  } else {
-    setRemoteWorkspaceDisplayRoot(folder, folder.defaultRemotePath ?? folder.remoteRoot);
+    folder.legacyMappings = [
+      ...(folder.legacyMappings ?? []).filter(item => item.workspaceRoot !== mapping.displayRoot),
+      { workspaceRoot: mapping.displayRoot, remoteRoot: mapping.remoteRoot }
+    ];
+    setRemoteWorkspaceDisplayRoot(folder, mapping.remoteRoot);
+    return;
   }
+  const remembered = await readLastRemoteDirectory(localRootForFolder(folder));
+  setRemoteWorkspaceDisplayRoot(folder, remembered ?? folder.defaultRemotePath ?? folder.remoteRoot);
 }
 
 function reportedRemoteTerminalCwd(

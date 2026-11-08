@@ -194,6 +194,15 @@ async function main() {
   let result = await invoke(config, request);
   const code = exitCode(result);
   if (code && (request.name !== 'run_remote_command' || result.code || result.status === 'error')) throw new Error(verbose ? JSON.stringify(result) : concise(result));
+  if (request.name === 'list_remote_workspaces' && Array.isArray(result.workspaces)) {
+    result = {
+      ...result,
+      workspaces: result.workspaces.map((workspace: Record<string, unknown>) => {
+        const { localRoot: _localRoot, ...display } = workspace;
+        return display;
+      })
+    };
+  }
   if (isCompact) result = compact(result);
   if (request.name === 'run_remote_command') {
     process.stdout.write(result.stdout ?? ''); process.stderr.write(result.stderr ?? '');
