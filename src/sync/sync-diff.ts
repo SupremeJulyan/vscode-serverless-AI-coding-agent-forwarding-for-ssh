@@ -1,6 +1,6 @@
 import * as path from 'node:path';
-import { SftpSession } from '../sftp/session';
-import { assertSafeRemoteEntryName } from '../sftp/uri';
+import { SftpSession } from '../ssh2/session';
+import { assertSafeRemoteEntryName } from '../ssh2/uri';
 
 /**
  * 远程同步的指纹引擎（纯函数，无 vscode 依赖，可单测）。

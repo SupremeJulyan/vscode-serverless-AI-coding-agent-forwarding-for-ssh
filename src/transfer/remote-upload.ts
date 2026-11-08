@@ -6,7 +6,7 @@ import {
   isTransferPartName, planResume, pruneTransferParts, shouldKeepPart, uploadPartName,
   type ResumeSourceSignature
 } from './resume-plan';
-import { SftpSession } from '../sftp/session';
+import { SftpSession } from '../ssh2/session';
 import { sameResumePrefix } from './resume-checksum';
 import { pipeStreams } from './stream-file';
 

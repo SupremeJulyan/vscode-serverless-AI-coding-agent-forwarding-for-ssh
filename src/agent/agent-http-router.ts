@@ -2,15 +2,15 @@ import { ipcFetch, ipcPath, ipcUrl, listenIpc } from './agent-ipc';
 import { operationMetric } from '../shared/operation-metric';
 import * as http from 'node:http';
 import { orderedBatch } from '../shared/ordered-batch';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import express from 'express';
 import {
   DiscoveredAgentWorkspace, agentDiscoveryDirectories, discoverAgentWorkspaces
 } from './agent-discovery';
 import {
   type AgentToolProfile,
-  terminalCliOnlyCommandMessage, terminalMcpOnlyToolMessage
-} from './agent-mcp-tools';
+  terminalCliOnlyCommandMessage
+} from './agent-operations';
 import { AgentActivitySource } from './agent-activity';
 
 const routerIdentity = 'safs-http-router-v1';
@@ -26,48 +26,18 @@ const cliBatchToolNames = new Set([...cliToolNames].filter((name) =>
 ));
 
 export function unwrapCliToolResult(value: any, allowNull = false): Record<string, unknown> {
-  const text = Array.isArray(value?.content)
-    ? value.content.filter((item: any) => item?.type === 'text')
-      .map((item: any) => typeof item.text === 'string' ? item.text : '').join('\n')
-    : '';
-  let result: unknown;
-  try { result = text ? JSON.parse(text) : {}; }
-  catch { throw new Error('SAFS backend returned invalid JSON.'); }
-  if ((!allowNull || result !== null)
-      && (!result || typeof result !== 'object' || Array.isArray(result))) {
-    throw new Error('SAFS backend returned an invalid result.');
+  if (!value || typeof value.ok !== 'boolean') throw new Error('Invalid backend response');
+  const result = value.ok ? value.result : value.error;
+  if ((!allowNull || result !== null) && (!result || typeof result !== 'object' || Array.isArray(result))) {
+    throw new Error('Invalid backend result');
   }
-  return { ok: value?.isError !== true, result: result as Record<string, unknown> };
+  return { ok: value.ok, result };
 }
-
-/** 为共用 MCP 地址附加可观测的 Agent 来源标签（不作为身份认证）。 */
-export function agentTaggedMcpUrl(
-  routerUrl: string, agentName: string, source?: AgentActivitySource
-): string {
-  const normalized = agentName.trim();
-  if (!normalized) throw new Error('Agent name must not be empty');
-  if (normalized.length > 100) throw new Error('Agent name must not exceed 100 characters');
-  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
-    throw new Error('Agent name must not contain control characters');
-  }
-  const url = new URL(routerUrl);
-  url.searchParams.set('agent', normalized);
-  if (source) url.searchParams.set('source', source);
-  return url.toString();
-}
-
 function requestAgentName(value: unknown, fallback?: string): string | undefined {
   if (typeof value !== 'string') return fallback;
-  const normalized = value.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_');
-  return normalized || fallback;
+  return value.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_') || fallback;
 }
 
-/**
- * Return the opaque public route key for one discovered remote workspace.
- * The VS Code instance id alone is window-scoped and can survive a remote
- * folder change, so include the remote coordinates to make stale ids fail
- * closed instead of following the window to a different workspace.
- */
 export function workspaceIdFor(workspace: Pick<
   DiscoveredAgentWorkspace, 'instanceId' | 'workspaceUri' | 'host'
 >): string {
@@ -80,7 +50,7 @@ export function workspaceIdFor(workspace: Pick<
 export interface AgentHttpRouterOptions {
   discover?: () => DiscoveredAgentWorkspace[];
   log?: (message: string) => void;
-  /** 转发到窗口 MCP 的 fetch 超时（毫秒），缺省 120s。 */
+  /** 转发到窗口 CLI 的 fetch 超时（毫秒），缺省 120s。 */
   forwardTimeoutMs?: number;
   toolProfile?: () => AgentToolProfile;
   audit?: (entry: {
@@ -149,37 +119,16 @@ export class AgentHttpRouter {
   }
 
   private toolError(code: string, message: string, details: Record<string, unknown> = {}) {
-    return {
-      isError: true,
-      content: [{ type: 'text' as const, text: JSON.stringify({
-        code, message, ...details
-      }) }]
-    };
-  }
-
-  private parseSse(text: string, requestId: string): unknown {
-    const messages = text.split(/\r?\n\r?\n/).flatMap((event) => {
-      const data = event.split(/\r?\n/)
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trim())
-        .join('\n');
-      if (!data) return [];
-      try {
-        return [JSON.parse(data) as { id?: unknown }];
-      } catch {
-        return [];
-      }
-    });
-    return messages.find((message) => message.id === requestId) ?? messages.at(-1);
+    return { ok: false, error: { code, message, ...details } };
   }
 
   private async forward(
     workspace: DiscoveredAgentWorkspace, name: string, args: Record<string, unknown>,
-    agentName?: string, source: AgentActivitySource = 'mcp'
+    agentName?: string, source: AgentActivitySource = 'cli'
   ): Promise<any> {
-    const url = new URL(workspace.mcpUrl);
+    const url = new URL(workspace.backendUrl);
     if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) {
-      throw new Error('Refusing to forward to a non-loopback MCP endpoint');
+      throw new Error('Refusing to forward to a non-loopback CLI endpoint');
     }
     // 拒绝转发到路由器自身端口：伪造/损坏的发现记录若指向本路由器，会无限递归。
     if (url.port === String(this.port)) {
@@ -187,7 +136,6 @@ export class AgentHttpRouter {
     }
     if (agentName) url.searchParams.set('agent', agentName);
     url.searchParams.set('source', source);
-    const requestId = `http-router-${process.pid}-${Date.now()}-${randomUUID()}`;
     this.options.log?.(
       `转发工具 ${name} 到 mount=${workspace.mountName}，port=${url.port}${
         agentName ? `，agent=${agentName}` : ''
@@ -200,43 +148,31 @@ export class AgentHttpRouter {
       // redirect: manual —— 不允许 3xx 重定向跳出 loopback（SSRF 防护）。
       redirect: 'manual',
       headers: {
-        accept: 'application/json, text/event-stream',
+        accept: 'application/json',
         'content-type': 'application/json',
         // 标记这是路由器发起的转发；目标若是另一个路由器会拒绝（防路由器间环）。
         'x-safs-forwarded': '1'
       },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: requestId, method: 'tools/call',
-        params: { name, arguments: args }
-      }),
+      body: JSON.stringify({ operation: name, input: args }),
       signal: forwardTimeoutMs > 0 ? AbortSignal.timeout(forwardTimeoutMs) : undefined
     });
     const body = await response.text();
     operationMetric(this.options.log, 'agent.forward', forwardStarted, Buffer.byteLength(body));
     if (!response.ok) {
-      throw new Error(`Window MCP returned HTTP ${response.status}: ${body.slice(0, 500)}`);
+      throw new Error(`Window CLI returned HTTP ${response.status}: ${body.slice(0, 500)}`);
     }
-    const downstream = (response.headers.get('content-type')?.includes('text/event-stream')
-      ? this.parseSse(body, requestId)
-      : JSON.parse(body)) as { result?: unknown; error?: { message?: string } } | undefined;
-    if (!downstream) throw new Error('Window MCP returned no JSON-RPC response');
-    if (downstream.error) {
-      throw new Error(downstream.error.message || 'Window MCP request failed');
-    }
-    return downstream.result;
+    return JSON.parse(body);
   }
 
   private async callTool(
     name: string, input: Record<string, unknown>, agentName?: string,
-    source: AgentActivitySource = 'mcp', snapshot?: DiscoveredAgentWorkspace[]
+    source: AgentActivitySource = 'cli', snapshot?: DiscoveredAgentWorkspace[]
   ): Promise<any> {
     if (name === 'list_remote_workspaces') {
       const workspaces = this.workspaces();
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          workspaces: workspaces.map((workspace) => this.selectableWorkspace(workspace))
-        }) }]
-      };
+      return { ok: true, result: {
+        workspaces: workspaces.map((workspace) => this.selectableWorkspace(workspace))
+      } };
     }
     const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId.trim() : '';
     if (!workspaceId) {
@@ -262,7 +198,7 @@ export class AgentHttpRouter {
           'TERMINAL_COMMAND_ONLY',
           source === 'cli'
             ? terminalCliOnlyCommandMessage.replace('<workspaceId>', workspaceId)
-            : terminalMcpOnlyToolMessage,
+            : terminalCliOnlyCommandMessage,
           source === 'cli'
             ? { allowedCommand: cliCommand }
             : { allowedTool: 'run_remote_command' }
@@ -294,14 +230,14 @@ export class AgentHttpRouter {
     let response: Response;
     try {
       response = await ipcFetch(
-        this.url.replace('/mcp?', '/health?'),
+        this.url.replace('/operations?', '/health?'),
         { signal: AbortSignal.timeout(1500) }
       );
     } catch {
-      throw new Error(`固定 HTTP MCP 端口 ${this.port} 的健康检查暂时失败，将在下次心跳重试。`);
+      throw new Error(`固定 HTTP CLI 端口 ${this.port} 的健康检查暂时失败，将在下次心跳重试。`);
     }
     if (response.status === 401) {
-      throw new Error(`固定 HTTP MCP 端口 ${this.port} 的健康检查认证失败，请重新加载使用此端口的 SAFS 窗口。`);
+      throw new Error(`固定 HTTP CLI 端口 ${this.port} 的健康检查认证失败，请重新加载使用此端口的 SAFS 窗口。`);
     }
     if (!response.ok) return false;
     try {
@@ -309,7 +245,7 @@ export class AgentHttpRouter {
       return value?.identity === routerIdentity;
     } catch (error) {
       if (error instanceof SyntaxError) return false;
-      throw new Error(`固定 HTTP MCP 端口 ${this.port} 的健康检查响应未完成，将在下次心跳重试。`);
+      throw new Error(`固定 HTTP CLI 端口 ${this.port} 的健康检查响应未完成，将在下次心跳重试。`);
     }
   }
 
@@ -425,12 +361,12 @@ export class AgentHttpRouter {
       });
     if (outcome === 'leader') {
       candidate.on('error', (error) => {
-        this.options.log?.(`固定 HTTP MCP 服务错误：${error.message}`);
+        this.options.log?.(`固定 HTTP CLI 服务错误：${error.message}`);
       });
       this.httpServer = candidate;
       this._leader = true;
       this._available = true;
-      this.options.log?.(`固定 HTTP MCP 路由器已接管端口 ${this.port}`);
+      this.options.log?.(`固定 HTTP CLI 路由器已接管端口 ${this.port}`);
       return;
     }
     this._leader = false;
@@ -438,7 +374,7 @@ export class AgentHttpRouter {
     this._available = await this.isExistingRouter();
     if (!this._available) {
       throw new Error(
-        `固定 HTTP MCP 端口 ${this.port} 已被其他程序占用；请修改 safs.agentHttpRouterPort。`
+        `固定 HTTP CLI 端口 ${this.port} 已被其他程序占用；请修改 safs.agentHttpRouterPort。`
       );
     }
   }

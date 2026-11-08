@@ -78,11 +78,11 @@ test('reports the command error without replacing it with an outer timeout', asy
 test('wraps .cmd/.bat shims through cmd.exe on Windows', (t) => {
   if (process.platform !== 'win32') return t.skip('Windows-only');
   const invocation = windowsCommandInvocation(
-    'codex.cmd', ['mcp', 'get', 'safs']
+    'codex.cmd', ['backend', 'get', 'safs']
   );
   assert.equal(invocation.command, 'cmd.exe');
   assert.deepEqual(invocation.args.slice(0, 3), ['/d', '/s', '/c']);
-  assert.equal(invocation.args[3], 'codex.cmd mcp get safs');
+  assert.equal(invocation.args[3], 'codex.cmd backend get safs');
   assert.equal(invocation.windowsVerbatimArguments, true);
 });
 

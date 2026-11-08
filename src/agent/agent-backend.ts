@@ -7,12 +7,7 @@ import { RemoteReadOptions } from '../remote/remote-read';
 import { RemoteOutputStore } from '../remote/remote-output';
 import * as http from 'node:http';
 import express from 'express';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import {
-  type AgentToolProfile, configureAgentMcpResources, directAgentMcpInstructions,
-  registerAgentMcpTools, terminalAgentMcpInstructions, terminalMcpOnlyToolError
-} from './agent-mcp-tools';
+import { type AgentToolProfile, terminalCliOnlyCommandMessage } from './agent-operations';
 import { AgentActivitySource } from './agent-activity';
 
 export interface RemoteFolderInfo {
@@ -22,7 +17,7 @@ export interface RemoteFolderInfo {
   host: string;
 }
 
-export interface AgentMcpCallbacks {
+export interface AgentBackendCallbacks {
   toolProfile?(): AgentToolProfile;
   listFolders(): Promise<RemoteFolderInfo[]>;
   currentWorkspace(): Promise<RemoteFolderInfo | null>;
@@ -87,7 +82,7 @@ export class AgentToolError extends Error {
   }
 }
 
-export class AgentMcpServer {
+export class AgentBackendServer {
   private readonly outputs = new RemoteOutputStore();
   private httpServer: http.Server | undefined;
   private _portUnavailable = false;
@@ -95,7 +90,7 @@ export class AgentMcpServer {
   constructor(
     _port: number,
     private readonly token: string,
-    private readonly callbacks: AgentMcpCallbacks
+    private readonly callbacks: AgentBackendCallbacks
   ) {}
 
   get url(): string {
@@ -110,33 +105,17 @@ export class AgentMcpServer {
     return this._portUnavailable;
   }
 
-  private createProtocolServer(
-    agentName?: string, source: AgentActivitySource = 'mcp'
-  ): McpServer {
+  private async callOperation(name: string, input: Record<string, unknown>, agentName?: string) {
+    const source: AgentActivitySource = 'cli';
     const profile = this.callbacks.toolProfile?.();
-    const server = new McpServer(
-      { name: 'safs', version: '1.0.0' },
-      { instructions: profile === 'terminal'
-        ? terminalAgentMcpInstructions
-        : directAgentMcpInstructions }
-    );
-    configureAgentMcpResources(server);
     // 紧凑 JSON：结果只回传必要字段，缩进空白会白白消耗模型 token。
-    const result = (value: unknown) => ({
-      content: [{ type: 'text' as const, text: JSON.stringify(value) }]
-    });
-    // 业务错误作为 MCP tool result 返回，使固定路由器能原样透传；
-    // 只有 HTTP/转发层故障才应被标记为 REMOTE_UNAVAILABLE。
+    const result = (value: unknown) => ({ ok: true, result: value });
     const toolError = (error: unknown) => {
       const structured = error instanceof AgentToolError ? error : undefined;
-      return {
-        isError: true,
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          ...(structured?.details ?? {}),
-          code: structured?.code ?? 'REMOTE_TOOL_ERROR',
-          message: error instanceof Error ? error.message : String(error)
-        }) }]
-      };
+      return { ok: false, error: {
+        ...(structured?.details ?? {}), code: structured?.code ?? 'REMOTE_TOOL_ERROR',
+        message: error instanceof Error ? error.message : String(error)
+      } };
     };
     const trackedTools = new Set([
       'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many',
@@ -198,10 +177,6 @@ export class AgentMcpServer {
       if (scope !== await outputScope()) throw new Error('Workspace changed during execution.');
       return this.outputs.capture(value, scope);
     };
-    registerAgentMcpTools(server, {
-      routed: false,
-      profile,
-      invoke: (name, input) => {
         switch (name) {
           case 'list_remote_workspaces':
             return invoke(name, input, async () => {
@@ -241,7 +216,7 @@ export class AgentMcpServer {
           case 'remote_create':
             return invoke(name, input, () => {
               if (!this.callbacks.create) throw new Error('Remote create is unavailable.');
-              return this.callbacks.create(input as Parameters<NonNullable<AgentMcpCallbacks['create']>>[0]);
+              return this.callbacks.create(input as Parameters<NonNullable<AgentBackendCallbacks['create']>>[0]);
             });
           case 'remote_delete':
             return invoke(name, input, () => this.callbacks.delete(input as {
@@ -257,11 +232,11 @@ export class AgentMcpServer {
             }));
           case 'remote_upload':
             return invoke(name, input, () => this.callbacks.upload(
-              input as Parameters<AgentMcpCallbacks['upload']>[0]
+              input as Parameters<AgentBackendCallbacks['upload']>[0]
             ));
           case 'remote_download':
             return invoke(name, input, () => this.callbacks.download(
-              input as Parameters<AgentMcpCallbacks['download']>[0]
+              input as Parameters<AgentBackendCallbacks['download']>[0]
             ));
           case 'remote_output':
             return invoke(name, input, async () => this.outputs.read(
@@ -272,13 +247,13 @@ export class AgentMcpServer {
           case 'remote_search':
             return invoke(name, input, () => capture(() => this.callbacks.search({
               ...input, agentName
-            } as Parameters<AgentMcpCallbacks['search']>[0])));
+            } as Parameters<AgentBackendCallbacks['search']>[0])));
           case 'run_remote_command':
             return invoke(name, input, () => {
               if (profile !== 'terminal') {
                 return capture(() => this.callbacks.run({
                   ...input, agentName
-                } as Parameters<AgentMcpCallbacks['run']>[0]));
+                } as Parameters<AgentBackendCallbacks['run']>[0]));
               }
               if (!this.callbacks.runTerminal) {
                 throw new Error('No SAFS terminal is selected for Agent command forwarding.');
@@ -291,77 +266,40 @@ export class AgentMcpServer {
               });
             });
         }
-      }
-    });
-    return server;
+    throw new AgentToolError('UNKNOWN_OPERATION', 'Unknown CLI operation: ' + name);
   }
+
 
   async start(): Promise<void> {
     if (this.httpServer) return;
     const app = express();
     app.use(express.json({ limit: '1mb' }));
-    app.all('/mcp', async (request, response) => {
+    app.post('/operations', async (request, response) => {
       if (request.query.token !== this.token) {
-        this.callbacks.log?.(`拒绝未授权 MCP 请求：${request.method}`);
         response.status(401).json({ error: 'Unauthorized' });
         return;
       }
-      if (request.method !== 'POST') {
-        this.callbacks.log?.(`拒绝不支持的 MCP 请求方法：${request.method}`);
-        response.status(405).json({ error: 'Method not allowed' });
+      const name = request.body?.operation;
+      const input = request.body?.input;
+      if (typeof name !== 'string' || !input || typeof input !== 'object' || Array.isArray(input)) {
+        response.status(400).json({ error: 'Invalid operation request' });
         return;
       }
       const agentName = typeof request.query.agent === 'string'
-        ? request.query.agent.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_')
-        : undefined;
-      const source: AgentActivitySource = request.query.source === 'cli' ? 'cli' : 'mcp';
-      const method = typeof request.body?.method === 'string' ? request.body.method : 'unknown';
-      const tool = request.body?.params?.name;
-      this.callbacks.log?.(`收到 MCP 请求：${method}${tool ? ` (${tool})` : ''}${
-        agentName ? `，agent=${agentName}` : '，agent=<unknown>'
-      }`);
-      this.callbacks.request?.(agentName);
-      if (method === 'tools/call' && typeof tool === 'string') {
-        const input = request.body?.params?.arguments;
-        this.callbacks.audit?.({
-          toolName: tool,
-          input: input && typeof input === 'object' ? input as Record<string, unknown> : {},
-          agentName
-        });
-      }
-      // A connected Agent can cache tools from workspace mode. Give it the
-      // terminal-mode replacement instead of a generic "Tool not found".
-      if (method === 'tools/call' && typeof tool === 'string'
-          && this.callbacks.toolProfile?.() === 'terminal'
-          && tool !== 'run_remote_command') {
-        response.json({
-          jsonrpc: '2.0', id: request.body?.id ?? null,
-          result: terminalMcpOnlyToolError()
-        });
+        ? request.query.agent.trim().slice(0, 100).replace(/[\u0000-\u001f\u007f]/g, '_') : undefined;
+      if (this.callbacks.toolProfile?.() === 'terminal' && name !== 'run_remote_command') {
+        response.status(403).json({ error: terminalCliOnlyCommandMessage });
         return;
       }
-      const requestStarted = performance.now();
-      const protocol = this.createProtocolServer(agentName, source);
-      operationMetric(this.callbacks.log, 'mcp.protocol.setup', requestStarted);
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const started = performance.now();
       try {
-        await protocol.connect(transport);
-        await transport.handleRequest(request, response, request.body);
+        this.callbacks.request?.(agentName);
+        this.callbacks.audit?.({ toolName: name, input, agentName });
+        response.json(await this.callOperation(name, input, agentName));
       } catch (error) {
-        this.callbacks.log?.(
-          `MCP 请求失败：${error instanceof Error ? error.message : String(error)}`
-        );
-        if (!response.headersSent) {
-          response.status(500).json({
-            jsonrpc: '2.0',
-            error: { code: -32603, message: error instanceof Error ? error.message : String(error) },
-            id: null
-          });
-        }
+        response.status(500).json({ error: error instanceof Error ? error.message : String(error) });
       } finally {
-        await transport.close();
-        await protocol.close();
-        operationMetric(this.callbacks.log, 'mcp.request', requestStarted);
+        operationMetric(this.callbacks.log, 'cli.operation', started);
       }
     });
     const server = http.createServer(app);
@@ -378,10 +316,10 @@ export class AgentMcpServer {
     const server = this.httpServer;
     this.httpServer = undefined;
     if (!server) return;
-    this.callbacks.log?.('正在停止 MCP');
+    this.callbacks.log?.('正在停止 CLI');
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
-    this.callbacks.log?.('MCP 已停止');
+    this.callbacks.log?.('CLI 已停止');
   }
 }

@@ -113,7 +113,7 @@ export interface WindowsCommandInvocation {
 
 /**
  * 按 cmd.exe 规则转义单个参数。`& | < > ^` 在引号内是字面量；`%`（变量展开）
- * 与 `!`（延迟展开）即使在引号内也特殊，SAFS 传参是内部生成的 MCP server 名
+ * 与 `!`（延迟展开）即使在引号内也特殊，SAFS 传参是内部生成的 CLI server 名
  * 与固定路由 URL（hex token），不含这些字符；保守起见仍对含引号/空格/元字符
  * 的参数整体加引号，并把内部引号双写为 cmd 转义形式。
  */

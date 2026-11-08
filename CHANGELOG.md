@@ -33,11 +33,11 @@
 
 ## 2.1.0
 
-- 从 CLI 切换到 MCP 时，当前操作窗口自动提示输入 Agent 名称并复制安装提示词；取消输入不覆盖剪贴板，已过期的切换任务不再触发提示。
-- 修复 MCP 卸载确认重复弹出后卡住的问题：全局接口切换只由当前操作窗口提示，同一窗口的重复请求共用一个弹窗，关闭或取消后可重新操作。
+- 从 CLI 切换到 CLI 时，当前操作窗口自动提示输入 Agent 名称并复制安装提示词；取消输入不覆盖剪贴板，已过期的切换任务不再触发提示。
+- 修复 CLI 卸载确认重复弹出后卡住的问题：全局接口切换只由当前操作窗口提示，同一窗口的重复请求共用一个弹窗，关闭或取消后可重新操作。
 - 启用 Agent 转发成功后显示通知，说明需要打开远程目录或终端才能操作目标，并提供针对该连接的两个快捷按钮。
 - 打开和切换远程目录时允许取消等待，合并重复打开请求；Agent 面板操作期间显示进度并防止重复点击，切换目标或接口后立即更新目标提示；筛选无结果时提供清除筛选入口，减少常规模式切换和关闭转发的成功弹窗。
-- Agent 活动等待状态按接口显示使用提示：CLI 模式输入 `/safs-cli`，MCP 模式输入 `use safs mcp`。
+- Agent 活动等待状态按接口显示使用提示：CLI 模式输入 `/safs-cli`，CLI 模式输入 `use safs backend`。
 - Agent 面板完整显示当前目标的主机、账号和目录，区分未启用、准备中、转发就绪与需要恢复，并提供启用、修复和重试入口；终端模式常驻能力说明，将“刷新工作区”改为“刷新终端目录”。
 - 终端模式下将“切换工作区”替换为“打开远程目录”，直接在当前窗口打开转发终端所在目录，无需选择目录或新开窗口。
 - 修复首次安装 CLI 失败后无法直接重试；启动已启用的 CLI 转发时刷新连接地址、超时和 PATH，并更新其他已安装目录中的 Agent Skill。
@@ -79,7 +79,7 @@
 
 - 清理废弃的 Rust CLI 源码、平台二进制与构建命令，卸载测试纳入常规检查。
 
-- 未检测到 Node.js 18+ 时弹窗提供官网安装链接或切换 MCP 模式。
+- 未检测到 Node.js 18+ 时弹窗提供官网安装链接或切换 CLI 模式。
 
 - 移除 GitHub Release 自动发布与版本标签触发，保留 CI 构建、测试和产物上传。
 
@@ -100,16 +100,16 @@
 
 - 账号配置不再保存 name，内部连接标识自动生成；同步更新 JSON Schema、WSL 配置读取和密码字段定位，并在旧连接状态迁移完成后移除旧标识。
 
-- 配置按主机、账号层级保存，旧配置自动迁移并备份；历史目录继续保存在 VS Code 全局状态，CLI/MCP 工作区展示主机名、账号和目录。
+- 配置按主机、账号层级保存，旧配置自动迁移并备份；历史目录继续保存在 VS Code 全局状态，CLI/CLI 工作区展示主机名、账号和目录。
 
-- CLI 安装或更新失败时弹窗提示检查 GitHub 网络，并支持切换 MCP 模式跳过下载。
+- CLI 安装或更新失败时弹窗提示检查 GitHub 网络，并支持切换 CLI 模式跳过下载。
 - 修复关闭窗口时未完成的心跳重新写入工作区记录；关闭后停止发布并清理记录，发现列表过滤已退出进程的残留记录。
 
 ## 2.0.3
 
 - 本地文件夹新增“可视化同步”入口，同步成功后自动打开本地目录，并在历史目录中显示已开启的同步按钮。
-- 默认 Agent 接口改为 CLI，保留显式配置的 MCP 模式。
-- MCP/CLI 独立读取有限并发，复用工具 schema 与批次工作区发现记录。
+- 默认 Agent 接口改为 CLI，保留显式配置的 CLI 模式。
+- CLI 独立读取有限并发，复用工具 schema 与批次工作区发现记录。
 - Git 中转复用对象缓存、传输增量 bundle，并合并远端元数据查询。
 - 修复下载落盘失败与首次续传问题，完善 CLI 批次超时和错误反馈。
 - 增加耗时与传输字节诊断；发布文件不再意外进入 VSIX。
@@ -247,15 +247,15 @@
 - 修复同一 SFTP 会话包装器内并发请求的迟到错误误关闭新连接。
 - CLI 支持 `--agent NAME` 标记单次及批量操作来源，并在未指定时保留连接 URL 中的 Agent 名称。
 
-- MCP 工作区路由改为 `list_remote_workspaces` 加显式 `workspaceId`，移除隐式选择与切换工具。
+- CLI 工作区路由改为 `list_remote_workspaces` 加显式 `workspaceId`，移除隐式选择与切换工具。
 - CLI 移除 `bind`/`switch`，所有远程操作统一使用 `--workspace`。
 - 删除工作区路由中已无用途的 Agent cwd 占位符匹配、标准化函数和聚焦窗口默认排序；聚焦状态仅用于界面展示。
-- 更新 MCP/CLI 文档，明确要求用户选择 `workspaceId`，避免误以为会按 cwd 或窗口焦点自动选择。
+- 更新 CLI 文档，明确要求用户选择 `workspaceId`，避免误以为会按 cwd 或窗口焦点自动选择。
 - 插件与原生 CLI 版本升级到 1.9.2。
 
 ## 1.9.1
 
-- MCP 新增 `remote_create`，CLI 新增 `safs create`，可在当前工作区内创建文件或目录。
+- CLI 新增 `remote_create`，CLI 新增 `safs create`，可在当前工作区内创建文件或目录。
 - 创建操作拒绝越界路径、符号链接逃逸、覆盖已有目标和创建工作区根目录。
 - Agent 活动记录新增创建文件/目录操作，并仅保存内容字节数。
 - 插件与原生 CLI 版本升级到 1.9.1。
@@ -288,8 +288,8 @@
 
 - 原生 `safs` CLI 改用更直接的子命令语法，并新增 Playwright CLI 风格的
   `safs install --skills`，可离线安装项目级或用户级 SAFS Agent Skill。
-- 删除 Agent 混合接口，仅保留互斥的 MCP 与 CLI：MCP 模式清理全局 CLI 和 SAFS
-  Skill，CLI 模式安装 CLI/Skill 并复制 Agent 侧 MCP 注销提示词。
+- 删除 Agent 混合接口，仅保留互斥的 CLI 与 CLI：CLI 模式清理全局 CLI 和 SAFS
+  Skill，CLI 模式安装 CLI/Skill 并复制 Agent 侧 CLI 注销提示词。
 - Agent 转发安装改为所有连接共享一次：仅在全部连接均关闭后首次开启连接时提示，继续
   开启其他连接不再重复安装；不同连接的开关操作串行处理以避免并发重复提示。
 - 终端专用模式会跟踪终端当前目录并自动刷新工作区；再次点击终端模式即可刷新或改选
@@ -298,7 +298,7 @@
 
 ## 1.8.6
 
-- Agent 活动面板将工作区模式与终端模式改为并排的二选一控件；终端模式下 MCP 与 CLI
+- Agent 活动面板将工作区模式与终端模式改为并排的二选一控件；终端模式下 CLI 与 CLI
   拒绝其他操作时，会明确提示唯一可用的 `run_remote_command` 工具或 `safs exec` 命令。
 - 修复首次 SSH/SFTP 建连阶段偶发 `ECONNRESET` 时直接打开失败的问题，连接级瞬时故障
   会短暂退避并自动使用全新连接重试一次。
@@ -309,9 +309,9 @@
 ## 1.8.5
 
 - Agent 活动面板新增会话级终端专用模式：读取当前 SAFS 终端的实际目录并作为工作区，
-  MCP 仅保留参数收缩后的 `run_remote_command`，CLI 绑定无需重建且只放行 `safs exec`。
+  CLI 仅保留参数收缩后的 `run_remote_command`，CLI 绑定无需重建且只放行 `safs exec`。
 - 终端专用模式继承终端内通过 `sudo`/`su` 切换后的用户权限和已导出环境；关闭终端或退出
-  专用模式后自动恢复原有 MCP/CLI 工具，文件、搜索、传输及批处理在专用模式下均被拒绝。
+  专用模式后自动恢复原有 CLI 工具，文件、搜索、传输及批处理在专用模式下均被拒绝。
 - 修复瞬时 SSH 握手丢失、连接重置或超时后终端过早停止自动恢复的问题，改为有限退避重试；
   普通及认证错误仍快速停止。
 - 打开或切换远程目录命令现在也可从本地或空窗口先选择连接再执行。
@@ -326,12 +326,12 @@
 
 ## 1.8.3
 
-- Agent 接口默认值改为 `mcp`，纯 MCP 模式不再安装全局 CLI；切换到混合或 CLI 模式时
+- Agent 接口默认值改为 `backend`，纯 CLI 模式不再安装全局 CLI；切换到混合或 CLI 模式时
   才安装，并新增 `SAFS: 安装或更新全局 CLI` 命令供用户在任意模式下主动安装或修复。
 - 删除无实际路由意义的 `safs.agentPlatform` 设置、安装时的平台选择，以及 URL、绑定、
   活动记录和审计日志中的 Agent 平台字段；Agent 身份只保留名称。
 - 首次启动插件时检查标准全局代理环境变量；若 `NO_PROXY` 未覆盖本机回环地址，提示设置
-  `NO_PROXY=localhost,127.0.0.1,::1`。MCP 安装提示不再推荐规则模式或切换 CLI。
+  `NO_PROXY=localhost,127.0.0.1,::1`。CLI 安装提示不再推荐规则模式或切换 CLI。
 - 首次从连接父节点打开配置的远程家目录时，按当前平台提示“打开远程目录 / 终端”的
   两个快捷键；历史目录和后续打开不再重复提示。
 - 插件与原生 CLI 版本升级到 1.8.3；发布流水线继续重建并校验六个平台二进制。
@@ -341,7 +341,7 @@
 - Agent 活动时间线已按最新操作优先显示，因此删除重复且易错过的“关键操作”弹幕区域
   及无实际价值的“暂停弹幕”按钮；页面顶部状态卡改用更精致的 macOS 圆角窗口风格，
   侧边栏图标保持不变。
-- 删除原生 CLI 中已废弃的 `mcp-bridge` stdio 兼容入口；MCP 统一由 Agent 直接连接
+- 删除原生 CLI 中已废弃的 `backend-bridge` stdio 兼容入口；CLI 统一由 Agent 直接连接
   loopback Streamable HTTP 路由。
 - Agent 安装提示只在目录树父连接节点首次从关闭切换为开启时，或用户主动执行命令面板
   中的安装命令时显示一次；窗口启动和接口模式变化仅静默准备路由与 CLI，避免多个窗口
@@ -351,13 +351,13 @@
 - 混合模式的绑定结果通过唯一的 `cliInstructions` 字段携带 CLI 文件操作约束，移除重复
   状态及与 CLI 调用冲突的 Shell 禁用字段；工作区边界错误改为不可重试的结构化错误，
   明确禁止回退到 `safs exec`，原生 CLI 也会显示命令执行前的拒绝原因。
-- 重新梳理混合与纯 MCP 的工具契约：拆分 CLI/MCP 会话说明，精简纯 MCP 绑定和切换
+- 重新梳理混合与纯 CLI 的工具契约：拆分 CLI/CLI 会话说明，精简纯 CLI 绑定和切换
   结果，明确本地 cwd、候选确认、分页、读取选择器、传输目录、命令退出码及输出续读；
   活动文件、搜索和传输结果不再返回重复的内部字段，公开参数校验错误统一使用英文。
-- 统一 MCP、混合和 CLI 模式的写入边界：`workspaceRoot` 外的显式远程 Shell 工作目录
+- 统一 CLI、混合和 CLI 模式的写入边界：`workspaceRoot` 外的显式远程 Shell 工作目录
   与常见文件写入目标会被后端拒绝；远程文件操作必须使用结构化命令，`safs exec`
   仅用于构建、测试等任务命令。
-- MCP 与混合模式共用同一份英文安装提示词，不再重复声明 MCP 会话已提供的规则；
+- CLI 与混合模式共用同一份英文安装提示词，不再重复声明 CLI 会话已提供的规则；
   纯 CLI 模式使用英文提示词将唯一的 SAFS 标记块保存到用户级全局持久指令，重复安装
   时替换而非追加，卸载时按标记只清理对应规则。
 - Bash Shell Integration 仅在真实交互会话中加载登录配置，避免非交互环境注入的
@@ -366,41 +366,41 @@
 
 ## 1.8.1
 
-- Agent 接口新增并默认使用 `hybrid` 混合模式：MCP 只注册工作区绑定和切换两个工具，
+- Agent 接口新增并默认使用 `hybrid` 混合模式：CLI 只注册工作区绑定和切换两个工具，
   返回的 `bindingId` 由全局 `safs` CLI 承接文件与命令操作，减少工具 Schema Token，
   同时保留精确的工作区选择。
-- 升级首次激活时将用户设置中旧版显式保存的 `mcp` 一次性迁移为 `hybrid`；显式
+- 升级首次激活时将用户设置中旧版显式保存的 `backend` 一次性迁移为 `hybrid`；显式
   `cli` 保持不变，迁移完成后仍可手动切换任意模式。
-- `mcp`、`cli` 和 `hybrid` 三种入口可以共存，切换设置不再以卸载另一入口为前提；
-  完整 MCP 和纯 CLI 模式仍可单独选择。
+- `backend`、`cli` 和 `hybrid` 三种入口可以共存，切换设置不再以卸载另一入口为前提；
+  完整 CLI 和纯 CLI 模式仍可单独选择。
 - CLI 安装不再绑定 Agent 名称；`safs bind --agent NAME`（以及创建新 binding 的
   `switch`）在 binding 中记录来源，后续操作通过 `bindingId` 沿用该名称，活动视图
   和转发状态栏不再显示 `safs-cli`。
-- MCP/CLI 安装提示词缩减为必要的安装地址或 `safs --help` 入口，不再要求 Agent
+- CLI 安装提示词缩减为必要的安装地址或 `safs --help` 入口，不再要求 Agent
   记忆工作流规则；远程目录与 Agent 活动视图使用不同图标，分离后仍可辨认。
-- 默认 MCP 恢复为 loopback Streamable HTTP，不再安装或使用原生 stdio 桥；若全局
+- 默认 CLI 恢复为 loopback Streamable HTTP，不再安装或使用原生 stdio 桥；若全局
   代理导致 HTTP 502、代理连接错误或超时，安装提示会要求使用代理规则模式并让
   `127.0.0.1`、`localhost`、`::1` 直连，或将 Agent 接口切换为 CLI。
 - 新增 SAFS **Agent 活动**侧边栏：以状态动画、关键操作弹幕和可筛选时间线展示
-  当前远程窗口实际执行的 MCP/CLI 文件操作、命令和传输；连续只读操作自动折叠。
+  当前远程窗口实际执行的 CLI 文件操作、命令和传输；连续只读操作自动折叠。
 - 每个工作区持久保留最近 200 条脱敏活动记录；不保存文件正文、Diff 或命令输出，
   窗口重载时仍未完成的操作标记为已中断，清空活动不影响原有审计日志。
-- CLI 安装转发时复制全局 `safs` 使用提示词；MCP 与 CLI 来源标签会传递到实际执行
+- CLI 安装转发时复制全局 `safs` 使用提示词；CLI 与 CLI 来源标签会传递到实际执行
   窗口，活动生命周期按开始、成功、失败完整配对，批处理逐项记录。
 - 插件与原生 CLI 版本升级到 1.8.1，并由发布流水线重新构建六个平台二进制。
 
 ## 1.8.0
 
-- 移除 Codex、Claude Code、Pi 和 DSH 的自动探测、自动 MCP 注册及配置文件写入；
-  统一通过复制提示词，由 Agent 自行安装或卸载 `safs` MCP。
+- 移除 Codex、Claude Code、Pi 和 DSH 的自动探测、自动 CLI 注册及配置文件写入；
+  统一通过复制提示词，由 Agent 自行安装或卸载 `safs` CLI。
 - 修复 macOS 等设置了 `ALL_PROXY`、`HTTPS_PROXY` 或 `HTTP_PROXY` 的环境中，本机
-  SAFS 请求被代理截获而出现 MCP `HTTP 502` 或 CLI 超时的问题：CLI 强制直连
-  loopback；默认 MCP 安装改用同一原生程序提供的无代理 stdio 桥。
+  SAFS 请求被代理截获而出现 CLI `HTTP 502` 或 CLI 超时的问题：CLI 强制直连
+  loopback；默认 CLI 安装改用同一原生程序提供的无代理 stdio 桥。
 - CLI 请求失败时保留经过 Token 脱敏的底层错误，不再把 HTTP 状态、连接失败和
   真正超时全部折叠为同一条错误信息。
 - 精简 Agent、同步、传输、终端和错误处理的非模态通知，完整路径与诊断写入
   SAFS 日志，避免窄窗口把关键操作提示截断。
-- 首次使用原生 SAFS CLI/MCP 桥时校验磁盘二进制的真实版本；与插件版本不一致
+- 首次使用原生 SAFS CLI/CLI 桥时校验磁盘二进制的真实版本；与插件版本不一致
   或旧版无法报告版本时自动更新，并在更新后再次校验。
 - 六个平台的原生 `safs` 二进制全部随 VSIX 分发，版本修复直接从插件包内原子
   替换，不再依赖运行时访问 GitHub 下载。
@@ -414,35 +414,35 @@
 
 ## 1.7.8
 
-- MCP 工作区工具移除自身重复的 `safs_` 前缀，注册名改为
+- CLI 工作区工具移除自身重复的 `safs_` 前缀，注册名改为
   `get_remote_workspace` 和 `switch_remote_workspace`；客户端显示名称由
   `safs_safs_*` 恢复为 `safs_*`。CLI 路由保留旧名称兼容，避免已安装 CLI 失效。
 - 六个平台的原生 CLI 不再打入 VSIX；仅在切换到 CLI 模式时，从项目 GitHub
   仓库的 `bin` 目录按当前 Agent 平台下载并安装对应可执行文件。
-- MCP 切换到 CLI 时，若尚未安装 CLI 会先询问确认；确认后下载或更新 CLI、
-  自动卸载可识别的 safs MCP，并在右下角分别列出已卸载和需手工卸载的 Agent。
-  CLI 切回 MCP 时自动卸载全局 CLI 并重新安装可识别 Agent 的 safs MCP；插件在
+- CLI 切换到 CLI 时，若尚未安装 CLI 会先询问确认；确认后下载或更新 CLI、
+  自动卸载可识别的 safs CLI，并在右下角分别列出已卸载和需手工卸载的 Agent。
+  CLI 切回 CLI 时自动卸载全局 CLI 并重新安装可识别 Agent 的 safs CLI；插件在
   CLI 模式下升级后也会按扩展版本自动刷新 CLI。
-- 持久记录实际发起过 SAFS MCP 请求的 Agent 名称与平台；通过复制提示词手工安装
-  的 OpenCode 等 Agent 也会进入 MCP→CLI 的卸载候选，无法自动删除时明确提示手工处理。
+- 持久记录实际发起过 SAFS CLI 请求的 Agent 名称与平台；通过复制提示词手工安装
+  的 OpenCode 等 Agent 也会进入 CLI→CLI 的卸载候选，无法自动删除时明确提示手工处理。
 - 全局切换到 CLI 时仅由当前聚焦的 VS Code 窗口显示安装确认，避免多个窗口的
   Extension Host 对同一次设置变更重复弹窗。
-- CLI 切回 MCP 时会对照历史实际调用来源与本次自动注册结果；OpenCode 等未自动
-  注册的 Agent 会提示手动安装，并仅在存在此类 Agent 时显示“复制 MCP 安装提示词”。
+- CLI 切回 CLI 时会对照历史实际调用来源与本次自动注册结果；OpenCode 等未自动
+  注册的 Agent 会提示手动安装，并仅在存在此类 Agent 时显示“复制 CLI 安装提示词”。
 - SSH 认证成功后新增 15 秒 SFTP/终端通道打开超时：网关若静默丢弃
   subsystem 或 channel-open 请求，连接不再永久停留在“正在连接”，而是
   主动结束并显示原因。
 - 扩展名称与描述改为 “Serverless AI Coding Agent Forwarding for SSH”，
-  明确通过 MCP 或 CLI 转发 AI Coding Agent，且远程主机无需安装
+  明确通过 CLI 或 CLI 转发 AI Coding Agent，且远程主机无需安装
   VS Code Server 或 Agent 服务；英文 README 标题同步修正。
 
 ## 1.7.7
 
-- CLI 与 MCP 两种转发入口改为互斥并支持双向切换：切换到 CLI 时自动安装/更新
-  用户级全局 `safs` 命令并探测卸载旧 MCP 注册；切回 MCP 时自动卸载用户级
+- CLI 与 CLI 两种转发入口改为互斥并支持双向切换：切换到 CLI 时自动安装/更新
+  用户级全局 `safs` 命令并探测卸载旧 CLI 注册；切回 CLI 时自动卸载用户级
   `safs`（移除 bin、连接配置、Unix 登录 shell 的 PATH 条目或用 PowerShell 清理
-  Windows 用户 Path）并重新为检测到的 Agent 配置 MCP。切换后弹窗可一键复制
-  MCP 卸载/安装提示词，交给不受检测覆盖的手工配置 Agent 执行。
+  Windows 用户 Path）并重新为检测到的 Agent 配置 CLI。切换后弹窗可一键复制
+  CLI 卸载/安装提示词，交给不受检测覆盖的手工配置 Agent 执行。
 - 已安装的用户级 `safs` 仅在平台或安装路径变化、全局可执行文件丢失、或扩展
   升级时才重新复制 bin；重载窗口或切换工作区不再每次激活都重复复制。
 - CLI 新增文件名搜索模式（`find` 别名，查询为 basename glob，带 find/prune
@@ -468,13 +468,13 @@
 - CLI 模式切换后立即安装或修复用户级全局 `safs` 命令，显示安装路径并提示重启 VS Code。
 - 新增紧凑输出、默认精简错误、`--verbose` 完整诊断，以及单次本地 HTTP 请求的顺序批处理。
 - 修复 Windows 到 WSL 的 CLI 权限设置，并补充 zsh 登录环境的 PATH 配置。
-- 文档明确 CLI 的 Token 特性，以及自动安装和手动安装 MCP 的不同清理方式。
+- 文档明确 CLI 的 Token 特性，以及自动安装和手动安装 CLI 的不同清理方式。
 
 ## 1.7.4
 
-- Agent 转发继续默认使用稳定的 MCP 接口；原生 CLI 保留为实验性可选入口，只有安装包
+- Agent 转发继续默认使用稳定的 CLI 接口；原生 CLI 保留为实验性可选入口，只有安装包
   包含 Agent 平台对应的可执行文件时才启用。
-- MCP 文件读取、搜索和命令输出增加默认预算、分页及续取能力，并提供精简的 `core`
+- CLI 文件读取、搜索和命令输出增加默认预算、分页及续取能力，并提供精简的 `core`
   工具配置，减少远程操作进入 Agent 上下文的内容量。
 - 新增复用现有认证、路由和安全策略的原生 SAFS CLI，以及 Windows、macOS、Linux
   x64/ARM64 构建流水线；本地打包允许只携带当前已构建的平台程序，发布流水线仍校验
@@ -500,8 +500,8 @@
   可取消的   进度通知，并纳入 Agent 下载超时。
 
 - 修复扩展运行时状态中 `safs.mounts.focus` 菜单命令未声明的清单校验错误。
-- MCP 命令审计日志恢复记录脱敏后的命令原文，同时保留长度和 SHA-256，便于直接审计调用内容。
-- 新增 MCP 工具 `remote_edit`，通过唯一精确匹配原子修改工作区内的 UTF-8 文件，
+- CLI 命令审计日志恢复记录脱敏后的命令原文，同时保留长度和 SHA-256，便于直接审计调用内容。
+- 新增 CLI 工具 `remote_edit`，通过唯一精确匹配原子修改工作区内的 UTF-8 文件，
   支持多项事务式编辑和可选 SHA-256 并发校验，避免局部修改时重写整个文件。
 
 ## 1.7.2
@@ -513,7 +513,7 @@
 
 ## 1.7.1
 
-- 新增 MCP 工具 `remote_read`、`remote_delete`、`remote_chmod`、`remote_move`、
+- 新增 CLI 工具 `remote_read`、`remote_delete`、`remote_chmod`、`remote_move`、
   `remote_upload` 和 `remote_download`；上传/下载直接复用流式可视化传输，并由 Agent
   自主指定路径，无需弹出路径选择框。
 - 上传源和下载目标自动限制在当前 Agent cwd 暂存目录，结构化修改与传输目标限制在
@@ -521,14 +521,14 @@
   工作区外的远程环境。
 - 改进远程命令风险分析：忽略 `cat`/`tee` 的数据 heredoc 正文，继续扫描可执行
   heredoc，并拒绝目标范围无法静态确认的动态删除或权限修改；所有模式均不弹确认框。
-- MCP 转发、远程命令、搜索和上传/下载统一使用 `safs.agentMcpTimeoutMs`，目录传输
+- CLI 转发、远程命令、搜索和上传/下载统一使用 `safs.agentBackendTimeoutMs`，目录传输
   支持空目录，并兼容 Windows 扩展宿主与 WSL Agent 的本地路径互转。
 
 ## 1.7.0
 
 - 修复 Agent 从普通本地 cwd 使用 SAFS 时无法自动绑定：cwd 未命中占位目录但恰好有
   一个 SAFS 窗口处于焦点时，Router 自动绑定该窗口；焦点不唯一时仍要求明确选择。
-- 新增独立 MCP 工具 `safs_switch_remote_workspace`：get 工具只负责按 cwd 初始绑定；
+- 新增独立 CLI 工具 `safs_switch_remote_workspace`：get 工具只负责按 cwd 初始绑定；
   显式切换负责列候选与确认选择，并注销同一 Agent 会话的旧 binding。
 
 ## 1.6.9
@@ -559,7 +559,7 @@
 - 精简主机密钥确认界面，移除与“取消”重复的拒绝操作，并明确追加、替换的适用场景。
 - Agent 转发安装结果只报告实际检测到的 Agent；设置说明增加自定义 Agent 的手工安装
   命令，且 SAFS 配置文件路径固定使用扩展默认值。
-- 抽取 MCP 工具定义、命令策略与 POSIX Shell 转义逻辑，删除重复实现并补充测试覆盖。
+- 抽取 CLI 工具定义、命令策略与 POSIX Shell 转义逻辑，删除重复实现并补充测试覆盖。
 
 ## 1.6.6
 
@@ -573,7 +573,7 @@
 
 ## 1.6.5
 
-- 首次启用 Agent 转发后，右下角会列出已成功注册 MCP 的 Agent；配置中的 Agent
+- 首次启用 Agent 转发后，右下角会列出已成功注册 CLI 的 Agent；配置中的 Agent
   全部未能自动注册时，直接打开“为我的 Agent 安装转发功能”手工安装流程。
 - Linux、macOS、WSL（`vpn: false`）的密码终端改为优先使用内置 ssh2，与 Windows
   保持一致：主机密钥由实际终端连接直接确认，不再先用 `ssh-keyscan` 探测、再由
@@ -582,18 +582,18 @@
 - 系统 SSH 终端现在把 stderr 镜像到临时诊断文件，并在终端退出后将退出码和错误
   回灌到 `SAFS Log`；扩展异常退出遗留的诊断会在下次激活时恢复。内置 ssh2
   终端、命令入口及主要后台任务的失败也统一写入日志，不再只在终端中短暂闪现。
-- SAFS MCP 改为按需使用：移除无意义的 `execution` 字段、全局强制调用和
+- SAFS CLI 改为按需使用：移除无意义的 `execution` 字段、全局强制调用和
   `alwaysLoad` 提示，普通本地工作区不再被自动探测或误判为远程。
 - 使用职责单一的 `safs_list_remote_workspaces` 和 `safs_select_remote_workspace`：
   Agent 获取聚焦优先的紧凑列表，在自身界面询问用户后以 `host` 和 `workspaceRoot`
   完成绑定；重复“列出再选择”可切换。
-- MCP 对外接口移除与 `host` 重复的 `mountName` 参数和返回字段。
+- CLI 对外接口移除与 `host` 重复的 `mountName` 参数和返回字段。
 - 每次选择返回独立短 `bindingId`，后续工具必须携带；窗口失效、Router 接管或绑定
   不匹配时明确要求重选，不再静默回退，多个同名 Agent 会话也不会互相覆盖。
 - 普通文件写入继续限制在当前工作区；Shell 命令不再逐次弹窗，命中高风险规则时
   仅按配置直接拒绝或放行，旧版 `confirm` 配置按拒绝处理。
-- 更新 MCP SDK 传递依赖补丁，`npm audit` 生产依赖漏洞归零。
-- 兼容省略工具输入的 MCP/VS Code Agent 客户端，将缺失参数统一归一化为空对象，
+- 更新 CLI SDK 传递依赖补丁，`npm audit` 生产依赖漏洞归零。
+- 兼容省略工具输入的 CLI/VS Code Agent 客户端，将缺失参数统一归一化为空对象，
   修复偶发的 `Cannot read properties of undefined (reading 'mountName')`。
 - 远程工作区选择强制要求 `userConfirmed: true` 并标记为状态变更；提示词禁止在询问
   用户的同一轮自动选择，也禁止将“仅剩一个候选”视为同意，避免失效后跳到其他主机。
@@ -649,7 +649,7 @@
   按原 `remote_terminal: open` 设置自动连接，并保持远程 cwd 不变。
 - `Terminal Follows Active File` 同时支持同步镜像中的 `file://` 文件：把本地相对
   路径映射回远程目录后，对远程终端执行对应的 `cd`。
-- 同步镜像窗口现在完整保留远程上下文：终端重连、远程目录操作、Agent/MCP、
+- 同步镜像窗口现在完整保留远程上下文：终端重连、远程目录操作、Agent/CLI、
   相对路径命令和“当前远程文件”均会把本地工作区/文件映射回对应远程位置；同时
   持久化单文件同步类型，避免重载后错误扩大其本地匹配范围。
 
@@ -665,29 +665,29 @@
 - 新增 **SAFS: 为我的Agent安装转发功能** 命令：与"复制 Streamable HTTP URL"
   相同的 Agent 名与平台选择流程，但复制到剪贴板的是一段安装提示词；
   把提示词粘贴到 Agent 输入框，由 Agent 自行注册名为 `safs` 的
-  Streamable HTTP MCP 服务器（用户级）。
+  Streamable HTTP CLI 服务器（用户级）。
 
 ## 1.5.6
 
-- Agent 焦点底栏改为两阶段文案：尚未收到 MCP 调用时提示
+- Agent 焦点底栏改为两阶段文案：尚未收到 CLI 调用时提示
   “当前窗口已作为Agent转发焦点，可以让它干活了 😏”；识别来源后显示
   如“当前窗口已作为Agent转发焦点，codex（wsl）正在干活 💪”。
 - 修复 Agent 来源状态在 VS Code 失焦时被清除：Agent 在桌面版或终端
   发起请求后，切回远程窗口会正确恢复 `codex（wsl）` 等具体来源；
-  只有转发停止或 MCP 不可用时才清除。
+  只有转发停止或 CLI 不可用时才清除。
 - Agent 焦点底栏改为独立 ID 的高优先级状态项，避免长文案因底栏
   空间不足被整项挤掉，并避免继承旧匿名 SAFS 项的隐藏偏好。
-- 固定 MCP URL 支持 `agent` 来源标签：自动注册为每个 Agent 写入
+- 固定 CLI URL 支持 `agent` 来源标签：自动注册为每个 Agent 写入
   各自的带标签 URL，并附加 `platform=wsl|mac|linux|win`；
   路由输出和远程命令日志记录 Agent 名与平台。
 - “SAFS：复制 Streamable HTTP URL”新增 Agent 名输入框，
   以及 wsl/mac/linux/win 平台选择，可为自动配置列表之外的
   Agent 生成带来源标签的 URL。
-- 当前远程窗口收到带来源标签的 Agent MCP 请求后，
+- 当前远程窗口收到带来源标签的 Agent CLI 请求后，
   VS Code 底部状态栏显示如“当前窗口已作为codex（wsl）转发焦点，
   可以让它干活了 😏”；
   窗口失去焦点或转发停止时恢复默认 SAFS 状态。
-- MCP 工作区元数据字段由 `remoteRoot` 更名为 `workspaceRoot`，
+- CLI 工作区元数据字段由 `remoteRoot` 更名为 `workspaceRoot`，
   明确表示 VS Code 当前打开目录，而非读取权限边界。
 - `remote_write` 的写入边界收紧到 `workspaceRoot` 及其子目录，
   并阻止通过符号链接越界；`remote_list`/`remote_search` 仍允许读取
@@ -695,12 +695,12 @@
 
 ## 1.5.5
 
-- MCP 工作区路由修正：`resolve_workspace_execution` 和
+- CLI 工作区路由修正：`resolve_workspace_execution` 和
   `list_remote_folders` 现在返回 VS Code 当前实际打开的远程子目录，
   `remote_list`、`remote_search` 和 `run_remote_command` 的默认相对路径/
   工作目录也与之一致；配置的挂载根仅保留为写入和命令的
   安全边界，避免 Agent 从大型挂载根开始扫描。
-- 窗口 MCP 将路径越界、高危命令拦截等业务错误作为结构化
+- 窗口 CLI 将路径越界、高危命令拦截等业务错误作为结构化
   `REMOTE_TOOL_ERROR` 透传，不再被固定路由器误报为远程不可用。
 - `remote_search` 新增 `matchCount`，无匹配时明确返回 `0`。
 
@@ -852,28 +852,28 @@
 
 ## 1.4.9
 
-- **移除 MCP 工具 `remote_read` 与 `read_current_remote_file`，远程文件内容不再返回
+- **移除 CLI 工具 `remote_read` 与 `read_current_remote_file`，远程文件内容不再返回
   Agent 上下文**：Agent 只需通过 `current_remote_file` 拿到当前打开文件的路径与元数据，
   需要查看内容时用 `run_remote_command` 在远程执行 `head`/`sed`/`grep`/`tail`/`wc`/
   `diff` 等命令按需查看，避免大文件内容被整段拉进模型上下文造成巨额 token 消耗。
   VS Code 内置 Agent 工具 `#safsRead`、`#safsReadCurrentRemoteFile` 同步移除；
-  `resolve_workspace_execution` 的 `fileTools` 与 MCP instructions 已更新，并新增
+  `resolve_workspace_execution` 的 `fileTools` 与 CLI instructions 已更新，并新增
   "文件内容永不返回会话" 的指令引导。
-- **移除冗余 MCP 工具 `current_remote_workspace` 并去掉 `list_remote_folders` 的
+- **移除冗余 CLI 工具 `current_remote_workspace` 并去掉 `list_remote_folders` 的
   强制加载**：`current_remote_workspace` 返回的数据与 `resolve_workspace_execution`
   完全重复，删除以减少工具定义与调用开销；`list_remote_folders` 不再标记
-  `alwaysLoad`，避免每轮请求都常驻其完整定义。精简了 MCP 工具描述以降低基础提示词
+  `alwaysLoad`，避免每轮请求都常驻其完整定义。精简了 CLI 工具描述以降低基础提示词
   体积。
 - **为 Agent 工具结果加上 token 限流与瘦身**：
   - `run_remote_command` 的 stdout+stderr 默认上限从 1 MiB 降至 64 KB（新设置
-    `safs.agentMcpMaxOutputBytes` 可调，范围 4 KB–1 MiB），超限截断并返回
+    `safs.agentBackendMaxOutputBytes` 可调，范围 4 KB–1 MiB），超限截断并返回
     `truncated: true`，单次 `head`/`cat`/`grep` 不再可能把几十万 token 灌进会话；
   - `remote_list` 新增 `limit` 入参，默认最多返回 500 条条目，超限返回
     `truncated: true` 与 `total`，`node_modules` 等巨型目录不再刷屏；
   - `remote_search` 结果收窄为最多 200 行、每行 300 字符，并跳过
     `node_modules`、`dist`、`build`、`.venv`、`__pycache__` 等依赖/构建/缓存目录
     （按目录名在任意层级匹配），minified 文件命中也不会撑爆上下文；
-  - 工具结果统一改为紧凑 JSON（去掉缩进空白，MCP 与 VS Code 内置 Agent 工具均生效），
+  - 工具结果统一改为紧凑 JSON（去掉缩进空白，CLI 与 VS Code 内置 Agent 工具均生效），
     结构化结果普遍节省 15–30% token；
   - `run_remote_command` 结果不再回显 `command`（Agent 自己刚发过，回显等于重复
     计费）；`current_remote_file` 去掉与 `path` 重复的 `uri`、`fileName` 字段；
@@ -889,27 +889,27 @@
   `resolveExecutable` 在 Windows 上改为经 `where.exe` 解析真实路径，
   `.cmd`/`.bat` shim 统一经 `cmd.exe /d /s /c` 执行（参数按 cmd 规则引用），
   `ssh.exe`、`wsl.exe` 等真实可执行文件仍直接 spawn，找不到命令时仍保留
-  ENOENT 语义。pi/dsh 走文件式 MCP 注册、不涉及 CLI spawn，不受影响。
+  ENOENT 语义。pi/dsh 走文件式 CLI 注册、不涉及 CLI spawn，不受影响。
   新增 `process.ts` 单元/回归测试（`windowsCommandInvocation`、
   `executeCaptured` 执行 `codex --version`）。
 
 ## 1.4.7
 
 - **Agent 转发新增"当前打开的远程文件"感知**：Agent 现在能知道并直接读取 VS Code
-  当前打开的远程文件。新增 MCP 工具 `current_remote_file`（返回当前打开文件的
+  当前打开的远程文件。新增 CLI 工具 `current_remote_file`（返回当前打开文件的
   绝对路径、相对挂载根路径、文件名、大小与是否有未保存修改）与
   `read_current_remote_file`（直接读取当前打开文件内容；编辑器有未保存修改时
   优先返回缓冲区内容 `source: "editor"`，否则经 SFTP 读取 `source: "sftp"`，
-  支持 offset/length 字节分片，单次上限 1 MiB）。窗口级 MCP 与固定 HTTP 路由器
+  支持 offset/length 字节分片，单次上限 1 MiB）。窗口级 CLI 与固定 HTTP 路由器
   均已注册，路由器按焦点窗口转发；无活动远程文件时返回 `null`。VS Code 内置
   Agent 同步新增 `#safsCurrentRemoteFile`、`#safsReadCurrentRemoteFile` 工具。
-  `resolve_workspace_execution` 的 `fileTools` 与 MCP instructions 已同步更新。
+  `resolve_workspace_execution` 的 `fileTools` 与 CLI instructions 已同步更新。
 
 ## 1.4.6
 
 - 修复 `safs.agentPlatform=wsl` 模式下 pi/dsh 注册失败：扩展宿主（VS Code 内置
   Node 20.x）对 `\\wsl.localhost\...` UNC 路径有主机白名单检查，直接 fs 读写抛
-  `UNC host 'wsl.localhost' access is not allowed`。pi 的 settings.json/mcp.json
+  `UNC host 'wsl.localhost' access is not allowed`。pi 的 settings.json/backend.json
   与 dsh 的 cordis.patch.yml 读写改为**经 `wsl.exe -d <发行版>` 在 Linux 侧完成**
   （读取走 `cat`，写入走 `mkdir -p` + base64 解码 + `chmod 600/700`），新增
   `src/wsl-file.ts` 桥接模块与测试；非 UNC 路径行为不变。
@@ -959,8 +959,8 @@
   如 `AF3/af3.bin.zst`），下载目录显示"根目录名 + 相对路径"，同名文件不再
   分不清。
 - 恢复 `safs.agentPlatform` 设置（**Agent 工作位置**：`auto` | `wsl`，默认
-  `auto`）：`wsl` 模式下 MCP 注册读写 WSL 家目录下的配置文件
-  （`~/.pi/agent/mcp.json`、`$DSH_HOME/cordis.patch.yml`），Agent CLI 通过
+  `auto`）：`wsl` 模式下 CLI 注册读写 WSL 家目录下的配置文件
+  （`~/.pi/agent/backend.json`、`$DSH_HOME/cordis.patch.yml`），Agent CLI 通过
   `wsl.exe` 在 WSL 内检测与执行；恢复 `src/agent-platform.ts` 与对应测试。
 
 ## 1.4.3
@@ -972,13 +972,13 @@
   ssh）不再无条件 `StrictHostKeyChecking=no`，改由 `safs.hostKeyChangedAction`
   驱动（`accept`→`no` / `prompt`→`accept-new` / `reject`→`yes`），默认值
   保持 `accept`（负载均衡 VIP 场景静默接受变化）。
-- MCP 路由器转发信任边界：禁止 3xx 重定向跳出 loopback、拒绝转发到路由器
+- CLI 路由器转发信任边界：禁止 3xx 重定向跳出 loopback、拒绝转发到路由器
   自身端口、带 `x-safs-forwarded` 标记的请求一律拒绝（防路由器间环）、发现
   记录时间戳双向校验（未来时间不再永不过期）。
 - 高危命令拦截补防：`$(...)`/反引号/`sh -c`/`eval` 内嵌内容解包后递归分析，
   补重定向截断（`> /etc/...`、`> /dev/sda` 等）、`tee`/`truncate`、
   `fsck`/`tune2fs` 规则。
-- 敏感文件权限统一 0600/0700（初始配置文件、pi MCP 配置、dsh patch 等）；
+- 敏感文件权限统一 0600/0700（初始配置文件、pi CLI 配置、dsh patch 等）；
   `encrypt_passwords` 缺省按 `true` 处理。
 - 主口令处理：单个主机密文损坏不再误删全局主口令；交互式终端环境不再注入
   `WSL_VPN_MASTER_PASSWORD`；新增统一脱敏（`src/redact.ts`），命令日志与
@@ -990,7 +990,7 @@
   下载覆盖前检测本地改动（不再覆盖下载期间的用户编辑）、file↔dir 类型互换
   先删后建、rename 目标越界校验、本地 watcher 引用计数共享、基线失败指数
   退避重试。指纹引擎抽为可单测的 `src/sync-diff.ts`。
-- 命令级超时：新设置 `safs.agentMcpTimeoutMs`（默认 120000ms，0 关闭），
+- 命令级超时：新设置 `safs.agentBackendTimeoutMs`（默认 120000ms，0 关闭），
   远程命令/搜索超时后中止执行，Agent 挂起时不再留下后台孤儿命令。
 - Windows 远程命令复用 ssh2 连接（会话池），消除每条命令重新握手；私钥
   每连接读取一次。
@@ -1000,21 +1000,21 @@
   自动使池中会话失效、重连并在新连接上重试一次（瞬时远端重置不再直接报错，
   如"无法创建 Agent cwd 占位目录：read ECONNRESET"）；`closeIdle` 回收前复核
   空闲状态，消除判断-关闭竞态。
-- `remote_read`（MCP）按字节范围读取，不再整文件下载后切片。
+- `remote_read`（CLI）按字节范围读取，不再整文件下载后切片。
 - 激活提速：WSL 依赖安装后台执行不阻塞窗口；工作区恢复逐挂载容错；心跳
   错误日志去重；`reuseSshConnection` 缺省语义统一。
 - 打开远程目录提速：Agent 转发探测结果缓存 60s + 探测并行 + 单项 15s 超时
   （不再每次打开都串行 spawn 全部 Agent CLI）；重复子目录校验复用内存缓存
   （减少 realpath/stat 往返）；终端打开时 OpenSSH 能力探测与凭据准备并行。
-- 修复 dsh MCP 注册被静默丢弃：`cordis.patch.yml` 是补丁方言，新增行必须用
-  `- insert:` 包裹；此前写入顶层 `- id: mcp-safs` 只会按 id 覆盖已有行（目标
-  不存在时警告后跳过），导致 dsh 从未加载 SAFS MCP。现在生成正确的
+- 修复 dsh CLI 注册被静默丢弃：`cordis.patch.yml` 是补丁方言，新增行必须用
+  `- insert:` 包裹；此前写入顶层 `- id: backend-safs` 只会按 id 覆盖已有行（目标
+  不存在时警告后跳过），导致 dsh 从未加载 SAFS CLI。现在生成正确的
   `- insert:` 块，并兼容旧格式的定位与替换。
 
 ## 1.4.2
 
 - Remove the `safs.agentPlatform` setting and the WSL agent-platform feature
-  introduced in 1.3.8: Agents always run on the extension's own platform — MCP
+  introduced in 1.3.8: Agents always run on the extension's own platform — CLI
   config files are read/written under the extension-process home
   (`os.homedir()`), and Agent CLIs are detected on the local `PATH` or inside
   the installed VS Code extension. Anyone who set `safs.agentPlatform=wsl`
@@ -1056,9 +1056,9 @@
 ## 1.3.8
 
 - New setting `safs.agentPlatform` (`auto` | `wsl`, default `auto`): lets the
-  Agents run in a different platform than the extension. With `wsl`, MCP
+  Agents run in a different platform than the extension. With `wsl`, CLI
   registration reads/writes the Agents' config files under the WSL home
-  (resolved via `wsl.exe wslpath -w "$HOME"`, e.g. `~/.pi/agent/mcp.json` and
+  (resolved via `wsl.exe wslpath -w "$HOME"`, e.g. `~/.pi/agent/backend.json` and
   `~/.dsh/cordis.patch.yml`), and Agent CLIs (`codex`/`claude`) are detected
   and executed through `wsl.exe` inside WSL instead of the extension-process
   PATH.
@@ -1067,13 +1067,13 @@
 
 - `safs.agentForwardingAgents` now defaults to `codex`, `claude`, `pi`, and
   `dsh`. `dsh` (DeepSeek Harness) is handled by a built-in file-based handler:
-  SAFS writes an `@deepseek-ai/dsh-mcp-client` plugin entry into
+  SAFS writes an `@deepseek-ai/dsh-backend-client` plugin entry into
   `$DSH_HOME/cordis.patch.yml` (default `~/.dsh/cordis.patch.yml`), which DSH
   hot-applies via its config HMR watch without a restart. Removing the
   forwarding entry cleans the patch back to its empty-root form while keeping
   user entries intact.
 - Handler operation logs now use the Agent's own CLI name instead of the
-  hardcoded `pi-mcp` prefix.
+  hardcoded `pi-backend` prefix.
 
 ## 1.3.6
 
@@ -1139,7 +1139,7 @@
 
 - Rename `SAFS: 切换远程目录` to `SAFS: 打开远程目录`: choosing a directory
   now opens it in a **new window** and keeps the current window open (each
-  window keeps its own directory and Agent-forwarding/MCP binding), instead
+  window keeps its own directory and Agent-forwarding/CLI binding), instead
   of replacing the current window.
 
 ## 1.3.0
@@ -1150,7 +1150,7 @@
 - Connection and Agent-forwarding states now show as ✓/✗ in the tree
   (details remain in the tooltip).
 - Enabling Agent forwarding shows a bottom-right progress notification while
-  the MCP servers are being registered on first use.
+  the CLI servers are being registered on first use.
 - Suppress OpenSSH 10+'s post-quantum KEX warning on legacy servers: an
   explicit capability-filtered `KexAlgorithms` list (PQ first, then modern,
   then legacy group exchange) is passed on the system `ssh` path and the WSL
@@ -1170,7 +1170,7 @@
 ## 1.2.7
 
 - Code review cleanup:
-  - Remove unused `defaultAgentMcpPort` export.
+  - Remove unused `defaultAgentBackendPort` export.
   - Remove unused `stripGatewayMotd` export (the incremental `MotdStripper`
     covers streaming channels).
   - Add `transport = 'sftp'` to `Ssh2SftpSession` for parity with the SCP
@@ -1225,8 +1225,8 @@
   falls back to a `mkdir`-based lock and a hand-built `\\wsl$\<distro>\...`
   path when `flock`/`wslpath` are missing. Fixes terminals failing to open
   with exit code 1 ("缺少命令 'flock'") on stripped-down WSL distros.
-- Fix Agent MCP registration spawning the bare CLI name instead of the
-  resolved binary: `run_agent_mcp_operation` now runs the resolved command
+- Fix Agent CLI registration spawning the bare CLI name instead of the
+  resolved binary: `run_agent_backend_operation` now runs the resolved command
   (PATH lookup or the VS Code extension's bundled CLI), so Claude Code with
   only the extension-installed binary works (previously `spawn claude
   ENOENT`).
@@ -1245,7 +1245,7 @@
   (OpenSSH 10+ removed DSA entirely). Affected old clients include macOS
   Big Sur/Catalina (OpenSSH 8.1) and older Linux distros; OpenSSH 10+ is
   used by macOS Tahoe. The bundled WSL bridge applies the same gating.
-- Keep Agent MCP tool paths in sync with the switched remote directory:
+- Keep Agent CLI tool paths in sync with the switched remote directory:
   `resolve_workspace_execution` / `current_remote_workspace` now report the
   currently open remote directory instead of the mount root, and relative
   paths in `remote_list` / `remote_read` / `remote_write` / `remote_search` /
@@ -1333,7 +1333,7 @@
   gateways running old OpenSSH without sftp-server, like 192.0.2.10), the
   extension now automatically falls back to an exec/SCP session on the same
   connection — reusing the authenticated ssh2 connection. The remote
-  folder, file tree, read/write/search and Agent MCP tools all keep working
+  folder, file tree, read/write/search and Agent CLI tools all keep working
   over the legacy SCP protocol plus shell commands (find/stat/mv/mkdir/rm).
   Verified end-to-end against a real sftp-less gateway.
 
@@ -1384,13 +1384,13 @@
   remote SSH terminal, switch the remote directory with path completion, and
   enable Agent Forwarding in the correct order (enable forwarding first, then
   open the remote folder so the Agent plugin in the new window discovers the
-  registered `safs` MCP).
+  registered `safs` CLI).
 - Document Agent requirements and verification: the Agent may be a VS Code
   extension or a desktop app but must run on the same OS platform as SAFS
-  (loopback-only `127.0.0.1` MCP); type `/mcp` in the Agent to confirm the
+  (loopback-only `127.0.0.1` CLI); type `/backend` in the Agent to confirm the
   `safs` entry, then opening the remote window binds the Agent conversation
   to it automatically via `resolve_workspace_execution`.
-- Document multiple remote windows: shared fixed HTTP MCP entry with Router
+- Document multiple remote windows: shared fixed HTTP CLI entry with Router
   Leader election, `mountName`-less calls bind to the focused, most recently
   updated window, and how to determine which remote a session is bound to
   (`resolve_workspace_execution`, `current_remote_workspace`,
@@ -1398,7 +1398,7 @@
 
 ## 1.1.0
 
-- Read-only MCP tools (`remote_list`, `remote_read`, `remote_search`) now accept paths outside the remote workspace root (e.g. `~/.bashrc`, `/etc/hosts`); they are served directly over SFTP. `remote_write` and `run_remote_command`'s cwd stay restricted to the workspace.
+- Read-only CLI tools (`remote_list`, `remote_read`, `remote_search`) now accept paths outside the remote workspace root (e.g. `~/.bashrc`, `/etc/hosts`); they are served directly over SFTP. `remote_write` and `run_remote_command`'s cwd stay restricted to the workspace.
 - Smart deletion analysis: `rm`, `find -delete`/`-exec rm`, and `xargs rm` are no longer blocked on sight. Only targets that are system-critical or of uncertain scope are flagged — `/`, system roots (`/etc`, `/usr`, `/bin`, ...), home dir (`~`, `$HOME`), wildcards, `.`/`..`, and `find` with no path or a dangerous root. Concrete safe directories (`rm -rf ./dist`, `find ./src -delete`, `rm -rf /tmp/build`) pass through.
 - Smart permission analysis for `chmod`/`chown`: mode/owner targets are checked the same way (`chmod -R 777 /etc`, `chmod -R a=rwx /`, `chown -R root:root /` blocked; `chmod -R 777 ./dist`, `chown -R app:app /opt/app/data` pass).
 - Close more bypasses: `\rm` backslash prefix, `sudoedit`, `iptables --flush`, `systemctl stop/disable firewalld|ufw|nftables`, `zfs destroy`, `sgdisk -Z`, `blkdiscard`, `grub2-install`, `chpasswd`, `gpasswd -a`, `adduser x sudo|wheel`, `usermod -aG sudo|wheel`, `mount` with `rw`/`remount` in either order, `echo o > /proc/sysrq-trigger`, `curl|wget ... | dash|python|perl`, and `dd` no longer flags harmless `of=/dev/zero|urandom|null`.
@@ -1406,19 +1406,19 @@
 
 ## 1.0.9
 
-- Pi support: `pi` in `safs.agentForwardingAgents` is now handled by a built-in file-based handler instead of being skipped. SAFS writes the unified MCP router URL to the `pi-mcp-extension` config file (`~/.pi/agent/mcp.json`) with `streamable-http` transport, so Pi can use SAFS remote tools (`mcp_safs_*`) without an `mcp` subcommand.
-  - Detects whether `pi-mcp-extension` is installed (checks both `~/.pi/agent/settings.json` and the `PI_CODING_AGENT_DIR` agent dir) and warns when it is missing.
+- Pi support: `pi` in `safs.agentForwardingAgents` is now handled by a built-in file-based handler instead of being skipped. SAFS writes the unified CLI router URL to the `pi-backend-extension` config file (`~/.pi/agent/backend.json`) with `streamable-http` transport, so Pi can use SAFS remote tools (`backend_safs_*`) without an `backend` subcommand.
+  - Detects whether `pi-backend-extension` is installed (checks both `~/.pi/agent/settings.json` and the `PI_CODING_AGENT_DIR` agent dir) and warns when it is missing.
   - Handler-based agents (pi) skip CLI detection entirely: registration no longer requires `pi` in PATH, so the Pendant VS Code extension's bundled runtime works without a standalone `pi` command.
-  - Refactor: all Agent MCP registration (types, built-in definitions, probing and add/get/remove dispatch) moved to a single `src/agent-mcp-registry.ts` module; `extension.ts` keeps only the orchestration. Codex and Claude behavior is unchanged.
+  - Refactor: all Agent CLI registration (types, built-in definitions, probing and add/get/remove dispatch) moved to a single `src/agent-backend-registry.ts` module; `extension.ts` keeps only the orchestration. Codex and Claude behavior is unchanged.
 
 ## 1.0.8
 
 - `safs.agentForwardingAgents` now uses real Agent CLI names (`codex`, `claude`; the old `claudeCode` value is still accepted for compatibility) and accepts any CLI name instead of a fixed enum.
-- Generic Agent support: the extension detects each configured Agent CLI, probes its `mcp` subcommand, and registers the unified `safs` MCP router automatically when supported. CLIs without an `mcp` subcommand (e.g. `pi`) are skipped and reported in the output panel with a warning notification.
+- Generic Agent support: the extension detects each configured Agent CLI, probes its `backend` subcommand, and registers the unified `safs` CLI router automatically when supported. CLIs without an `backend` subcommand (e.g. `pi`) are skipped and reported in the output panel with a warning notification.
 
 ## 1.0.7
 
-- Record every remote command executed through Agent MCP (and SAFS commands such as remote search and the command palette) as an append-only line under `~/.safs/mcp_logs/`, one per-day file.
+- Record every remote command executed through Agent CLI (and SAFS commands such as remote search and the command palette) as an append-only line under `~/.safs/backend_logs/`, one per-day file.
 - Intercept high-risk commands requested by Agents (destructive disk/delete operations and privilege escalation such as `sudo`/`su`/`setuid`), configurable via `safs.highRiskCommandPatterns`; default action denies them, `safs.highRiskCommandAction` can switch to per-command confirmation.
 
 ## 1.0.6
@@ -1448,13 +1448,13 @@
 - Add a command for switching to a remote subdirectory in the current SAFS window.
 - Use readable, filesystem-safe mount names for Agent cwd placeholders.
 - Preserve the switched remote directory when opening or restoring SSH terminals.
-- Add empty MCP resource and resource-template responses for Codex compatibility.
+- Add empty CLI resource and resource-template responses for Codex compatibility.
 
 ## 1.0.0
 
 - Initial SAFS release: **Serverless Agent Forwarding for SSH**.
 - Browse and edit remote folders through `safs://` SFTP virtual workspaces.
 - Open SSH terminals and execute Agent commands in the matching remote directory.
-- Forward Codex and Claude Code through the token-protected `safs` MCP router.
+- Forward Codex and Claude Code through the token-protected `safs` CLI router.
 - Support native Windows, macOS, Linux, and WSL execution without VS Code Server.
 - Store configuration and Agent discovery state under `~/.safs`.

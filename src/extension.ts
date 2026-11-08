@@ -20,7 +20,6 @@ import {
   NodeRuntimeUnavailableError, requireNodeRuntime, updateInstalledNodeCliSkills, NodeCliSkillTarget,
   nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion,
-  streamableHttpMcpInstallPrompt, streamableHttpMcpUninstallPrompt,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
 } from './cli/node-cli-install';
 import { searchCommand, RemoteSearchOptions } from './remote/remote-search';
@@ -46,29 +45,25 @@ import {
   agentHttpRouterPort, createPlatformAdapter, platformExtensionStateKey
 } from './platform/platform';
 import { executeCaptured, missingExecutableName } from './platform/process';
-import { SshTerminal } from './ssh/terminal';
+import { SshTerminal } from './ssh2/terminal';
 import {
   closeSshConnections, executeSshCommand, type SshCommandResult
-} from './ssh/command';
+} from './ssh2/command';
 import {
   configEntryOffset, passwordValueOffset
 } from './config/authentication';
-import { AgentMcpServer, AgentToolError } from './agent/agent-mcp';
+import { AgentBackendServer, AgentToolError } from './agent/agent-backend';
 import { writeWorkspaceId } from './agent/workspace-id';
-import { AgentHttpRouter, agentTaggedMcpUrl, workspaceIdFor } from './agent/agent-http-router';
+import { AgentHttpRouter, workspaceIdFor } from './agent/agent-http-router';
 import { AgentActivityStore } from './agent/agent-activity';
 import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent/agent-activity-view';
-import {
-  addRecordedMcpAgentName, normalizeAgentInterface, recordedMcpAgentNames,
-  shouldCopyMcpUninstallPrompt, type AgentInterface
-} from './agent/agent-interface';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent/agent-discovery';
 import {
   ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory,
   writeLastRemoteDirectory
 } from './agent/agent-cwd';
-import { connectSftp } from './sftp/client';
-import { SftpSession } from './sftp/session';
+import { connectSftp } from './ssh2/sftp-client';
+import { SftpSession } from './ssh2/session';
 import { writeStreamToFile, pipeStreams } from './transfer/stream-file';
 import {
   cleanupDownloadPart, commitDownloadPart, prepareDownloadResume
@@ -76,22 +71,22 @@ import {
 import { downloadRemoteDirectoryTree } from './transfer/remote-download';
 import { sameResumePrefix } from './transfer/resume-checksum';
 import { uploadRemoteTree } from './transfer/remote-upload';
-import { isConnectionError, SftpConnectionPool } from './sftp/connection-pool';
+import { isConnectionError, SftpConnectionPool } from './ssh2/connection-pool';
 import { RemoteSyncManager, RemoteSyncTask } from './sync/remote-sync';
 import { scanRemote } from './sync/sync-diff';
 import { SyncCoordinator } from './sync/sync-coordination';
 import {
   remotePathForUri, RemoteFolder, RemoteFolderRegistry, SftpFileSystemProvider,
   workspacePathForRemote, isWorkspaceUriPath
-} from './sftp/filesystem-provider';
+} from './ssh2/filesystem-provider';
 import {
   isRemotePathInsideRoot, mountAuthorityAlias, parseRemoteUri, remoteFileSystemScheme, remoteUri,
   RemoteUriLocation, setMountAliasResolver
-} from './sftp/uri';
+} from './ssh2/uri';
 import { setWslBundlePath } from './platform/wsl-bridge';
 import { setRemoteShellIntegrationBundlePath } from './terminal/remote-shell-integration';
 import { setKnownHostsFilePath } from './security/host-key';
-import { appendMcpCommandLog, appendMcpToolLog } from './agent/mcp-log';
+import { appendBackendCommandLog, appendBackendToolLog } from './agent/operation-log';
 import {
   validateLocalDownloadTarget, validateLocalUploadSource
 } from './transfer/local-transfer-path';
@@ -101,8 +96,8 @@ import {
 } from './remote/remote-edit';
 import { shellQuote } from './shared/shell-quote';
 import {
-  evaluateMcpCommandPolicy, readMcpCommandPolicySettings
-} from './security/mcp-command-policy';
+  evaluateBackendCommandPolicy, readBackendCommandPolicySettings
+} from './security/command-policy';
 import { remoteCommandBoundaryViolation } from './security/remote-command-boundary';
 import { testLoopbackProxy } from './platform/proxy-diagnostic';
 import { remoteConnectionShortcutHint, remoteShortcutKeys } from './ui/shortcut-hint';
@@ -128,7 +123,7 @@ const platformStateKey = (name: string): string =>
   platformExtensionStateKey(name, platformAdapter.kind);
 const terminalIdentityEnv = 'SERVERLESS_REMOTE_TERMINAL_ID';
 const masterPasswordSecret = 'safs.masterPassword';
-const agentMcpTokenSecret = platformStateKey('agentMcpToken');
+const agentBackendTokenSecret = platformStateKey('agentBackendToken');
 const aiForwardMountsKey = platformStateKey('aiForwardMounts');
 const directoryHistoryKey = platformStateKey('directoryHistory');
 /** 旧配置名 → 当前配置名：配置改名后已保存的窗口/标签页 URI 仍然能打开。 */
@@ -137,11 +132,9 @@ const mountRenames = new Map<string, string>();
 /** 已安装用户级 SAFS CLI 的平台与安装路径；用于跳过平台未变且文件尚在时的重复刷新。 */
 const cliInstallKey = platformStateKey('cliInstall');
 const agentForwardingHintKey = platformStateKey('agentForwardingHintV1');
-const mcpInstalledAgentsKey = platformStateKey('mcpInstalledAgentsV1');
 const gitPushReceiptsKey = platformStateKey('gitPushReceiptsV1');
 /** Serialize all mount toggles so only the first globally enabled mount installs integration. */
 let aiForwardUpdate: Promise<void> = Promise.resolve();
-const mcpUninstallPrompts = new UiOperationGate();
 const defaultConfigPath = '~/.safs/config.json';
 const openConfigAction = 'Open Config';
 const addHostAccountAction = '添加主机账号';
@@ -159,8 +152,8 @@ const terminalAutoReconnectStableMs = 60_000;
 
 let output: vscode.OutputChannel;
 let bridgeOutput: vscode.LogOutputChannel | undefined;
-let mcp: AgentMcpServer | undefined;
-let mcpBoundMountName: string | undefined;
+let backend: AgentBackendServer | undefined;
+let backendBoundMountName: string | undefined;
 let httpRouter: AgentHttpRouter | undefined;
 let httpRouterCreation: Promise<AgentHttpRouter> | undefined;
 let httpRouterStart: Promise<AgentHttpRouter> | undefined;
@@ -367,15 +360,8 @@ function logAsyncFailure(label: string, error: unknown): void {
   bridgeOutput?.error(`[${label}] ${redactSensitiveText(detail)}`);
 }
 
-function logMcpMessage(component: string, message: string): void {
-  const line = `[${component}] ${message}`;
-  if (message.startsWith('收到 MCP 请求：tools/call')) {
-    bridgeOutput?.info(line);
-  } else if (message.startsWith('收到 MCP 请求：')) {
-    bridgeOutput?.debug(line);
-  } else {
-    bridgeOutput?.info(line);
-  }
+function logBackendMessage(component: string, message: string): void {
+  bridgeOutput?.info(`[${component}] ${message}`);
 }
 
 function configPath(): string {
@@ -512,23 +498,13 @@ async function selectMount(placeHolder: string): Promise<MountConfig | undefined
   return picked?.mount;
 }
 
-function agentInterface(): AgentInterface {
-  return normalizeAgentInterface(settings().get<unknown>('agentInterface', 'cli'));
-}
+function agentInterface(): 'cli' { return 'cli'; }
 
 function cliEnabled(): boolean { return agentInterface() === 'cli'; }
 
-function selectedMcpToolProfile(): 'full' | 'core' {
-  return settings().get<'full' | 'core'>('agentMcpToolProfile', 'full');
-}
+function routerOperationProfile(): 'full' { return 'full'; }
 
-function routerMcpToolProfile(): 'full' | 'core' {
-  return agentInterface() === 'cli' ? 'full' : selectedMcpToolProfile();
-}
-
-// The window server is an internal execution backend for both public MCP and CLI.
-// Keep every operation registered here; only the stable router trims Agent-visible schemas.
-function backendMcpToolProfile(): 'full' | 'terminal' {
+function windowOperationProfile(): 'full' | 'terminal' {
   return activeAgentCommandTerminal() ? 'terminal' : 'full';
 }
 
@@ -998,7 +974,7 @@ async function cloneGitRepository(): Promise<void> {
 }
 
 async function promptRemoteDirectory(
-  session: import('./sftp/session').SftpSession,
+  session: import('./ssh2/session').SftpSession,
   remoteRoot: string,
   currentPath: string,
   title: string
@@ -1035,7 +1011,7 @@ const directoryPickerContextKey = 'safs.directoryPickerVisible';
 
 interface DirectoryPickerState {
   picker: vscode.QuickPick<vscode.QuickPickItem>;
-  session: import('./sftp/session').SftpSession;
+  session: import('./ssh2/session').SftpSession;
   remoteRoot: string;
   currentPath: string;
 }
@@ -2164,7 +2140,7 @@ async function activityForwardingState(): Promise<AgentTerminalTargetState> {
         return { ...state, availability: 'error', detail: 'CLI 连接配置需要更新', recoveryLabel: '修复 CLI' };
       }
     }
-    if (!mcp?.running || mcp.portUnavailable || mcpBoundMountName !== mountName) {
+    if (!backend?.running || backend.portUnavailable || backendBoundMountName !== mountName) {
       throw new Error('当前窗口的转发服务尚未就绪');
     }
     if (!httpRouter || !await httpRouter.healthy()) throw new Error('本地转发连接不可用');
@@ -2198,7 +2174,7 @@ async function recoverActivityForwarding(): Promise<void> {
     }
     await ensureFolder(mount);
     startAgentHttpRouterLeadership(vscodeContext);
-    await ensureAgentMcpServer(vscodeContext);
+    await ensureAgentBackendServer(vscodeContext);
     await publishAgentWorkspace(vscodeContext);
   } catch (error) {
     forwardingRecoveryError = { mountName, message: redactSensitiveText(error instanceof Error ? error.message : String(error)) };
@@ -2302,7 +2278,7 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
   if (!refreshingSelectedTerminal) {
     const confirmed = await vscode.window.showWarningMessage(
       `Agent 命令将显示在“${terminal.name}”中，并继承该终端当前的用户权限和环境。` +
-        '开启后 MCP 只保留一个终端命令工具，CLI 只放行 safs exec；所有 SAFS 文件、搜索和传输操作都会关闭。',
+        '开启后 CLI 只放行 safs exec；所有 SAFS 文件、搜索和传输操作都会关闭。',
       { modal: true },
       '切换到终端模式'
     );
@@ -2352,7 +2328,7 @@ async function prepareOpenedTerminalForAgent(
   if (!forwarding) return;
   startAgentHttpRouterLeadership(vscodeContext);
   await ensureAgentHttpRouter(vscodeContext);
-  const server = await ensureAgentMcpServer(vscodeContext);
+  const server = await ensureAgentBackendServer(vscodeContext);
   if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
 }
 
@@ -2517,7 +2493,7 @@ async function executeWithAgentCommandTerminal(
 }
 
 async function executeTerminalOnlyCommand(input: {
-  command: string; mountName: string; agentName?: string; source?: 'mcp' | 'cli';
+  command: string; mountName: string; agentName?: string; source?: 'cli';
 }): Promise<Record<string, unknown>> {
   if (!input.command?.trim()) throw new Error('Remote command must not be empty.');
   const terminal = agentCommandTerminal;
@@ -2543,20 +2519,20 @@ async function executeTerminalOnlyCommand(input: {
   }
   const responseBudget = Math.max(
     4096,
-    Math.min(1024 * 1024, settings().get<number>('agentMcpMaxOutputBytes', 8192))
+    Math.min(1024 * 1024, settings().get<number>('agentBackendMaxOutputBytes', 8192))
   );
-  const source = input.source ?? 'mcp';
-  const policy = evaluateMcpCommandPolicy(
-    input.command, source, readMcpCommandPolicySettings(settings())
+  const source = input.source ?? 'cli';
+  const policy = evaluateBackendCommandPolicy(
+    input.command, source, readBackendCommandPolicySettings(settings())
   );
-  appendMcpCommandLog({
+  appendBackendCommandLog({
     source: policy.auditSource,
     agentName: input.agentName,
     mountName: info.mount.name,
     remoteCwd: terminalCwd,
     command: input.command
   }).catch((error) => bridgeOutput?.appendLine(
-    `[MCP 命令日志] 写入失败：${error instanceof Error ? error.message : String(error)}`
+    `[CLI 命令日志] 写入失败：${error instanceof Error ? error.message : String(error)}`
   ));
   if (!policy.allowed) {
     throw new Error(
@@ -2564,7 +2540,7 @@ async function executeTerminalOnlyCommand(input: {
     );
   }
   const controller = new AbortController();
-  const commandTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+  const commandTimeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
   let timedOut = false;
   const timeout = commandTimeoutMs > 0 ? setTimeout(() => {
     timedOut = true;
@@ -2868,9 +2844,9 @@ async function disconnect(requested?: MountConfig): Promise<void> {
   refreshSafsEntryLabel();
 
   // Keep the Agent-forwarding preference so reconnecting this mount can
-  // restore Agent access through the stable MCP router.
+  // restore Agent access through the stable CLI router.
   // Only the explicit toggle command clears the preference.
-  await mcp?.stop();
+  await backend?.stop();
   await agentWorkspacePublisher.remove();
 }
 
@@ -3246,7 +3222,7 @@ function requireConfiguredHostLogin(host: HostConfig): void {
   }
 }
 
-// ---- MCP / Remote Ops ----
+// ---- CLI / Remote Ops ----
 
 async function mountAndFolder(mountName: string): Promise<{
   mount: MountConfig;
@@ -3261,7 +3237,7 @@ async function mountAndFolder(mountName: string): Promise<{
 function windowBoundMountName(boundMountName: string, requested?: string): string {
   if (requested && requested !== boundMountName) {
     throw new Error(
-      `This MCP backend is bound to mount "${boundMountName}" and cannot access "${requested}".`
+      `This CLI backend is bound to mount "${boundMountName}" and cannot access "${requested}".`
     );
   }
   return boundMountName;
@@ -3617,7 +3593,7 @@ async function executeRemoteCommand(
   context: vscode.ExtensionContext,
   input: {
     command: string; mountName: string; remoteCwd?: string; source?: string; agentName?: string;
-    captureForMcp?: boolean;
+    captureForBackend?: boolean;
   },
   token?: vscode.CancellationToken
 ): Promise<Record<string, unknown>> {
@@ -3643,20 +3619,20 @@ async function executeRemoteCommand(
   // 避免单次 head/cat/grep 把几十万 token 灌进会话。
   const responseBudget = Math.max(
     4096,
-    Math.min(1024 * 1024, settings().get<number>('agentMcpMaxOutputBytes', 8192))
+    Math.min(1024 * 1024, settings().get<number>('agentBackendMaxOutputBytes', 8192))
   );
-  const source = input.source ?? 'mcp';
-  const retainOutput = input.captureForMcp === true;
+  const source = input.source ?? 'cli';
+  const retainOutput = input.captureForBackend === true;
   const maxOutputBytes = retainOutput ? 16 * 1024 * 1024 : responseBudget;
   const logFailure = (error: unknown): void => {
     bridgeOutput?.appendLine(
-      `[MCP 命令日志] 写入失败：${error instanceof Error ? error.message : String(error)}`
+      `[CLI 命令日志] 写入失败：${error instanceof Error ? error.message : String(error)}`
     );
   };
-  const policy = evaluateMcpCommandPolicy(
-    input.command, source, readMcpCommandPolicySettings(settings())
+  const policy = evaluateBackendCommandPolicy(
+    input.command, source, readBackendCommandPolicySettings(settings())
   );
-  appendMcpCommandLog({
+  appendBackendCommandLog({
     source: policy.auditSource,
     agentName: input.agentName,
     mountName: mount.name,
@@ -3705,7 +3681,7 @@ async function executeRemoteCommand(
     }
     const controller = new AbortController();
     const cancellation = token?.onCancellationRequested(() => controller.abort());
-    const commandTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+    const commandTimeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
     let timedOut = false;
     const timeout = commandTimeoutMs > 0
       ? setTimeout(() => {
@@ -3749,8 +3725,8 @@ async function executeRemoteCommand(
     const controller = new AbortController();
     const cancellation = token?.onCancellationRequested(() => controller.abort());
     // 命令级超时：Agent 挂起时中止远端执行，避免命令在后台无限运行。
-    // 与路由器的 forwardTimeoutMs 同源（safs.agentMcpTimeoutMs），保持一致。
-    const commandTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+    // 与路由器的 forwardTimeoutMs 同源（safs.agentBackendTimeoutMs），保持一致。
+    const commandTimeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
     let timedOut = false;
     const timeout = commandTimeoutMs > 0
       ? setTimeout(() => {
@@ -4069,7 +4045,7 @@ async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pr
 }
 
 async function remoteSearch(input: RemoteSearchOptions & {
-  mountName: string; agentName?: string; captureForMcp?: boolean;
+  mountName: string; agentName?: string; captureForBackend?: boolean;
 }, token?: vscode.CancellationToken): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const requestedPath = resolveRemotePath(folder, input.path);
@@ -4080,7 +4056,7 @@ async function remoteSearch(input: RemoteSearchOptions & {
     remoteCwd: currentWorkspacePath(folder),
     source: 'remote_search',
     agentName: input.agentName,
-    captureForMcp: input.captureForMcp,
+    captureForBackend: input.captureForBackend,
     command: search.command
   }, token);
   const { remoteCwd: _remoteCwd, ...publicResult } = result;
@@ -4147,7 +4123,7 @@ async function searchRemoteDirectory(resource?: vscode.Uri): Promise<void> {
     mode: 'names',
     ignoreCase: true,
     maxResults: 500,
-    captureForMcp: true
+    captureForBackend: true
   }, token)) as Record<string, unknown>;
 
   if (result.status === 'error'
@@ -5013,7 +4989,7 @@ async function deleteConfigItem(
 
 // ---- AI Agent Forwarding (aligned with main) ----
 
-async function forwardedFolders(context: vscode.ExtensionContext): Promise<import('./agent/agent-mcp').RemoteFolderInfo[]> {
+async function forwardedFolders(context: vscode.ExtensionContext): Promise<import('./agent/agent-backend').RemoteFolderInfo[]> {
   const config = await readConfig();
   const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
   const current = currentRemoteLocation();
@@ -5034,22 +5010,22 @@ async function forwardedFolders(context: vscode.ExtensionContext): Promise<impor
   );
 }
 
-async function agentMcpToken(context: vscode.ExtensionContext): Promise<string> {
-  let token = await context.secrets.get(agentMcpTokenSecret);
+async function agentBackendToken(context: vscode.ExtensionContext): Promise<string> {
+  let token = await context.secrets.get(agentBackendTokenSecret);
   if (!token) {
     token = randomBytes(24).toString('hex');
-    await context.secrets.store(agentMcpTokenSecret, token);
+    await context.secrets.store(agentBackendTokenSecret, token);
   }
   return token;
 }
 
-function auditMcpTool(entry: {
+function auditBackendTool(entry: {
   toolName: string; input: Record<string, unknown>;
   agentName?: string;
 }): void {
-  void appendMcpToolLog(entry).catch((error) => {
+  void appendBackendToolLog(entry).catch((error) => {
     bridgeOutput?.appendLine(
-      `[MCP 工具日志] 写入失败：${error instanceof Error ? error.message : String(error)}`
+      `[CLI 工具日志] 写入失败：${error instanceof Error ? error.message : String(error)}`
     );
   });
 }
@@ -5063,12 +5039,12 @@ async function ensureAgentHttpRouter(
       httpRouterCreation = (async () => {
         const router = new AgentHttpRouter(
           agentHttpRouterPort(platformAdapter.kind, settings().get<number>('agentHttpRouterPort', 0)),
-          await agentMcpToken(context),
+          await agentBackendToken(context),
           {
-            log: (message) => logMcpMessage('Agent HTTP Router', message),
-            audit: auditMcpTool,
-            forwardTimeoutMs: settings().get<number>('agentMcpTimeoutMs', 120_000),
-            toolProfile: routerMcpToolProfile
+            log: (message) => logBackendMessage('Agent HTTP Router', message),
+            audit: auditBackendTool,
+            forwardTimeoutMs: settings().get<number>('agentBackendTimeoutMs', 120_000),
+            toolProfile: routerOperationProfile
           }
         );
         httpRouter = router;
@@ -5109,7 +5085,7 @@ function startAgentHttpRouterLeadership(context: vscode.ExtensionContext): void 
       ? `${message}\n请将 safs.agentHttpRouterPort 改为其他可用端口，然后重新加载 VS Code 窗口。`
       : message;
     void vscode.window.showErrorMessage(
-      'SAFS 无法启动 HTTP MCP 路由器',
+      'SAFS 无法启动 HTTP CLI 路由器',
       { modal: true, detail },
       '打开端口设置'
     ).then((selected) => {
@@ -5144,26 +5120,26 @@ async function stopAgentHttpRouterLeadership(): Promise<void> {
   await httpRouter?.stop();
 }
 
-async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<AgentMcpServer> {
+async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promise<AgentBackendServer> {
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const selectedTerminal = activeAgentCommandTerminal();
   const terminalInfo = selectedTerminal ? managedRemoteTerminals.get(selectedTerminal) : undefined;
   const boundMountName = location?.mountName ?? terminalInfo?.mount.name;
   if (!boundMountName) throw new Error('当前窗口不是 Serverless Remote 工作区');
-  if (mcp && mcpBoundMountName !== boundMountName) {
+  if (backend && backendBoundMountName !== boundMountName) {
     await agentWorkspacePublisher.remove();
-    await mcp.stop();
-    mcp = undefined;
-    mcpBoundMountName = undefined;
+    await backend.stop();
+    backend = undefined;
+    backendBoundMountName = undefined;
   }
-  if (!mcp) {
-    const token = await agentMcpToken(context);
-    agentTrace('MCP', `创建窗口级 MCP，绑定挂载 ${boundMountName}`);
-    mcp = new AgentMcpServer(
-      settings().get<number>('agentMcpPort', 0),
+  if (!backend) {
+    const token = await agentBackendToken(context);
+    agentTrace('CLI', `创建窗口级 CLI，绑定挂载 ${boundMountName}`);
+    backend = new AgentBackendServer(
+      settings().get<number>('agentBackendPort', 0),
       token,
       {
-        toolProfile: backendMcpToolProfile,
+        toolProfile: windowOperationProfile,
         listFolders: async () => (await forwardedFolders(context)).filter(
           (folder) => folder.name === boundMountName
         ),
@@ -5237,7 +5213,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
             session, realWorkspaceRoot, requestedTarget
           );
           const sources = localPaths.map((localPath) => vscode.Uri.file(localPath));
-          const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+          const timeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
           return {
             completed: await visualUpload(
               sources, mountName, remoteDirectory, realWorkspaceRoot, timeoutMs
@@ -5265,7 +5241,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
             );
           }
           const uri = vscode.Uri.parse(remoteUri(mountName, resolved.path));
-          const timeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+          const timeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
           return {
             completed: await visualDownload(uri, localPath, timeoutMs, stagingRoot),
             remotePath: resolved.path,
@@ -5294,10 +5270,10 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
           fail: (id, error) => agentActivityStore.fail(id, error)
         },
         search: async (input) => remoteSearch({
-          ...input, captureForMcp: true, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
+          ...input, captureForBackend: true, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         run: async (input) => executeRemoteCommand(context, {
-          ...input, captureForMcp: true, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
+          ...input, captureForBackend: true, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         runTerminal: async (input) => executeTerminalOnlyCommand({
           command: input.command,
@@ -5308,19 +5284,19 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
         request: () => {
           refreshSafsEntryLabel();
         },
-        audit: auditMcpTool,
-        log: (message) => logMcpMessage('Agent MCP', message)
+        audit: auditBackendTool,
+        log: (message) => logBackendMessage('Agent CLI', message)
       }
     );
-    mcpBoundMountName = boundMountName;
-    context.subscriptions.push({ dispose: () => void mcp?.stop() });
+    backendBoundMountName = boundMountName;
+    context.subscriptions.push({ dispose: () => void backend?.stop() });
   }
-  agentTrace('MCP', `启动窗口级 MCP，configuredPort=${settings().get<number>('agentMcpPort', 0)}`);
-  await mcp.start();
-  agentTrace('MCP', mcp.portUnavailable
-    ? 'MCP 启动失败：端口不可用'
-    : `MCP 已运行，port=${new URL(mcp.url).port}`);
-  return mcp;
+  agentTrace('CLI', `启动窗口级 CLI，configuredPort=${settings().get<number>('agentBackendPort', 0)}`);
+  await backend.start();
+  agentTrace('CLI', backend.portUnavailable
+    ? 'CLI 启动失败：端口不可用'
+    : `CLI 已运行，port=${new URL(backend.url).port}`);
+  return backend;
 }
 
 async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<void> {
@@ -5330,16 +5306,16 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     : undefined;
   const mountName = location?.mountName ?? terminalInfo?.mount.name;
   const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
-  if (mountName && enabled.has(mountName) && mcpBoundMountName !== mountName) {
-    await ensureAgentMcpServer(context);
+  if (mountName && enabled.has(mountName) && backendBoundMountName !== mountName) {
+    await ensureAgentBackendServer(context);
   }
-  if (!mountName || !enabled.has(mountName) || !mcp?.running || mcp.portUnavailable) {
+  if (!mountName || !enabled.has(mountName) || !backend?.running || backend.portUnavailable) {
     refreshSafsEntryLabel();
-    if (mountName && !enabled.has(mountName)) await mcp?.stop();
+    if (mountName && !enabled.has(mountName)) await backend?.stop();
     await agentWorkspacePublisher.remove();
     const reason = !mountName ? '非远程工作区'
       : !enabled.has(mountName) ? `挂载 ${mountName} 未启用 Agent 转发`
-        : !mcp?.running ? 'MCP 未运行' : 'MCP 端口不可用';
+        : !backend?.running ? 'CLI 未运行' : 'CLI 端口不可用';
     if (lastAgentDiscoveryState !== `removed:${reason}`) {
       lastAgentDiscoveryState = `removed:${reason}`;
       agentTrace('Discovery', `未发布工作区记录：${reason}`);
@@ -5382,16 +5358,16 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     host: mount.host,
     hostName: config.host_aliases?.[resolveMount(config, mount).hostConfig.ip] ?? resolveMount(config, mount).hostConfig.ip,
     user: resolveMount(config, mount).hostConfig.user,
-    mcpUrl: mcp.url,
+    backendUrl: backend.url,
     ...(terminalCommandOnly ? { terminalCommandOnly: true } : {})
   });
   refreshSafsEntryLabel();
-  const state = `published:${mount.name}:${workspacePath}:${mcp.url}:${vscode.window.state.focused}:${terminalCommandOnly}`;
+  const state = `published:${mount.name}:${workspacePath}:${backend.url}:${vscode.window.state.focused}:${terminalCommandOnly}`;
   if (lastAgentDiscoveryState !== state) {
     lastAgentDiscoveryState = state;
     agentTrace(
       'Discovery',
-      `已发布挂载 ${mount.name}，focused=${vscode.window.state.focused}，port=${new URL(mcp.url).port}`
+      `已发布挂载 ${mount.name}，focused=${vscode.window.state.focused}，port=${new URL(backend.url).port}`
     );
   }
 }
@@ -5527,7 +5503,7 @@ async function configureGlobalCliConnection(
 ): Promise<void> {
   const agentHome = os.homedir();
   const cliPlatform = process.platform;
-  const forwardingTimeoutMs = settings().get<number>('agentMcpTimeoutMs', 120_000);
+  const forwardingTimeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
   const cliTimeoutMs = forwardingTimeoutMs > 0 ? forwardingTimeoutMs + 5_000 : 0;
   await writeCliConnectionFile(
     nodeCliConnectionPath(executable), routerUrl, cliTimeoutMs
@@ -5616,80 +5592,6 @@ async function configureAgentInterface(
   return { cliExecutable: executable };
 }
 
-async function askAgentName(title: string): Promise<string | undefined> {
-  const agentName = await vscode.window.showInputBox({
-    title,
-    prompt: '请输入使用 SAFS 转发的 Agent 名 （已安装按Esc跳过）',
-    placeHolder: '例如：Codex、Claude、MyAgent',
-    ignoreFocusOut: true,
-    validateInput: (value) => !value.trim()
-      ? '请输入 Agent 名'
-      : value.trim().length > 100
-        ? 'Agent 名最多 100 个字符'
-        : /[\u0000-\u001f\u007f]/.test(value)
-          ? 'Agent 名不能包含控制字符'
-          : undefined
-  });
-  if (agentName === undefined) return undefined;
-  return agentName.trim();
-}
-
-function installedMcpAgentNames(context: vscode.ExtensionContext): string[] {
-  return recordedMcpAgentNames(context.globalState.get<unknown>(mcpInstalledAgentsKey));
-}
-
-async function recordInstalledMcpAgent(
-  context: vscode.ExtensionContext, agentName: string
-): Promise<void> {
-  await context.globalState.update(
-    mcpInstalledAgentsKey,
-    addRecordedMcpAgentName(installedMcpAgentNames(context), agentName)
-  );
-}
-
-function copyMcpUninstallPromptAndNotify(
-  context: vscode.ExtensionContext
-): Promise<void> {
-  return mcpUninstallPrompts.run('mcpUninstallPrompt', async () => {
-    await vscode.env.clipboard.writeText(streamableHttpMcpUninstallPrompt());
-    const agents = installedMcpAgentNames(context);
-    const action = await vscode.window.showInformationMessage(
-      'SAFS：MCP 卸载提示已复制。',
-      {
-        modal: true,
-        detail: agents.length > 0
-          ? `请分别粘贴到以下 Agent 执行：${agents.join('、')}`
-          : '未记录具体 Agent；请粘贴到此前安装过 SAFS MCP 的 Agent 执行。'
-      },
-      '已全部卸载'
-    );
-    if (action === '已全部卸载') {
-      await context.globalState.update(mcpInstalledAgentsKey, []);
-    }
-  });
-}
-
-async function installAgentForwardingIntegration(
-  context: vscode.ExtensionContext, cliExecutable?: string,
-  copyMcpUninstallPrompt = false
-): Promise<void> {
-  if (agentInterface() === 'cli') {
-    if (!copyMcpUninstallPrompt) return;
-    if (!cliExecutable) throw new Error('SAFS CLI 尚未安装');
-    await copyMcpUninstallPromptAndNotify(context);
-    return;
-  }
-  const agentName = await askAgentName('SAFS：为我的Agent安装转发功能');
-  if (!agentName) return;
-  const router = await ensureAgentHttpRouter(context);
-  const url = agentTaggedMcpUrl(router.url, agentName);
-  await vscode.env.clipboard.writeText(streamableHttpMcpInstallPrompt(url));
-  await recordInstalledMcpAgent(context, agentName);
-  void vscode.window.showInformationMessage(
-    'SAFS：安装提示词已复制，请粘贴到 Agent。'
-  );
-}
-
 async function updateAiForwardEnabled(
   mount: MountConfig, enabledValue: boolean
 ): Promise<void> {
@@ -5730,8 +5632,8 @@ async function updateAiForwardEnabled(
       : undefined;
     const activeMountName = current?.mountName ?? terminalInfo?.mount.name;
     if (!enabledValue && activeMountName === mount.name) {
-      agentTrace('Preference', `当前窗口绑定 ${mount.name}，正在停止 MCP 并移除发现记录`);
-      await mcp?.stop();
+      agentTrace('Preference', `当前窗口绑定 ${mount.name}，正在停止 CLI 并移除发现记录`);
+      await backend?.stop();
       await agentWorkspacePublisher.remove();
     }
     if (enabledValue) {
@@ -5740,7 +5642,7 @@ async function updateAiForwardEnabled(
       startAgentHttpRouterLeadership(vscodeContext);
       await ensureAgentHttpRouter(vscodeContext);
       if (activeMountName === mount.name) {
-        const server = await ensureAgentMcpServer(vscodeContext);
+        const server = await ensureAgentBackendServer(vscodeContext);
         if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
       }
     } else if (enabled.size === 0) {
@@ -5758,9 +5660,7 @@ async function updateAiForwardEnabled(
     if (cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${cliExecutable}`);
     }
-    // MCP needs an Agent-side registration prompt. CLI installation is already
-    // complete above; its MCP removal prompt is reserved for an MCP -> CLI switch.
-    await installAgentForwardingIntegration(vscodeContext, cliExecutable);
+
     notifyAgentForwardingEnabled(mount);
     return;
   }
@@ -6166,37 +6066,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await renameHostGroup(group as HostGroupItem);
     tree.refresh();
   });
-  command('copyStreamableHttpUrl', async () => {
-    const agentName = await askAgentName('SAFS：复制 Streamable HTTP URL');
-    if (!agentName) return;
-    startAgentHttpRouterLeadership(context);
-    const router = await ensureAgentHttpRouter(context);
-    const url = agentTaggedMcpUrl(router.url, agentName);
-    await vscode.env.clipboard.writeText(url);
-    void vscode.window.showInformationMessage('SAFS：URL 已复制。');
-  });
   command('installAgentForwarding', async () => {
-    // This explicit command prepares the selected interface. MCP mode still
-    // needs its install prompt; CLI mode installs locally without assuming that
-    // an Agent-side MCP entry previously existed.
     startAgentHttpRouterLeadership(context);
     const result = await configureAgentInterface(context);
     if (result.cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${result.cliExecutable}`);
     }
-    await installAgentForwardingIntegration(context, result.cliExecutable);
+
   });
   command('uninstallAgentForwarding', async () => {
-    if (agentInterface() === 'cli') {
-      const removed = await uninstallGlobalCli(context);
-      bridgeOutput?.info(`[Agent CLI] 已移除全局 CLI 和 Agent Skill：${removed}`);
-      void vscode.window.showInformationMessage(
-        'SAFS：CLI 和 Skill 已移除。'
-      );
-      return;
-    }
-    // 与安装对称：复制一段提示词让 Agent 自己删除名为 safs 的用户级 MCP。
-    await copyMcpUninstallPromptAndNotify(context);
+    const removed = await uninstallGlobalCli(context);
+    bridgeOutput?.info(`[Agent CLI] 已移除全局 CLI 和 Agent Skill：${removed}`);
+    void vscode.window.showInformationMessage('SAFS：CLI 和 Skill 已移除。');
   });
   command('refreshExplorer', async () => {
     const config = await readConfig();
@@ -6348,7 +6229,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       const result = await executeRemoteCommand(context, {
         command, mountName: location.mountName, remoteCwd,
-        source: 'remote_git', captureForMcp: true
+        source: 'remote_git', captureForBackend: true
       });
       return {
         exitCode: typeof result.exitCode === 'number' ? result.exitCode : null,
@@ -6444,37 +6325,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshShellTerminalTarget(terminal))
   );
 
-  // MCP and CLI are mutually exclusive. Only explicit mode changes prompt the
-  // user to remove the Agent-side registration; startup repair stays silent.
-  let previousAgentInterface = agentInterface();
-  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
-    if (!event.affectsConfiguration('safs.agentInterface')) return;
-    const currentAgentInterface = agentInterface();
-    if (currentAgentInterface === previousAgentInterface) return;
-    const copyMcpUninstallPrompt = shouldCopyMcpUninstallPrompt(
-      previousAgentInterface, currentAgentInterface, vscode.window.state.focused
-    );
-    const copyMcpInstallPrompt = currentAgentInterface === 'mcp' && vscode.window.state.focused;
-    previousAgentInterface = currentAgentInterface;
-    void guard(async () => {
-      await refreshAgentCommandTerminalState();
-      startAgentHttpRouterLeadership(context);
-      const result = await configureAgentInterface(context);
-      if (agentInterface() !== currentAgentInterface) return;
-      if (result.cliExecutable) {
-        bridgeOutput?.info(`[Agent CLI] 接口准备完成：${result.cliExecutable}`);
-        if (copyMcpUninstallPrompt) {
-          await installAgentForwardingIntegration(context, result.cliExecutable, true);
-        }
-      } else if (copyMcpInstallPrompt) {
-        await uiOperations.run('installAgentForwarding', () =>
-          installAgentForwardingIntegration(context)
-        );
-      }
-      await refreshAgentCommandTerminalState();
-    });
-  }));
-  // Agent MCP: keep one in-extension fixed HTTP router alive, then start the
+  // Agent CLI: keep one in-extension fixed HTTP router alive, then start the
   // dynamic backend only in an enabled remote window.
   await guard(async () => {
     const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
@@ -6512,12 +6363,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         tree.refresh();
       }
       agentTrace('Activate', `${agentInterface()} 模式已启用，已检查现有 CLI；首次安装需打开 Agent 转发`);
-    } else {
-      agentTrace('Activate', 'MCP 模式已启用，移除互斥的 CLI 和 Agent Skill');
-      await uninstallGlobalCli(context);
     }
     if (enabled.size > 0) {
-      agentTrace('Activate', '启动或连接固定 HTTP MCP 路由器');
+      agentTrace('Activate', '启动或连接固定 HTTP CLI 路由器');
       startAgentHttpRouterLeadership(context);
       const router = await ensureAgentHttpRouter(context);
       if (cliEnabled()) {
@@ -6526,11 +6374,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
       }
       if (current && enabled.has(current.mountName)) {
-        agentTrace('Activate', `挂载 ${current.mountName} 已启用，启动窗口动态 MCP 后端`);
+        agentTrace('Activate', `挂载 ${current.mountName} 已启用，启动窗口动态 CLI 后端`);
         const config = await readConfig();
         const mount = config.mounts.find((candidate) => candidate.name === current.mountName);
         if (mount) await prepareAgentCwd(mount);
-        const server = await ensureAgentMcpServer(context);
+        const server = await ensureAgentBackendServer(context);
         if (!server.portUnavailable) {
           await publishAgentWorkspace(context);
         }
@@ -6546,7 +6394,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export async function deactivate(): Promise<void> {
-  agentTrace('Deactivate', '扩展停用，清理发现记录、MCP 和连接池');
+  agentTrace('Deactivate', '扩展停用，清理发现记录、CLI 和连接池');
   agentCommandTerminal = undefined;
   agentCommandTerminalCwd = undefined;
   const discoveryCleanup = agentWorkspacePublisher.stop();
@@ -6555,7 +6403,7 @@ export async function deactivate(): Promise<void> {
   if (agentWorkspaceHeartbeat) clearInterval(agentWorkspaceHeartbeat);
   if (agentHttpRouterHeartbeat) clearInterval(agentHttpRouterHeartbeat);
   await discoveryCleanup;
-  await mcp?.stop();
+  await backend?.stop();
   await httpRouterStart?.catch(() => undefined);
   await httpRouter?.stop();
   await pool?.close();

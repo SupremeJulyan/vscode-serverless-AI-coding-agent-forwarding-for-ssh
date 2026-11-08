@@ -4,36 +4,36 @@ import { createHash } from 'node:crypto';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { redactSensitiveText } from '../security/redact';
 
-export interface McpCommandLogEntry {
+export interface BackendCommandLogEntry {
   source: string;
-  /** URL 中由 MCP 注册方声明的来源标签，仅用于日志/诊断。 */
+  /** URL 中由 CLI 注册方声明的来源标签，仅用于日志/诊断。 */
   agentName?: string;
   mountName: string;
   remoteCwd: string;
   command: string;
 }
 
-export interface McpToolLogEntry {
+export interface BackendToolLogEntry {
   toolName: string;
   agentName?: string;
   input?: Record<string, unknown>;
 }
 
-export function mcpLogDirectory(homeDirectory = os.homedir()): string {
-  return path.join(homeDirectory, '.safs', 'mcp_logs');
+export function backendLogDirectory(homeDirectory = os.homedir()): string {
+  return path.join(homeDirectory, '.safs', 'backend_logs');
 }
 
-export function mcpLogFilePath(
-  directory = mcpLogDirectory(), now = new Date()
+export function backendLogFilePath(
+  directory = backendLogDirectory(), now = new Date()
 ): string {
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
-  return path.join(directory, `mcp-${year}-${month}-${day}.log`);
+  return path.join(directory, `backend-${year}-${month}-${day}.log`);
 }
 
-export function formatMcpCommandLogLine(
-  entry: McpCommandLogEntry, now = new Date()
+export function formatBackendCommandLogLine(
+  entry: BackendCommandLogEntry, now = new Date()
 ): string {
   const agent = entry.agentName?.trim().slice(0, 100)
     .replace(/[\]\r\n\t]/g, '_');
@@ -45,14 +45,14 @@ export function formatMcpCommandLogLine(
   return `${now.toISOString()} [${entry.source}]${agent ? ` [agent=${agent}]` : ''} [mount=${entry.mountName}] [cwd=${entry.remoteCwd}] command=${command} command_bytes=${commandBytes} command_sha256=${commandSha256}`;
 }
 
-export async function appendMcpCommandLog(
-  entry: McpCommandLogEntry,
-  directory = mcpLogDirectory(),
+export async function appendBackendCommandLog(
+  entry: BackendCommandLogEntry,
+  directory = backendLogDirectory(),
   now = new Date()
 ): Promise<string> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const filePath = mcpLogFilePath(directory, now);
-  await appendFile(filePath, `${formatMcpCommandLogLine(entry, now)}\n`, {
+  const filePath = backendLogFilePath(directory, now);
+  await appendFile(filePath, `${formatBackendCommandLogLine(entry, now)}\n`, {
     encoding: 'utf8',
     mode: 0o600
   });
@@ -92,18 +92,18 @@ function safeToolInput(toolName: string, input: Record<string, unknown> = {}): s
   return JSON.stringify(summary);
 }
 
-export function formatMcpToolLogLine(entry: McpToolLogEntry, now = new Date()): string {
+export function formatBackendToolLogLine(entry: BackendToolLogEntry, now = new Date()): string {
   const agent = entry.agentName?.trim().slice(0, 100).replace(/[\]\r\n\t]/g, '_');
   const tool = entry.toolName.trim().replace(/[^a-z0-9_.-]/gi, '_').slice(0, 100);
   return `${now.toISOString()} [tool=${tool || 'unknown'}]${agent ? ` [agent=${agent}]` : ' [agent=unknown]'} args=${safeToolInput(tool, entry.input)}`;
 }
 
-export async function appendMcpToolLog(
-  entry: McpToolLogEntry, directory = mcpLogDirectory(), now = new Date()
+export async function appendBackendToolLog(
+  entry: BackendToolLogEntry, directory = backendLogDirectory(), now = new Date()
 ): Promise<string> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const filePath = mcpLogFilePath(directory, now);
-  await appendFile(filePath, `${formatMcpToolLogLine(entry, now)}\n`, {
+  const filePath = backendLogFilePath(directory, now);
+  await appendFile(filePath, `${formatBackendToolLogLine(entry, now)}\n`, {
     encoding: 'utf8', mode: 0o600
   });
   return filePath;

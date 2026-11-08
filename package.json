@@ -1,7 +1,7 @@
 {
   "name": "safs-serverless-agent-forwarding",
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
-  "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via MCP or CLI without installing VS Code/Agent Server on the remote host.",
+  "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
   "version": "2.1.4",
   "publisher": "julyan",
@@ -21,7 +21,6 @@
     "sftp",
     "remote",
     "agent",
-    "mcp",
     "wsl",
     "serverless"
   ],
@@ -827,11 +826,11 @@
           "default": 600,
           "description": "Idle SFTP connection lifetime in seconds before the pool recycles it (0 disables recycling)."
         },
-        "safs.agentMcpTimeoutMs": {
+        "safs.agentBackendTimeoutMs": {
           "type": "number",
           "minimum": 0,
           "default": 120000,
-          "description": "Unified timeout for Agent MCP forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
+          "description": "Unified timeout for Agent CLI forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
         },
         "safs.git.operationTimeoutMs": {
           "type": "number",
@@ -840,12 +839,12 @@
           "scope": "machine",
           "description": "Timeout for SAFS Git push, pull, and fetch relay operations (milliseconds). 0 disables the timeout."
         },
-        "safs.agentMcpMaxOutputBytes": {
+        "safs.agentBackendMaxOutputBytes": {
           "type": "number",
           "minimum": 4096,
           "maximum": 1048576,
           "default": 8192,
-          "description": "Command/search preview byte budget (MCP previews cap at 65536). MCP retains up to 16 MiB per execution for remote_output continuation, within a 32 MiB window cache for up to 10 minutes. retentionTruncated marks incomplete capture."
+          "description": "Command/search preview byte budget (CLI previews cap at 65536). CLI retains up to 16 MiB per execution for remote_output continuation, within a 32 MiB window cache for up to 10 minutes. retentionTruncated marks incomplete capture."
         },
         "safs.highRiskCommandPatterns": {
           "type": "array",
@@ -967,7 +966,6 @@
   },
   "scripts": {
     "vscode:uninstall": "node ./scripts/uninstall.js",
-    "benchmark:mcp": "tsx build/mcp-efficiency.ts",
     "check-types": "tsx build/sync-high-risk-defaults.ts --check && tsc --noEmit",
     "sync-manifest-defaults": "tsx build/sync-high-risk-defaults.ts",
     "compile": "npm run check-types && node esbuild.js",
@@ -988,11 +986,9 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^5.2.1",
     "jsonc-parser": "^3.3.1",
     "shell-quote": "1.8.3",
-    "ssh2": "^1.17.0",
-    "zod": "^4.4.3"
+    "ssh2": "^1.17.0"
   }
 }

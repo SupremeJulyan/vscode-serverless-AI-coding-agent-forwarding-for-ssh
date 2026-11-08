@@ -51,7 +51,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
   assert.deepEqual(
     manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.enum,
-    ['mcp', 'cli']
+    ['backend', 'cli']
   );
 });
 
@@ -223,9 +223,9 @@ test('packages Agent integration without the legacy JS stdio router or Codex plu
     new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8'
   );
   const vscodeIgnore = await readFile(new URL('../.vscodeignore', import.meta.url), 'utf8');
-  assert.equal(extensionSource.includes('mcp-router.cjs'), false);
+  assert.equal(extensionSource.includes('backend-router.cjs'), false);
   assert.equal(extensionSource.includes("'--', 'node'"), false);
-  assert.equal(nodeCliSource.includes('mcp-bridge'), false);
+  assert.equal(nodeCliSource.includes('backend-bridge'), false);
   assert.equal(/^bin\/\*\*$/m.test(vscodeIgnore), true);
   assert.equal(nodeCliIntegrationSource.includes('releases/download'), false);
   assert.ok(nodeCliIntegrationSource.includes('Node.js CLI'));
@@ -253,8 +253,8 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   assert.ok(extensionSource.includes('installedVersion !== extensionVersion'));
   assert.equal(extensionSource.includes('configureDetectedAgents'), false);
   assert.equal(extensionSource.includes('recordObservedAgentSource'), false);
-  assert.equal(extensionSource.includes('runAgentMcpOperation'), false);
-  await assert.rejects(access(new URL('../src/agent/agent-mcp-registry.ts', import.meta.url)));
+  assert.equal(extensionSource.includes('runAgentBackendOperation'), false);
+  await assert.rejects(access(new URL('../src/agent/agent-backend-registry.ts', import.meta.url)));
 });
 
 test('the history view keeps refresh and remote actions without duplicate editing actions', async () => {
@@ -344,18 +344,18 @@ test('packages session-only remote shell integration scripts', async () => {
   }
 });
 
-test('SAFS MCP is opt-in for remote context instead of mandatory in every workspace', async () => {
-  const direct = await readFile(new URL('../src/agent/agent-mcp.ts', import.meta.url), 'utf8');
+test('SAFS CLI is opt-in for remote context instead of mandatory in every workspace', async () => {
+  const direct = await readFile(new URL('../src/agent/agent-backend.ts', import.meta.url), 'utf8');
   const router = await readFile(new URL('../src/agent/agent-http-router.ts', import.meta.url), 'utf8');
-  const tools = await readFile(new URL('../src/agent/agent-mcp-tools.ts', import.meta.url), 'utf8');
+  const tools = await readFile(new URL('../src/agent/agent-backend-tools.ts', import.meta.url), 'utf8');
   assert.equal(tools.includes('anthropic/alwaysLoad'), false);
   assert.equal(tools.includes('At the start of every conversation'), false);
   assert.equal(tools.includes('Before reading files, editing, searching'), false);
   assert.ok(tools.includes('Do not call SAFS tools for ordinary local workspaces'));
   assert.ok(tools.includes('Use only for explicit SAFS tasks or known safs:// context'));
   assert.ok(tools.includes("'list_remote_workspaces'"));
-  assert.ok(direct.includes('registerAgentMcpTools'));
-  assert.ok(router.includes('registerAgentMcpTools'));
+  assert.ok(direct.includes('registerAgentBackendTools'));
+  assert.ok(router.includes('registerAgentBackendTools'));
   assert.equal(direct.includes('safs_list_remote_workspaces'), false);
   assert.equal(router.includes('safs_list_remote_workspaces'), false);
   assert.equal(direct.includes('safs_select_remote_workspace'), false);
@@ -417,7 +417,7 @@ test('uses only the unified cross-platform config path', async () => {
     0
   );
   assert.equal(
-    manifest.contributes?.configuration?.properties?.['safs.agentMcpTimeoutMs']
+    manifest.contributes?.configuration?.properties?.['safs.agentBackendTimeoutMs']
       ?.default,
     120000
   );
@@ -448,7 +448,7 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.ok(extensionSource.includes(
     'await installAgentForwardingIntegration(context, result.cliExecutable, true)'
   ));
-  assert.match(extensionSource, /shouldCopyMcpUninstallPrompt\(\s*previousAgentInterface, currentAgentInterface, vscode\.window\.state\.focused\s*\)/);
+  assert.match(extensionSource, /shouldCopyBackendUninstallPrompt\(\s*previousAgentInterface, currentAgentInterface, vscode\.window\.state\.focused\s*\)/);
   assert.ok(extensionSource.includes('enabledValue && enabled.size === 0'));
   assert.ok(extensionSource.includes('if (!shouldInstallIntegration)'));
   assert.ok(extensionSource.includes('首次安装需打开 Agent 转发'));
@@ -475,16 +475,16 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.ok(extensionSource.includes("command('uninstallAgentForwarding'"));
   assert.ok(extensionSource.includes('await uninstallGlobalCli(context)'));
   assert.ok(extensionSource.includes("['install', '--skills', '-g']"));
-  assert.ok(extensionSource.includes('streamableHttpMcpUninstallPrompt()'));
-  assert.ok(extensionSource.includes('MCP 卸载提示已复制'));
-  assert.ok(extensionSource.includes('mcpInstalledAgentsV1'));
+  assert.ok(extensionSource.includes('streamableHttpBackendUninstallPrompt()'));
+  assert.ok(extensionSource.includes('CLI 卸载提示已复制'));
+  assert.ok(extensionSource.includes('backendInstalledAgentsV1'));
   assert.ok(extensionSource.includes("action === '已全部卸载'"));
-  assert.ok(extensionSource.includes('streamableHttpMcpInstallPrompt'));
+  assert.ok(extensionSource.includes('streamableHttpBackendInstallPrompt'));
   assert.equal(extensionSource.includes('legacyAgentInterfaceMigrationTarget'), false);
   assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
   assert.ok(extensionSource.includes('检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。'));
   const nodeCliSource = await readFile(new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8');
-  assert.ok(nodeCliSource.includes('user-level Streamable HTTP MCP'));
+  assert.ok(nodeCliSource.includes('user-level Streamable HTTP CLI'));
   assert.equal(nodeCliSource.includes('switch the proxy to rule-based mode'), false);
 });
 
@@ -520,12 +520,12 @@ test('handles high-risk Agent commands without per-command prompts', async () =>
 
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const policySource = await readFile(
-    new URL('../src/security/mcp-command-policy.ts', import.meta.url), 'utf8'
+    new URL('../src/security/command-policy.ts', import.meta.url), 'utf8'
   );
   assert.equal(extensionSource.includes('SAFS：确认高风险远程 Shell 操作'), false);
   assert.equal(extensionSource.includes('允许本次执行'), false);
   assert.ok(policySource.includes("configuredAction === 'allow' ? 'allow' : 'deny'"));
-  assert.ok(extensionSource.includes('evaluateMcpCommandPolicy'));
+  assert.ok(extensionSource.includes('evaluateBackendCommandPolicy'));
 });
 
 test('manifest high-risk defaults are generated from the runtime rule set', async () => {

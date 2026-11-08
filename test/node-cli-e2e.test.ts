@@ -4,7 +4,7 @@ import test from 'node:test';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AgentMcpServer, AgentToolError } from '../src/agent/agent-mcp';
+import { AgentBackendServer, AgentToolError } from '../src/agent/agent-backend';
 import { AgentHttpRouter, workspaceIdFor } from '../src/agent/agent-http-router';
 import { cliConfigPath, writeCliConnection } from '../src/cli/cli-integration';
 import { executeCaptured as capture } from '../src/platform/process';
@@ -76,7 +76,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
   let currentFileReads = 0;
   const operations: string[] = [];
   const activity: Array<{ phase: string; agentName?: string; source?: string }> = [];
-  const backend = new AgentMcpServer(0, 'node-test', {
+  const backend = new AgentBackendServer(0, 'node-test', {
     currentWorkspace: async () => ({
       name: 'dev', host: 'dev', workspaceRoot: '/project', workspaceUri: 'safs://dev/project'
     }),
@@ -126,7 +126,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
   const router = new AgentHttpRouter(await freePort(), 'native-router', {
     discover: () => [{
       instanceId: 'node-window', workspaceRoot: '/project',
-      workspaceUri: 'safs://dev/project', host: 'dev', focused: true, mcpUrl: backend.url
+      workspaceUri: 'safs://dev/project', host: 'dev', focused: true, backendUrl: backend.url
     } as any]
   });
   await router.start();
@@ -291,7 +291,7 @@ test('Node.js CLI applies the connection-file request timeout', async () => {
   try {
     const config = cliConfigPath(temporary);
     await writeCliConnection(
-      temporary, `http://127.0.0.1:${address.port}/mcp?token=secret`, 50
+      temporary, `http://127.0.0.1:${address.port}/backend?token=secret`, 50
     );
     const started = Date.now();
     const result = await executeCaptured({ command: executable, args: [
@@ -361,7 +361,7 @@ test('Node.js CLI preserves HTTP rejection details and redacts the token', async
   try {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); assert.ok(address && typeof address !== 'string');
-    await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/mcp?token=secret-test-token`);
+    await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/backend?token=secret-test-token`);
     const result = await executeCaptured({ command: developmentNodeCli(), args: [
       '--config', cliConfigPath(temporary), 'workspaces'
     ] });
@@ -388,7 +388,7 @@ test('Node.js CLI batch permits the combined operation budget', async () => {
   try {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); assert.ok(address && typeof address !== 'string');
-    await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/mcp?token=secret`, 100);
+    await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/backend?token=secret`, 100);
     const result = await executeCaptured({ command: developmentNodeCli(), args: [
       '--config', cliConfigPath(temporary), 'batch', '--workspace', 'selected', '--input',
       JSON.stringify({ operations: [

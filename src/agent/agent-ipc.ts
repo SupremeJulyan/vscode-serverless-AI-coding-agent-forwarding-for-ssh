@@ -13,7 +13,7 @@ export function ipcPath(key: string): string {
     : join(tmpdir(), `safs-${id}.sock`);
 }
 export function ipcUrl(socket: string): string {
-  return `http://localhost/mcp?socket=${encodeURIComponent(socket)}`;
+  return `http://localhost/operations?socket=${encodeURIComponent(socket)}`;
 }
 export function ipcFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
   const url = new URL(input);

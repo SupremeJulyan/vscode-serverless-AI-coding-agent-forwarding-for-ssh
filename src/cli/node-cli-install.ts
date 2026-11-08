@@ -36,12 +36,6 @@ export function nodeCliConnectionPath(executable: string): string {
   return path.join(path.dirname(executable), '.safs-connection.json');
 }
 
-export function streamableHttpMcpInstallPrompt(url: string): string {
-  return [
-    `Install a user-level Streamable HTTP MCP server named "safs" with this URL: ${url}`,
-    'After installation, tell me to restart the Agent.'
-  ].join('\n');
-}
 
 export type NodeCliSkillTarget = 'agents' | 'claude' | 'codex' | 'copilot';
 
@@ -74,12 +68,6 @@ export async function removeGlobalNodeCliSkill(
   return directory;
 }
 
-export function streamableHttpMcpUninstallPrompt(): string {
-  return [
-    'Uninstall the user-level MCP server named "safs" that you previously installed. Remove only that MCP entry and do not change any other configuration or Agent.',
-    'When finished, tell me it was removed, then tell me to restart the Agent and start a new conversation to confirm that SAFS tools are no longer loaded.'
-  ].join('\n');
-}
 
 /**
  * Build the PowerShell invocation that adds the installed CLI directory to the

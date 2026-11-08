@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { isRemotePathInsideRoot } from '../sftp/uri';
+import { isRemotePathInsideRoot } from '../ssh2/uri';
 
 export interface RemoteCommandBoundaryViolation {
   kind: 'working-directory' | 'write-target';

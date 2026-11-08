@@ -1,13 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import { Writable } from 'node:stream';
-import { Client, ConnectConfig, FileEntryWithStats, HostVerifier, SFTPWrapper, Stats } from 'ssh2';
-import * as vscode from 'vscode';
-import { expandHome, HostConfig } from '../config/config';
-import { keyboardInteractivePasswordReplies } from '../config/authentication';
-import { defaultSshClientIdent, serverHostKeyAlgorithms } from '../ssh/algorithms';
-import { detectPlatform } from '../platform/platform';
-import { hostVerifierFor } from '../security/host-key';
-import { acquireWslVpnRelay } from '../ssh/vpn-relay';
+import { Client, FileEntryWithStats, SFTPWrapper, Stats } from 'ssh2';
+import { HostConfig } from '../config/config';
+import { acquireSsh2Connection, Ssh2ConnectionLease } from './shared-connection';
 import { ScpSession } from './scp-session';
 import {
   SftpDirectoryEntry, SftpFileStat, SftpFileType, SftpSession, SftpWriteOptions
@@ -90,19 +84,17 @@ const sftpControlTimeoutMs = 60_000;
 export class Ssh2SftpSession implements SftpSession {
   readonly transport = 'sftp' as const;
   private alive = true;
+  private readonly disconnected = () => { this.alive = false; };
 
   constructor(
     readonly hostName: string,
     private readonly client: Client,
     private readonly sftp: SFTPWrapper,
-    private readonly releaseRelay?: () => Promise<void>
+    private readonly releaseConnection: () => void
   ) {
-    const disconnected = () => {
-      this.alive = false;
-    };
-    this.client.on('close', disconnected);
-    this.client.on('end', disconnected);
-    this.client.on('error', disconnected);
+    this.client.on('close', this.disconnected);
+    this.client.on('end', this.disconnected);
+    this.client.on('error', this.disconnected);
   }
 
   isAlive(): boolean {
@@ -383,9 +375,11 @@ export class Ssh2SftpSession implements SftpSession {
 
   async close(): Promise<void> {
     this.alive = false;
+    this.client.removeListener('close', this.disconnected);
+    this.client.removeListener('end', this.disconnected);
+    this.client.removeListener('error', this.disconnected);
     this.sftp.end();
-    this.client.end();
-    await this.releaseRelay?.();
+    this.releaseConnection();
   }
 }
 
@@ -410,56 +404,29 @@ export function isRetryableSsh2ConnectionError(error: unknown): boolean {
 
 async function connectSftpSsh2(
   host: HostConfig,
-  useWslVpnRelay = false,
   signal?: AbortSignal,
-  clientIdent = defaultSshClientIdent,
-  hostVerifier?: HostVerifier,
   onSftpFallback?: (reason: string) => void
 ): Promise<SftpSession> {
   if (signal?.aborted) throw abortError();
-  const relay = useWslVpnRelay && host.vpn ? await acquireWslVpnRelay(host) : undefined;
-  let relayReleased = false;
-  const releaseRelay = async () => {
-    if (relayReleased) return;
-    relayReleased = true;
-    await relay?.release();
-  };
-  if (signal?.aborted) {
-    await releaseRelay();
-    throw abortError();
-  }
-  const config: ConnectConfig = {
-    host: relay?.host ?? host.ip,
-    port: relay?.port ?? host.port ?? 22,
-    username: host.user,
-    password: host.password,
-    tryKeyboard: true,
-    ident: clientIdent,
-    algorithms: { serverHostKey: serverHostKeyAlgorithms },
-    keepaliveInterval: 15_000,
-    keepaliveCountMax: 3,
-    readyTimeout: 30_000,
-    // SFTP 是文件数据路径：接入与终端一致的 TOFU 主机密钥校验
-    // （hostKeyChangedAction 设置），不再无校验直连。
-    ...(hostVerifier ? { hostVerifier } : {})
-  };
-  if (host.private_key_path) {
-    config.privateKey = await readFile(expandHome(host.private_key_path));
-  }
   // Gateways and load balancers can intermittently drop the first SSH
   // handshake (especially after an idle period). Retry transient failures with
   // a fresh ssh2 Client; keep authentication and host-key failures visible.
   let attempt = 0;
   while (true) {
     try {
-      return await attemptConnect(host, config, releaseRelay, signal, onSftpFallback);
+      const lease = await acquireSsh2Connection(host, host.password);
+      try {
+        return await attemptConnect(host, lease, signal, onSftpFallback);
+      } catch (error) {
+        lease.release();
+        throw error;
+      }
     } catch (error) {
       if (signal?.aborted) throw error;
       // Gateways that reset the first connection often need a short window to
       // release the failed backend. Three immediate retries are frequently
       // all served by that same unhealthy slot, so use a bounded backoff.
       if (!isRetryableSsh2ConnectionError(error) || attempt >= 4) {
-        await releaseRelay();
         throw error;
       }
       attempt++;
@@ -476,22 +443,18 @@ export async function connectSftp(
 ): Promise<SftpSession> {
   return connectSftpSsh2(
     host,
-    detectPlatform() === 'wsl',
     signal,
-    vscode.workspace.getConfiguration('safs').get<string>('sshClientIdent', defaultSshClientIdent),
-    hostVerifierFor(host),
     onSftpFallback
   );
 }
 
 function attemptConnect(
   host: HostConfig,
-  config: ConnectConfig,
-  releaseRelay: () => Promise<void>,
+  lease: Ssh2ConnectionLease,
   signal?: AbortSignal,
   onSftpFallback?: (reason: string) => void
 ): Promise<SftpSession> {
-  const client = new Client();
+  const client = lease.client;
   return new Promise<SftpSession>((resolve, reject) => {
     let settled = false;
     let fallbackResolved = false;
@@ -500,14 +463,13 @@ function attemptConnect(
       if (sftpOpenTimer) clearTimeout(sftpOpenTimer);
       sftpOpenTimer = undefined;
       signal?.removeEventListener('abort', abort);
-      client.removeListener('ready', ready);
       client.removeListener('error', failed);
     };
     const finishError = (error: Error) => {
       if (settled) return;
       settled = true;
       cleanup();
-      client.end();
+      lease.release();
       reject(error);
     };
     const failed = (error: Error) => finishError(error);
@@ -520,7 +482,7 @@ function attemptConnect(
         cleanup();
         const reason = `SSH 已认证，但服务器未响应 SFTP 子系统请求（${sftpOpenTimeoutMs}ms 超时）`;
         onSftpFallback?.(reason);
-        resolve(new ScpSession(host.name, client, releaseRelay));
+        resolve(new ScpSession(host.name, client, lease.release));
       }, sftpOpenTimeoutMs);
       sftpOpenTimer.unref?.();
       client.sftp((error, sftp) => {
@@ -541,14 +503,14 @@ function attemptConnect(
           if (sftpUnusablePattern.test(error.message)) {
             if (settled) {
               sftp?.end();
-              if (!fallbackResolved) client.end();
+              if (!fallbackResolved) lease.release();
               return;
             }
             settled = true;
             fallbackResolved = true;
             cleanup();
             onSftpFallback?.(`${error.message}${probeDetail}`);
-            resolve(new ScpSession(host.name, client, releaseRelay));
+            resolve(new ScpSession(host.name, client, lease.release));
             return;
           }
           finishError(error);
@@ -556,30 +518,18 @@ function attemptConnect(
         }
         if (settled) {
           sftp.end();
-          if (!fallbackResolved) client.end();
+          if (!fallbackResolved) lease.release();
           return;
         }
         settled = true;
         cleanup();
-        resolve(new Ssh2SftpSession(host.name, client, sftp, releaseRelay));
+        resolve(new Ssh2SftpSession(host.name, client, sftp, lease.release));
       });
     };
     signal?.addEventListener('abort', abort, { once: true });
-    // Some servers (e.g. NSG/company gateways) only accept
-    // keyboard-interactive auth; answer their prompts with the configured
-    // password just like the terminal path does.
-    client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
-      const replies = host.password
-        ? keyboardInteractivePasswordReplies(prompts, host.password)
-        : undefined;
-      finish(replies ?? []);
-    });
-    client.once('ready', ready);
     client.once('error', failed);
-    try {
-      client.connect(config);
-    } catch (error) {
-      finishError(error instanceof Error ? error : new Error(String(error)));
-    }
+    // The shared connection lease is already authenticated. ssh2 emits ready
+    // only once, so request the file channel directly instead of reconnecting.
+    ready();
   });
 }

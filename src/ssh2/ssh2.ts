@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
-import { Client, ClientChannel, ConnectConfig } from 'ssh2';
+import { Client, ClientChannel } from 'ssh2';
 import * as vscode from 'vscode';
-import { expandHome, HostConfig } from '../config/config';
-import { hostVerifierFor } from '../security/host-key';
-import { keyboardInteractivePasswordReplies } from '../config/authentication';
-import { defaultSshClientIdent, serverHostKeyAlgorithms } from './algorithms';
+import { HostConfig } from '../config/config';
+import {
+  acquireSsh2Connection, closeSharedSsh2Connections, Ssh2ConnectionLease,
+  ssh2ConnectionKey
+} from './shared-connection';
 import {
   loadRemoteShellIntegrationScripts, normalizeRemoteShellPath,
   RemoteCwdOscTracker, remoteIntegratedLoginCommand, remoteShellProbeCommand
@@ -18,27 +18,6 @@ import { CommandOutputMarkerStripper } from '../terminal/command-output-marker';
 import {
   TerminalCommandOutputCapture, terminalForwardingCommand
 } from '../terminal/terminal-command-forwarding';
-
-async function connectConfig(
-  host: HostConfig, password?: string, log?: (message: string) => void
-): Promise<ConnectConfig> {
-  return {
-    host: host.ip,
-    port: host.port ?? 22,
-    username: host.user,
-    ...(password ? { password, tryKeyboard: true } : {}),
-    ...(host.private_key_path
-      ? { privateKey: await readFile(expandHome(host.private_key_path)) }
-      : {}),
-    ident: vscode.workspace.getConfiguration('safs')
-      .get<string>('sshClientIdent', defaultSshClientIdent),
-    readyTimeout: 20_000,
-    keepaliveInterval: 15_000,
-    keepaliveCountMax: 3,
-    algorithms: { serverHostKey: serverHostKeyAlgorithms },
-    hostVerifier: hostVerifierFor(host, log)
-  };
-}
 
 export interface Ssh2CommandResult {
   exitCode: number;
@@ -52,38 +31,15 @@ export interface Ssh2CommandResult {
  * exec，避免每条命令重新握手；keepalive 保活；连接死亡后下次调用自动重建。
  */
 class Ssh2ExecSession {
-  readonly client = new Client();
-  readonly ready: Promise<void>;
+  readonly client: Client;
+  readonly ready = Promise.resolve();
   private _dead = false;
-  private readyReject: ((error: Error) => void) | undefined;
+  private readonly markDead = () => { this._dead = true; };
 
-  constructor(
-    config: ConnectConfig,
-    private readonly password?: string
-  ) {
-    this.client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
-      const replies = this.password
-        ? keyboardInteractivePasswordReplies(prompts, this.password)
-        : undefined;
-      finish(replies ?? []);
-    });
-    // 连接级错误/关闭是持久事件：标记会话失效；ready 之前到来的错误 reject 等待者。
-    this.client.on('error', (error: Error) => {
-      this._dead = true;
-      this.readyReject?.(error);
-      this.readyReject = undefined;
-    });
-    this.client.on('close', () => {
-      this._dead = true;
-    });
-    this.ready = new Promise<void>((resolve, reject) => {
-      this.readyReject = reject;
-      this.client.once('ready', () => {
-        this.readyReject = undefined;
-        resolve();
-      });
-    });
-    this.client.connect(config);
+  constructor(private readonly lease: Ssh2ConnectionLease) {
+    this.client = lease.client;
+    this.client.on('error', this.markDead);
+    this.client.on('close', this.markDead);
   }
 
   get dead(): boolean {
@@ -92,35 +48,34 @@ class Ssh2ExecSession {
 
   end(): void {
     this._dead = true;
-    // 连接未就绪时被结束：让并发等待 ready 的调用方立即收到错误，避免挂起。
-    this.readyReject?.(new Error('SSH 执行连接已结束'));
-    this.readyReject = undefined;
-    this.client.end();
+    this.client.removeListener('error', this.markDead);
+    this.client.removeListener('close', this.markDead);
+    this.lease.release();
   }
 }
 
 const execSessions = new Map<string, Ssh2ExecSession>();
 const creatingExecSessions = new Map<string, Promise<Ssh2ExecSession>>();
 
-function execSessionKey(host: HostConfig): string {
-  return `${host.ip}:${host.port ?? 22}:${host.user}`;
-}
-
 async function getExecSession(
   host: HostConfig, password?: string
 ): Promise<Ssh2ExecSession> {
-  const key = execSessionKey(host);
+  const effectivePassword = password ?? host.password;
+  const key = ssh2ConnectionKey(host, effectivePassword);
   const existing = execSessions.get(key);
   if (existing && !existing.dead) return existing;
+  if (existing) {
+    existing.end();
+    execSessions.delete(key);
+  }
   const creating = creatingExecSessions.get(key);
   if (creating) {
     const session = await creating;
     if (!session.dead) return session;
   }
   const promise = (async () => {
-    const session = new Ssh2ExecSession(
-      await connectConfig(host, password), password
-    );
+    const lease = await acquireSsh2Connection(host, effectivePassword);
+    const session = new Ssh2ExecSession(lease);
     execSessions.set(key, session);
     return session;
   })();
@@ -137,6 +92,7 @@ export function closeSsh2ExecSessions(): void {
   for (const session of execSessions.values()) session.end();
   execSessions.clear();
   creatingExecSessions.clear();
+  closeSharedSsh2Connections();
 }
 
 export async function executeSsh2Command(
@@ -166,9 +122,7 @@ export async function executeSsh2Command(
         // 只关闭当前通道，不影响池中其它并发调用。
         stream.close();
       } else {
-        // 连接尚未就绪/未开始执行：结束该会话，下次调用重建。
-        session.end();
-        execSessions.delete(execSessionKey(host));
+        // Channel-open 尚未回调：取消本次等待，不结束其他功能共用的连接。
       }
       finishError(new Error('Remote command was cancelled'));
     };
@@ -184,6 +138,10 @@ export async function executeSsh2Command(
         return;
       }
       stream = execStream;
+      if (settled) {
+        execStream.close();
+        return;
+      }
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       const stdoutStripper = outputMarker
@@ -222,7 +180,7 @@ export async function executeSsh2Command(
   });
 }
 
-/** 仅连接准备失败；此时尚未派发远程命令，可安全切换系统 SSH。 */
+/** 仅共享 SSH 连接准备失败；尚未派发远程命令。 */
 export class Ssh2ConnectionError extends Error {
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
@@ -235,7 +193,9 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   readonly onDidWrite = this.writeEmitter.event;
   private readonly closeEmitter = new vscode.EventEmitter<number | undefined>();
   readonly onDidClose = this.closeEmitter.event;
-  private readonly client = new Client();
+  private client!: Client;
+  private connectionLease?: Ssh2ConnectionLease;
+  private clientErrorListener?: (error: Error) => void;
   private stream?: ClientChannel;
   private dimensions: vscode.TerminalDimensions = { columns: 80, rows: 24 };
   private password?: string;
@@ -279,26 +239,22 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     if (initialDimensions) this.dimensions = initialDimensions;
     const hint = this.connectionHint ? `（${this.connectionHint}）` : '';
     this.writeEmitter.fire(`SAFS: 正在连接 ${this.host.name}…${hint}\r\n`);
-    this.client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
-      const replies = this.password
-        ? keyboardInteractivePasswordReplies(prompts, this.password)
-        : undefined;
-      finish(replies ?? []);
-    });
-    this.client.once('ready', () => {
-      if (this.closed || this.closeRequested) return;
-      this.password = undefined;
-      void this.openRemoteShell();
-    });
-    this.client.once('error', (error) => this.fail(error));
     void this.connect();
   }
 
   private async connect(): Promise<void> {
     try {
-      const config = await connectConfig(this.host, this.password, this.log);
-      if (this.closed || this.closeRequested) return;
-      this.client.connect(config);
+      const lease = await acquireSsh2Connection(this.host, this.password, this.log);
+      if (this.closed || this.closeRequested) {
+        lease.release();
+        return;
+      }
+      this.connectionLease = lease;
+      this.client = lease.client;
+      this.clientErrorListener = (error) => this.fail(error);
+      this.client.once('error', this.clientErrorListener);
+      this.password = undefined;
+      void this.openRemoteShell();
     } catch (error) {
       this.fail(error instanceof Error ? error : new Error(String(error)));
     }
@@ -502,7 +458,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     this.shellOpenTimer = undefined;
     this.password = undefined;
     this.stream?.close();
-    this.client.end();
+    this.releaseConnection();
   }
 
   private fail(error: Error): void {
@@ -526,7 +482,16 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
     this.shellOpenTimer = undefined;
     this.password = undefined;
-    this.client.end();
+    if (this.clientErrorListener) {
+      this.client?.removeListener('error', this.clientErrorListener);
+      this.clientErrorListener = undefined;
+    }
+    this.releaseConnection();
     this.closeEmitter.fire(code);
+  }
+
+  private releaseConnection(): void {
+    this.connectionLease?.release();
+    this.connectionLease = undefined;
   }
 }

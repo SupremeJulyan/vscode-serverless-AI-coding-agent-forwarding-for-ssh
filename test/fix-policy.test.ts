@@ -49,7 +49,7 @@ test('sync ownership retries silently and SFTP negotiation has no fixed timeout'
   assert.equal(sync.includes('同步任务由另一个 VS Code 窗口管理'), false);
   assert.ok(sync.includes('pendingAcquireTimers'));
 
-  const sftp = await readFile(new URL('../src/sftp/client.ts', import.meta.url), 'utf8');
+  const sftp = await readFile(new URL('../src/ssh2/sftp-client.ts', import.meta.url), 'utf8');
   assert.equal(sftp.includes('sftpHandshakeTimeoutMs'), false);
   assert.equal(sftp.includes('SFTP 版本协商超时'), false);
 });

@@ -4,8 +4,8 @@ import { validateLocalDownloadTarget } from './local-transfer-path';
 import {
   cleanupDownloadPart, commitDownloadPart, prepareDownloadResume, type DownloadResume
 } from './resume-store';
-import { SftpSession } from '../sftp/session';
-import { assertSafeRemoteEntryName } from '../sftp/uri';
+import { SftpSession } from '../ssh2/session';
+import { assertSafeRemoteEntryName } from '../ssh2/uri';
 import { writeStreamToFile } from './stream-file';
 import { sameResumePrefix } from './resume-checksum';
 

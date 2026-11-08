@@ -5,7 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   isWorkspaceUriPath, remotePathForUri, workspacePathForRemote, RemoteFolder
-} from '../src/sftp/filesystem-provider';
+} from '../src/ssh2/filesystem-provider';
 import { ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory } from '../src/agent/agent-cwd';
 
 test('root mount maps home and outside-home directories without colliding with restored URIs', async () => {
