@@ -1,41 +1,34 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import * as http from 'node:http';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ipcPath, ipcUrl, listenIpc, ipcFetch } from '../src/agent/agent-ipc';
+import { createIpcServer, ipcPath, ipcRequest, listenIpc } from '../src/agent/agent-ipc';
 
 const exec = promisify(execFile);
-test('CLI uses IPC and resolves placeholder cwd, explicit IDs and retained output', async () => {
+test('CLI uses native IPC and resolves placeholder cwd and explicit IDs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-cli-ipc-'));
   const socket = ipcPath(root);
   const seen: any[] = [];
   let workspaces = [{ workspaceId: 'auto', localRoot: root }];
-  const server = http.createServer(async (req, res) => {
-    let body = '';
-    for await (const chunk of req) body += chunk;
-    const input = JSON.parse(body || '{}');
+  const server = createIpcServer(({ action, payload }) => {
+    assert.equal(action, 'cli');
+    const input = (payload as { value: any }).value;
     seen.push(input);
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ result: input.name === 'list_remote_workspaces'
-      ? { workspaces }
-      : { workspaceId: input.arguments?.workspaceId, outputId: input.arguments?.outputId } }));
+    return { result: input.name === 'list_remote_workspaces' ? { workspaces }
+      : { workspaceId: input.arguments?.workspaceId, outputId: input.arguments?.outputId } };
   });
   try {
     await listenIpc(server, socket);
-    assert.equal(typeof server.address(), 'string');
     const config = join(root, 'connection.json');
-    await writeFile(config, JSON.stringify({ version: 1, url: ipcUrl(socket) + '&token=test' }));
+    await writeFile(config, JSON.stringify({ version: 2, socketPath: socket, token: 'test' }));
     const cli = resolve('dist/safs-cli.js');
-    const child = join(root, 'sub');
-    await mkdir(child);
+    const child = join(root, 'sub'); await mkdir(child);
     const run = (args: string[], cwd = child) => exec(process.execPath, [cli, '--config', config, ...args], { cwd });
     await assert.rejects(run(['list']), /No .safs-workspace-id/);
-    const parentMarker = join(root, '.safs-workspace-id');
-    await writeFile(parentMarker, 'auto\n');
+    await writeFile(join(root, '.safs-workspace-id'), 'auto\n');
     const requestsBeforeMissingMarker = seen.length;
     await assert.rejects(run(['list']), /No .safs-workspace-id/);
     assert.equal(seen.length, requestsBeforeMissingMarker);
@@ -54,44 +47,35 @@ test('CLI uses IPC and resolves placeholder cwd, explicit IDs and retained outpu
     assert.equal(await readFile(marker, 'utf8'), 'expired\n');
     workspaces = [];
     await assert.rejects(run(['list']), /no active placeholder workspace matches/);
-
     assert.equal(JSON.parse((await run(['list', '--id', 'explicit'])).stdout).workspaceId, 'explicit');
     assert.equal(await readFile(marker, 'utf8'), 'expired\n');
     await rm(marker);
     assert.equal(JSON.parse((await run(['list', '--id', 'second'])).stdout).workspaceId, 'second');
     workspaces = [{ workspaceId: 'auto', localRoot: root }];
-    const listed = JSON.parse((await run(['workspaces'])).stdout);
-    assert.equal(listed.workspaces[0].workspaceId, 'auto');
-
-    const output = JSON.parse((await run(['output', 'stream-id', 'stdout', '--id', 'explicit'])).stdout);
-    assert.equal(output.outputId, 'stream-id');
+    assert.equal(JSON.parse((await run(['workspaces'])).stdout).workspaces[0].workspaceId, 'auto');
+    assert.equal(JSON.parse((await run(['output', 'stream-id', 'stdout', '--id', 'explicit'])).stdout).outputId, 'stream-id');
     await assert.rejects(run(['list', '--workspace', 'old']));
     await assert.rejects(run(['list'], tmpdir()));
     assert.ok(seen.some(v => v.name === 'remote_list'));
-    const response = await ipcFetch(ipcUrl(socket));
-    assert.equal(response.status, 200);
+    assert.equal((await ipcRequest<any>(socket, 'test', 'cli', { name: 'list_remote_workspaces', arguments: {} })).result.workspaces.length, 1);
   } finally {
-    server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test('IPC fetch preserves JSON response headers and payload', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'safs-ipc-sse-'));
+test('IPC requests require the matching local capability token', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safs-ipc-auth-'));
   const socket = ipcPath(root);
-  const server = http.createServer((_request, response) => {
-    response.writeHead(200, { 'content-type': 'application/json', 'x-safs-diagnostic': 'present' });
-    response.end('{"ok":true,"result":{"entries":[]}}');
+  const server = createIpcServer(({ action, payload }) => {
+    if ((payload as { token: string }).token !== 'secret') throw new Error('Unauthorized');
+    return { action };
   });
   try {
     await listenIpc(server, socket);
-    const response = await ipcFetch(ipcUrl(socket));
-    assert.equal(response.headers.get('content-type'), 'application/json');
-    assert.equal(response.headers.get('x-safs-diagnostic'), 'present');
-    assert.deepEqual(await response.json(), { ok: true, result: { entries: [] } });
+    assert.equal((await ipcRequest<any>(socket, 'secret', 'probe')).action, 'probe');
+    await assert.rejects(ipcRequest(socket, 'wrong', 'probe'));
   } finally {
-    server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }

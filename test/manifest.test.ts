@@ -200,9 +200,6 @@ test('shows a restart action for automatic Agent forwarding', async () => {
   ) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
   assert.ok(commands.some((item) => item.command === 'safs.restartAgentForwardItem'));
-  assert.ok(commands.some(
-    (item) => item.command === 'safs.copyStreamableHttpUrl'
-  ));
   assert.equal(commands.some((item) => item.command === 'safs.enableAiForwardItem'), false);
   assert.equal(commands.some((item) => item.command === 'safs.disableAiForwardItem'), false);
   const menu = manifest.contributes?.menus?.['view/item/context'] ?? [];
@@ -211,7 +208,7 @@ test('shows a restart action for automatic Agent forwarding', async () => {
 });
 
 test('packages Agent integration without the legacy JS stdio router or Codex plugin', async () => {
-  await access(new URL('../src/agent/agent-http-router.ts', import.meta.url));
+  await access(new URL('../src/agent/agent-ipc-router.ts', import.meta.url));
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const nodeCliSource = await readFile(
     new URL('../src/safs-cli.ts', import.meta.url), 'utf8'
@@ -343,7 +340,7 @@ test('packages session-only remote shell integration scripts', async () => {
 
 test('SAFS CLI is opt-in for remote context instead of mandatory in every workspace', async () => {
   const direct = await readFile(new URL('../src/agent/agent-backend.ts', import.meta.url), 'utf8');
-  const router = await readFile(new URL('../src/agent/agent-http-router.ts', import.meta.url), 'utf8');
+  const router = await readFile(new URL('../src/agent/agent-ipc-router.ts', import.meta.url), 'utf8');
   const tools = await readFile(new URL('../src/agent/agent-backend-tools.ts', import.meta.url), 'utf8');
   assert.equal(tools.includes('anthropic/alwaysLoad'), false);
   assert.equal(tools.includes('At the start of every conversation'), false);
@@ -407,11 +404,6 @@ test('uses only the unified cross-platform config path', async () => {
   assert.equal(
     manifest.contributes?.configuration?.properties?.['safs.agentPlatform'],
     undefined
-  );
-  assert.equal(
-    manifest.contributes?.configuration?.properties?.['safs.agentHttpRouterPort']
-      ?.default,
-    0
   );
   assert.equal(
     manifest.contributes?.configuration?.properties?.['safs.agentBackendTimeoutMs']
@@ -481,7 +473,6 @@ test('installs forwarding only for the globally first enabled mount or an explic
   assert.ok(extensionSource.includes('scheduleFirstProxyEnvironmentCheck(context)'));
   assert.ok(extensionSource.includes('检测到代理环境变量，且 NO_PROXY 未完整覆盖本机地址，可能影响 Agent 本机转发连接。'));
   const nodeCliSource = await readFile(new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8');
-  assert.ok(nodeCliSource.includes('user-level Streamable HTTP CLI'));
   assert.equal(nodeCliSource.includes('switch the proxy to rule-based mode'), false);
 });
 

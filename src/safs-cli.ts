@@ -2,7 +2,7 @@
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import * as http from 'node:http';
+import { ipcRequest } from './agent/agent-ipc';
 import { resolveWorkspaceId } from './agent/workspace-id';
 import { help, commandHelp } from './cli/cli-help';
 
@@ -120,35 +120,17 @@ let token = '';
 function redact(message: string) { return token ? message.replaceAll(token, '<hidden>').replaceAll(encodeURIComponent(token), '<hidden>') : message; }
 async function invoke(configPath: string, request: Awaited<ReturnType<typeof parse>>): Promise<any> {
   const config = JSON.parse(await readFile(configPath, 'utf8'));
-  if (config.version !== 1) throw new Error('Unsupported SAFS connection file');
-  const url = new URL(config.url);
-  token = url.searchParams.get('token') ?? '';
-  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || !url.searchParams.get('socket') || !token || url.username || url.password) throw new Error('SAFS connection must be an authenticated loopback URL');
-  url.pathname = '/cli';
+  if (config.version !== 2 || typeof config.socketPath !== 'string' || typeof config.token !== 'string' || !config.token) throw new Error('Unsupported SAFS connection file');
+  token = config.token;
   let timeout = Number.isSafeInteger(config.timeoutMs) && config.timeoutMs >= 0 ? config.timeoutMs : 120000;
   if (timeout && request.name === 'safs_cli_batch') timeout = timeout * request.arguments.operations.length + 5000;
-  return new Promise((resolve, reject) => {
-    let timer: NodeJS.Timeout | undefined;
-    const socketPath = url.searchParams.get('socket');
-    if (!socketPath) { reject(new Error('Missing IPC endpoint; reload SAFS')); return; }
-    const req = http.request({ socketPath, path: url.pathname + url.search, method: 'POST', headers: { 'content-type': 'application/json' }, agent: false }, res => {
-      const chunks: Buffer[] = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('error', error => { if (timer) clearTimeout(timer); reject(error); });
-      res.on('end', () => {
-        if (timer) clearTimeout(timer);
-        try {
-          const envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          if ((res.statusCode ?? 500) < 200 || (res.statusCode ?? 500) >= 300) throw new Error(`SAFS router HTTP ${res.statusCode}: ${envelope.error ?? 'Router rejected request'}`);
-          if (!('result' in envelope)) throw new Error(envelope.error ?? 'SAFS router returned no result');
-          resolve(envelope.result);
-        } catch (error) { reject(error); }
-      });
-    });
-    req.on('error', error => { if (timer) clearTimeout(timer); reject(new Error(`Local SAFS router request failed: ${error.message}`)); });
-    if (timeout) timer = setTimeout(() => req.destroy(new Error('Request timed out; remote operations may still be running. Inspect remote state before retrying.')), timeout);
-    req.end(JSON.stringify(request));
-  });
+  try {
+    const envelope = await ipcRequest<{ result?: unknown }>(config.socketPath, token, 'cli', request, { timeoutMs: timeout });
+    if (!envelope || !('result' in envelope)) throw new Error('SAFS router returned no result');
+    return envelope.result;
+  } catch (error) {
+    throw new Error(`Local SAFS router request failed: ${redact(error instanceof Error ? error.message : String(error))}`);
+  }
 }
 function exitCode(result: any): number {
   if (Number.isInteger(result.exitCode) && result.exitCode >= 0 && result.exitCode <= 255) return result.exitCode;

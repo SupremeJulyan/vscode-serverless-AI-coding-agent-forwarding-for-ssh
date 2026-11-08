@@ -7,7 +7,7 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 const maxRecordAgeMs = 35_000;
 
 export interface AgentWorkspaceRecord {
-  version: 1;
+  version: 2;
   instanceId: string;
   processId: number;
   processPlatform?: NodeJS.Platform;
@@ -22,7 +22,8 @@ export interface AgentWorkspaceRecord {
   host: string;
   hostName?: string;
   user?: string;
-  backendUrl: string;
+  backendSocketPath: string;
+  backendToken: string;
   updatedAt: string;
 }
 
@@ -70,12 +71,12 @@ export function readAgentWorkspaceRecord(
     };
     if (!value.workspaceRoot && value.remoteRoot) value.workspaceRoot = value.remoteRoot;
     const updatedAtMs = Date.parse(value.updatedAt ?? '');
-    if (value.version !== 1 || value.execution !== 'remote' || !value.backendUrl
+    if (value.version !== 2 || value.execution !== 'remote' || !value.backendSocketPath
+      || !value.backendToken
       || !value.instanceId || !value.mountName || !value.workspaceRoot || !Number.isFinite(updatedAtMs)
       || Math.abs(now - updatedAtMs) > maxRecordAgeMs) {
       return undefined;
     }
-    if (!new URL(value.backendUrl).searchParams.get('socket')) return undefined;
     if (value.processPlatform && value.processPlatform !== process.platform) return undefined;
     if (!Number.isInteger(value.processId) || value.processId! <= 0) return undefined;
     const samePlatform = value.processPlatform
@@ -128,7 +129,7 @@ export class AgentWorkspacePublisher {
       if (this.stopped) return;
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
       const value: AgentWorkspaceRecord = {
-        version: 1,
+        version: 2,
         instanceId: this.instanceId,
         processId: process.pid,
         processPlatform: process.platform,

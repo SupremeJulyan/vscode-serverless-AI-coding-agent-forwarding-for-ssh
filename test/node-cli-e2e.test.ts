@@ -1,27 +1,16 @@
 import assert from 'node:assert/strict';
-import * as http from 'node:http';
 import test from 'node:test';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentBackendServer, AgentToolError } from '../src/agent/agent-backend';
-import { AgentHttpRouter, workspaceIdFor } from '../src/agent/agent-http-router';
+import { AgentIpcRouter, workspaceIdFor } from '../src/agent/agent-ipc-router';
+import { ipcPath, createIpcServer, listenIpc } from '../src/agent/agent-ipc';
 import { cliConfigPath, writeCliConnection } from '../src/cli/cli-integration';
 import { executeCaptured as capture } from '../src/platform/process';
 
 function executeCaptured(plan: Parameters<typeof capture>[0], ...rest: Parameters<typeof capture> extends [any, ...infer R] ? R : never) {
   return capture({ ...plan, command: process.execPath, args: [plan.command, ...(plan.args ?? [])] }, ...rest);
-}
-
-async function freePort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  assert.ok(address && typeof address !== 'string');
-  await new Promise<void>((resolve, reject) => server.close(
-    (error) => error ? reject(error) : resolve()
-  ));
-  return address.port;
 }
 
 function developmentNodeCli(): string {
@@ -76,7 +65,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
   let currentFileReads = 0;
   const operations: string[] = [];
   const activity: Array<{ phase: string; agentName?: string; source?: string }> = [];
-  const backend = new AgentBackendServer(0, 'node-test', {
+  const backend = new AgentBackendServer('node-test', {
     currentWorkspace: async () => ({
       name: 'dev', host: 'dev', workspaceRoot: '/project', workspaceUri: 'safs://dev/project'
     }),
@@ -123,10 +112,11 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     }
   } as any);
   await backend.start();
-  const router = new AgentHttpRouter(await freePort(), 'native-router', {
+  const routerToken = 'native-router';
+  const router = new AgentIpcRouter(ipcPath('e2e-router-' + temporary), routerToken, {
     discover: () => [{
       instanceId: 'node-window', workspaceRoot: '/project',
-      workspaceUri: 'safs://dev/project', host: 'dev', focused: true, backendUrl: backend.url
+      workspaceUri: 'safs://dev/project', host: 'dev', focused: true, backendSocketPath: backend.socketPath, backendToken: 'node-test'
     } as any]
   });
   await router.start();
@@ -136,10 +126,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ).version as string;
   try {
-    const cliUrl = new URL(router.url);
-    cliUrl.searchParams.set('source', 'cli');
-    cliUrl.searchParams.set('agent', 'URL Agent');
-    await writeCliConnection(temporary, cliUrl.toString());
+    await writeCliConnection(temporary, router.socketPath, routerToken);
     const version = await executeCaptured({ command: executable, args: ['--version'] });
     assert.equal(version.exitCode, 0, version.stderr);
     assert.equal(version.stdout.trim(), `safs ${extensionVersion}`);
@@ -261,7 +248,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     assert.equal(syntaxError.stderr.includes('Usage: safs upload'), false);
     assert.ok(activity.some((event) => event.phase === 'start'));
     assert.ok(activity.filter((event) => event.phase === 'start').every(
-      (event) => event.agentName === 'URL Agent' && event.source === 'cli'
+      (event) => event.source === 'cli'
     ));
     const removedAgentOption = await executeCaptured({ command: executable, args: [
       '--config', config, 'read', 'named.txt', '--workspace', workspaceId,
@@ -281,143 +268,31 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
   }
 });
 
-test('Node.js CLI applies the connection-file request timeout', async () => {
+test('Node.js CLI applies IPC connection-file timeout', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-node-timeout-'));
-  const hanging = http.createServer(() => {});
-  await new Promise<void>((resolve) => hanging.listen(0, '127.0.0.1', resolve));
-  const address = hanging.address();
-  assert.ok(address && typeof address !== 'string');
-  const executable = developmentNodeCli();
+  const socketPath = ipcPath('missing-' + temporary);
   try {
-    const config = cliConfigPath(temporary);
-    await writeCliConnection(
-      temporary, `http://127.0.0.1:${address.port}/backend?token=secret`, 50
-    );
+    await writeCliConnection(temporary, socketPath, 'timeout-token', 50);
     const started = Date.now();
-    const result = await executeCaptured({ command: executable, args: [
-      '--config', config, 'workspaces'
-    ] });
-    assert.equal(result.exitCode, 1);
-    assert.match(result.stderr, /request failed:/);
-    assert.ok(Date.now() - started < 2_000);
-  } finally {
-    await new Promise<void>((resolve) => hanging.close(() => resolve()));
-    await rm(temporary, { recursive: true, force: true });
-  }
-});
-
-test('Node.js CLI bypasses proxy variables for loopback', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-no-proxy-'));
-  let proxyHits = 0;
-  const proxy = http.createServer((_request, response) => {
-    proxyHits += 1;
-    response.statusCode = 502;
-    response.end('loopback request was intercepted');
-  });
-  await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
-  const proxyAddress = proxy.address();
-  assert.ok(proxyAddress && typeof proxyAddress !== 'string');
-  const router = new AgentHttpRouter(await freePort(), 'no-proxy-router', {
-    discover: () => []
-  });
-  await router.start();
-  const executable = developmentNodeCli();
-  const config = cliConfigPath(temporary);
-  const proxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
-  const proxyEnvironment = {
-    ALL_PROXY: proxyUrl,
-    all_proxy: proxyUrl,
-    HTTPS_PROXY: proxyUrl,
-    https_proxy: proxyUrl,
-    HTTP_PROXY: proxyUrl,
-    http_proxy: proxyUrl,
-    NO_PROXY: '',
-    no_proxy: ''
-  };
-  try {
-    await writeCliConnection(temporary, router.url);
-    const workspaces = await executeCaptured({
-      command: executable,
-      args: ['--config', config, 'workspaces'],
-      env: proxyEnvironment
-    });
-    assert.equal(workspaces.exitCode, 0, workspaces.stderr);
-    assert.deepEqual(JSON.parse(workspaces.stdout), { workspaces: [] });
-
-    assert.equal(proxyHits, 0);
-  } finally {
-    await router.stop();
-    await new Promise<void>((resolve) => proxy.close(() => resolve()));
-    await rm(temporary, { recursive: true, force: true });
-  }
-});
-
-test('Node.js CLI preserves HTTP rejection details and redacts the token', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-http-error-'));
-  const server = http.createServer((_request, response) => {
-    response.writeHead(400, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ ok: false, error: 'Invalid batch at index 1: secret-test-token' }));
-  });
-  try {
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address(); assert.ok(address && typeof address !== 'string');
-    await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/backend?token=secret-test-token`);
     const result = await executeCaptured({ command: developmentNodeCli(), args: [
       '--config', cliConfigPath(temporary), 'workspaces'
     ] });
     assert.equal(result.exitCode, 1);
-    assert.match(result.stderr, /HTTP 400: Invalid batch at index 1/);
-    assert.doesNotMatch(result.stderr, /secret-test-token/);
-  } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    await rm(temporary, { recursive: true, force: true });
-  }
+    assert.match(result.stderr, /Local SAFS router request failed/);
+    assert.ok(Date.now() - started < 2_000);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
-test('Node.js CLI batch permits the combined operation budget', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-batch-budget-'));
-  const server = http.createServer((_request, response) => {
-    setTimeout(() => {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, result: { results: [
-        { index: 0, ok: true, result: { content: 'a' } },
-        { index: 1, ok: true, result: { content: 'b' } }
-      ] } }));
-    }, 150);
-  });
-  try {
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address(); assert.ok(address && typeof address !== 'string');
-    await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/backend?token=secret`, 100);
-    const result = await executeCaptured({ command: developmentNodeCli(), args: [
-      '--config', cliConfigPath(temporary), 'batch', '--workspace', 'selected', '--input',
-      JSON.stringify({ operations: [
-        { command: 'read', arguments: { path: 'a' } },
-        { command: 'read', arguments: { path: 'b' } }
-      ] })
-    ] });
-    assert.equal(result.exitCode, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).results.length, 2);
-  } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    await rm(temporary, { recursive: true, force: true });
-  }
-});
-
-test('Node CLI handles global options without consuming content or command values', async () => {
+test('Node.js CLI global options preserve content values over IPC', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'safs-node-option-values-'));
-  const server = http.createServer(async (req, res) => {
-    let text = '';
-    for await (const chunk of req) text += chunk;
-    const request = JSON.parse(text);
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ result: request.arguments }));
+  const socketPath = ipcPath('options-' + temporary);
+  const server = createIpcServer(({ action, payload }) => {
+    assert.equal(action, 'cli');
+    return { result: (payload as { value: { arguments: unknown } }).value.arguments };
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  assert.ok(address && typeof address !== 'string');
+  await listenIpc(server, socketPath);
   try {
-    await writeCliConnection(temporary, `http://127.0.0.1:${address.port}/cli?token=secret`);
+    await writeCliConnection(temporary, socketPath, 'options-token');
     const config = cliConfigPath(temporary);
     const help = await executeCaptured({ command: developmentNodeCli(), args: ['--config', config, 'edit', '--help'] });
     assert.equal(help.exitCode, 0, help.stderr);

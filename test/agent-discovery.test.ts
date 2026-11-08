@@ -18,11 +18,11 @@ test('publishes a private, versioned remote workspace record and removes it', as
     mountName: 'project',
     workspaceRoot: '/srv/project',
     host: 'dev',
-    backendUrl: 'http://127.0.0.1:9848/backend?token=secret'
+    backendSocketPath: '/tmp/safs-backend.sock', backendToken: 'secret'
   });
   const filePath = path.join(directory, 'window-one.json');
   const value = JSON.parse(await readFile(filePath, 'utf8'));
-  assert.equal(value.version, 1);
+  assert.equal(value.version, 2);
   assert.equal(value.instanceId, 'window-one');
   assert.equal(value.processPlatform, process.platform);
   assert.equal(value.execution, 'remote');
@@ -38,7 +38,7 @@ test('discovers fresh windows first and ignores stale records', async () => {
   const directory = agentDiscoveryDirectory(home);
   const now = Date.now();
   const record = (instanceId: string, focused: boolean, updatedAtMs: number) => ({
-    version: 1,
+    version: 2,
     instanceId,
     processId: process.pid,
     processPlatform: process.platform,
@@ -48,7 +48,7 @@ test('discovers fresh windows first and ignores stale records', async () => {
     mountName: instanceId,
     workspaceRoot: `/srv/${instanceId}`,
     host: 'dev',
-    backendUrl: 'http://127.0.0.1:3000/backend?token=secret',
+    backendSocketPath: '/tmp/safs-backend.sock', backendToken: 'secret',
     updatedAt: new Date(updatedAtMs).toISOString()
   });
   await mkdir(directory, { recursive: true });
@@ -72,7 +72,7 @@ test('ignores records whose updatedAt is in the future', async () => {
   const directory = agentDiscoveryDirectory(home);
   const now = Date.now();
   const record = (instanceId: string, updatedAtMs: number) => ({
-    version: 1,
+    version: 2,
     instanceId,
     processId: process.pid,
     processPlatform: process.platform,
@@ -82,7 +82,7 @@ test('ignores records whose updatedAt is in the future', async () => {
     mountName: instanceId,
     workspaceRoot: `/srv/${instanceId}`,
     host: 'dev',
-    backendUrl: 'http://127.0.0.1:3000/backend?token=secret',
+    backendSocketPath: '/tmp/safs-backend.sock', backendToken: 'secret',
     updatedAt: new Date(updatedAtMs).toISOString()
   });
   await mkdir(directory, { recursive: true });
@@ -105,7 +105,7 @@ test('stopping publication drains pending writes and blocks future heartbeats', 
   const record = {
     focused: true, execution: 'remote' as const,
     workspaceUri: 'safs://project/srv/project', mountName: 'project',
-    workspaceRoot: '/srv/project', host: 'dev', backendUrl: 'http://127.0.0.1:9848/backend'
+    workspaceRoot: '/srv/project', host: 'dev', backendSocketPath: '/tmp/safs-backend.sock', backendToken: 'secret'
   };
   await Promise.all([publisher.publish(record), publisher.stop(), publisher.publish(record)]);
   assert.deepEqual(discoverAgentWorkspaces([directory]), []);
@@ -121,10 +121,10 @@ test('ignores a fresh record owned by a terminated process', async () => {
   const directory = agentDiscoveryDirectory(home);
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, 'dead.json'), JSON.stringify({
-    version: 1, instanceId: 'dead', processId: pid, processPlatform: process.platform,
+    version: 2, instanceId: 'dead', processId: pid, processPlatform: process.platform,
     focused: true, execution: 'remote',
     workspaceUri: 'safs://project/srv/project', mountName: 'project', workspaceRoot: '/srv/project',
-    host: 'dev', backendUrl: 'http://127.0.0.1:9848/backend', updatedAt: new Date().toISOString()
+    host: 'dev', backendSocketPath: '/tmp/safs-backend.sock', backendToken: 'secret', updatedAt: new Date().toISOString()
   }));
   assert.deepEqual(discoverAgentWorkspaces([directory]), []);
 });
@@ -134,11 +134,11 @@ test('foreign platform PIDs are not checked against the local process table', as
   const directory = agentDiscoveryDirectory(home);
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, 'foreign.json'), JSON.stringify({
-    version: 1, instanceId: 'foreign', processId: 2147483647,
+    version: 2, instanceId: 'foreign', processId: 2147483647,
     processPlatform: process.platform === 'win32' ? 'linux' : 'win32',
     focused: true, execution: 'remote', workspaceUri: 'safs://project/srv/project',
     mountName: 'project', workspaceRoot: '/srv/project', host: 'dev',
-    backendUrl: 'http://127.0.0.1:9848/backend', updatedAt: new Date().toISOString()
+    backendSocketPath: '/tmp/safs-backend.sock', backendToken: 'secret', updatedAt: new Date().toISOString()
   }));
   assert.equal(discoverAgentWorkspaces([directory]).length, 1);
 });

@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { AgentBackendServer, AgentBackendCallbacks } from '../src/agent/agent-backend';
-import { AgentHttpRouter, workspaceIdFor } from '../src/agent/agent-http-router';
-import { ipcFetch } from '../src/agent/agent-ipc';
+import { AgentIpcRouter, workspaceIdFor } from '../src/agent/agent-ipc-router';
+import { ipcPath, ipcRequest } from '../src/agent/agent-ipc';
 import { DiscoveredAgentWorkspace } from '../src/agent/agent-discovery';
 
 test('CLI routes authenticated operations to the window IPC backend', async () => {
   let terminal = false;
+  const token = randomUUID();
   const folder = { name: 'demo', workspaceUri: 'safs://demo/root', workspaceRoot: '/root', host: 'demo' };
   const callbacks = {
     toolProfile: () => terminal ? 'terminal' : 'full',
@@ -16,30 +17,27 @@ test('CLI routes authenticated operations to the window IPC backend', async () =
     run: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
     runTerminal: async () => ({ stdout: 'terminal', exitCode: 0 })
   } as AgentBackendCallbacks;
-  const backend = new AgentBackendServer(0, randomUUID(), callbacks);
+  const backend = new AgentBackendServer(token, callbacks);
   await backend.start();
   const record = {
-    ...folder, version: 1, instanceId: randomUUID(), processId: process.pid,
+    ...folder, version: 2, instanceId: randomUUID(), processId: process.pid,
     execution: 'remote', mountName: 'demo', focused: true,
-    backendUrl: backend.url, updatedAt: new Date().toISOString(),
+    backendSocketPath: backend.socketPath, backendToken: token, updatedAt: new Date().toISOString(),
     updatedAtMs: Date.now(), discoveryFile: ''
   } as DiscoveredAgentWorkspace;
-  const router = new AgentHttpRouter(40000 + Math.floor(Math.random() * 20000), randomUUID(), {
-    discover: () => [record]
-  });
+  const routerToken = randomUUID();
+  const router = new AgentIpcRouter(ipcPath('router-test-' + randomUUID()), routerToken, { discover: () => [record] });
   try {
     await router.start();
-    const url = new URL(router.url); url.pathname = '/cli';
-    const response = await ipcFetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'remote_read', arguments: { workspaceId: workspaceIdFor(record), path: 'file' } }) });
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { ok: true, result: { path: 'file', content: 'from remote' } });
-    const unauthorized = new URL(backend.url); unauthorized.searchParams.delete('token');
-    assert.equal((await ipcFetch(unauthorized, { method: 'POST' })).status, 401);
-    const invalid = await ipcFetch(backend.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    assert.equal(invalid.status, 400);
+    const response = await ipcRequest<any>(router.socketPath, routerToken, 'cli', {
+      name: 'remote_read', arguments: { workspaceId: workspaceIdFor(record), path: 'file' }
+    });
+    assert.deepEqual(response, { ok: true, result: { path: 'file', content: 'from remote' } });
+    await assert.rejects(ipcRequest(backend.socketPath, 'wrong-token', 'operation', {}));
+    await assert.rejects(ipcRequest(backend.socketPath, token, 'operation', {}));
     terminal = true;
-    const denied = await ipcFetch(backend.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operation: 'remote_read', input: { path: 'file' } }) });
-    assert.equal(denied.status, 403);
+    await assert.rejects(ipcRequest(backend.socketPath, token, 'operation', {
+      operation: 'remote_read', input: { path: 'file' }
+    }));
   } finally { await router.stop(); await backend.stop(); }
 });

@@ -69,7 +69,7 @@ SSH、终端、命令和 SFTP 全部使用 `ssh2`，不会启动系统 `ssh` 命
 
 安装 Node.js 后，请完全退出所有 VS Code 窗口，再重新打开（仅重新加载窗口不会更新 PATH）。在终端运行 `safs --version` 检查安装，然后在 Agent 中输入 `/safs-cli`，选择远程工作区。
 
-CLI 通过 Unix socket（Windows 使用命名管道）与扩展通信，无需监听本地 TCP 端口。扩展在 Agent 本地工作目录创建 `.safs-workspace-id`，CLI 默认读取当前目录中的文件，不向父目录查找。ID 过期时，按占位符路径唯一匹配活动工作区并写回新 ID。没有文件、匹配失败或有歧义时，使用 `safs workspaces` 查看 ID 并传入 `--id ID`。显式 `--id` 优先且不改写文件；Agent 始终在当前本地工作目录执行 `safs`，不通过 `cd` 或覆盖执行目录来选择工作区；跨多个工作区操作时，在当前目录中为每条命令显式指定 ID。
+CLI 通过 Unix socket（Windows 使用命名管道）上的长度前缀 JSON IPC 协议与扩展通信，不使用 HTTP，也不监听本地 TCP 端口。扩展在 Agent 本地工作目录创建 `.safs-workspace-id`，CLI 默认读取当前目录中的文件，不向父目录查找。ID 过期时，按占位符路径唯一匹配活动工作区并写回新 ID。没有文件、匹配失败或有歧义时，使用 `safs workspaces` 查看 ID 并传入 `--id ID`。显式 `--id` 优先且不改写文件；Agent 始终在当前本地工作目录执行 `safs`，不通过 `cd` 或覆盖执行目录来选择工作区；跨多个工作区操作时，在当前目录中为每条命令显式指定 ID。
 
 启用后，Agent可以在当前远程工作区下：
 

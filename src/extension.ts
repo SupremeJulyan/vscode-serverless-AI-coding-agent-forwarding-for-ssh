@@ -44,9 +44,7 @@ import {
 import { ConfigFocus, isConfigFocus } from './config/config-focus';
 import { accountTargetIndex } from './config/host-accounts';
 import { decryptPassword, encryptPassword, isEncryptedPassword } from './security/password';
-import {
-  agentHttpRouterPort, createPlatformAdapter, platformExtensionStateKey
-} from './platform/platform';
+import { createPlatformAdapter, platformExtensionStateKey } from './platform/platform';
 import { executeCaptured, missingExecutableName } from './platform/process';
 import { SshTerminal } from './ssh2/terminal';
 import {
@@ -57,7 +55,8 @@ import {
 } from './config/authentication';
 import { AgentBackendServer, AgentToolError } from './agent/agent-backend';
 import { writeWorkspaceId } from './agent/workspace-id';
-import { AgentHttpRouter, workspaceIdFor } from './agent/agent-http-router';
+import { AgentIpcRouter, workspaceIdFor } from './agent/agent-ipc-router';
+import { ipcPath } from './agent/agent-ipc';
 import { AgentActivityStore } from './agent/agent-activity';
 import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent/agent-activity-view';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent/agent-discovery';
@@ -79,7 +78,7 @@ import { RemoteSyncManager, RemoteSyncTask } from './sync/remote-sync';
 import { scanRemote } from './sync/sync-diff';
 import { SyncCoordinator } from './sync/sync-coordination';
 import {
-  remotePathForUri, RemoteFolder, RemoteFolderRegistry, SftpFileSystemProvider,
+  placeholderPathForRemote, remotePathForUri, RemoteFolder, RemoteFolderRegistry, SftpFileSystemProvider,
   workspacePathForRemote, isWorkspaceUriPath
 } from './ssh2/filesystem-provider';
 import {
@@ -156,16 +155,15 @@ let output: vscode.OutputChannel;
 let bridgeOutput: vscode.LogOutputChannel | undefined;
 let backend: AgentBackendServer | undefined;
 let backendBoundMountName: string | undefined;
-let httpRouter: AgentHttpRouter | undefined;
-let httpRouterCreation: Promise<AgentHttpRouter> | undefined;
-let httpRouterStart: Promise<AgentHttpRouter> | undefined;
+let ipcRouter: AgentIpcRouter | undefined;
+let ipcRouterCreation: Promise<AgentIpcRouter> | undefined;
+let ipcRouterStart: Promise<AgentIpcRouter> | undefined;
 /** 每个目标 CLI 在本次 Extension Host 生命周期只做一次真实版本检查。 */
 const cliVersionChecks = new Map<string, Promise<void>>();
 let cliSetupError: string | undefined;
 const cliPreparation = new Preparation<{ cliExecutable?: string }>();
 const cliAutoPrepareDisabledKey = 'safs.cliAutoPrepareDisabled';
-let agentHttpRouterHeartbeat: NodeJS.Timeout | undefined;
-let agentHttpRouterSettingsPromptShown = false;
+let agentIpcRouterHeartbeat: NodeJS.Timeout | undefined;
 let vscodeContext: vscode.ExtensionContext;
 let pool: SftpConnectionPool;
 let registry: RemoteFolderRegistry;
@@ -512,13 +510,6 @@ function windowOperationProfile(): 'full' | 'terminal' {
   return activeAgentCommandTerminal() ? 'terminal' : 'full';
 }
 
-function cliRouterUrl(url: string): string {
-  const tagged = new URL(url);
-  tagged.searchParams.delete('agent');
-  tagged.searchParams.set('source', 'cli');
-  return tagged.toString();
-}
-
 
 async function removeLegacyCliInstructions(localRoot: string): Promise<void> {
   // workspaceRoot uses URI path syntax; normalize to the native filesystem view.
@@ -532,6 +523,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   if (existing) {
     bridgeOutput?.trace(`[SFTP] 复用挂载 ${mount.name}，remoteRoot=${existing.remoteRoot}`);
     await pool.get(existing.hostName);
+    restoreRemoteWorkspaceDisplayRoot(existing);
     refreshSafsEntryLabel();
     await removeLegacyCliInstructions(existing.workspaceRoot);
     return existing;
@@ -568,6 +560,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
     ] : []
   };
   await ensureAgentCwdSubdirectory(placeholder.localPath, remoteRoot, defaultRemotePath);
+  restoreRemoteWorkspaceDisplayRoot(folder);
   registry.set(folder);
   agentTrace(
     'SFTP',
@@ -578,8 +571,68 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
 
 function folderUri(folder: RemoteFolder, remotePath = folder.defaultRemotePath ?? folder.remoteRoot): string {
   const host = lastReadConfig?.hosts.find(candidate => candidate.name === folder.hostName);
-  const label = host ? lastReadConfig?.host_aliases?.[host.ip] ?? host.ip : undefined;
-  return remoteUri(folder.mountName, workspacePathForRemote(folder, remotePath), label);
+  const label = host ? remoteWorkspaceDisplayName(host, lastReadConfig?.host_aliases) : undefined;
+  const uriPath = folder.displayRoot && folder.displayRemoteRoot
+    && isRemotePathInsideRoot(folder.displayRemoteRoot, remotePath)
+    ? path.posix.join(folder.displayRoot, path.posix.relative(folder.displayRemoteRoot, remotePath))
+    : workspacePathForRemote(folder, remotePath);
+  return remoteUri(folder.mountName, uriPath, label);
+}
+
+function remoteWorkspaceDisplayName(
+  host: HostConfig, aliases?: Record<string, string>
+): string {
+  const hostname = aliases?.[host.ip]?.trim() || host.ip;
+  const account = host.user.trim() || 'default';
+  return `${hostname}-${account}`.replace(/[\\/]/g, '_');
+}
+
+function displayMappingFromUri(uriPath: string, displayName: string): {
+  displayRoot: string; remoteRoot: string; placeholderRoot: string;
+} | undefined {
+  const segments = uriPath.split('/').filter(Boolean);
+  const marker = segments.lastIndexOf('.safs-root');
+  if (marker < 1 || marker + 2 >= segments.length || segments.at(-1) !== displayName) return undefined;
+  const encodedRoot = segments[marker + 1];
+  if (!/^[A-Za-z0-9_-]+$/.test(encodedRoot)) return undefined;
+  const remoteRoot = Buffer.from(encodedRoot, 'base64url').toString('utf8');
+  if (!remoteRoot.startsWith('/') || path.posix.normalize(remoteRoot) !== remoteRoot) return undefined;
+  return {
+    displayRoot: `/${segments.slice(0, marker + 3).join('/')}`,
+    remoteRoot,
+    placeholderRoot: `/${segments.slice(0, marker).join('/')}`
+  };
+}
+
+function setRemoteWorkspaceDisplayRoot(folder: RemoteFolder, remoteRoot: string): void {
+  const host = lastReadConfig?.hosts.find(candidate => candidate.name === folder.hostName);
+  const displayName = host
+    ? remoteWorkspaceDisplayName(host, lastReadConfig?.host_aliases)
+    : folder.mountName.replace(/[\\/]/g, '_');
+  const placeholderRoot = placeholderPathForRemote(folder, remoteRoot);
+  folder.displayRemoteRoot = remoteRoot;
+  folder.displayRoot = path.posix.join(
+    placeholderRoot, '.safs-root', Buffer.from(remoteRoot, 'utf8').toString('base64url'), displayName
+  );
+}
+
+function restoreRemoteWorkspaceDisplayRoot(folder: RemoteFolder): void {
+  const candidate = (vscode.workspace.workspaceFolders ?? []).find(workspace => {
+    if (workspace.uri.scheme !== remoteFileSystemScheme) return false;
+    try { return parseRemoteUri(workspace.uri.toString()).mountName === folder.mountName; }
+    catch { return false; }
+  });
+  const host = lastReadConfig?.hosts.find(item => item.name === folder.hostName);
+  const displayName = host
+    ? remoteWorkspaceDisplayName(host, lastReadConfig?.host_aliases)
+    : folder.mountName.replace(/[\\/]/g, '_');
+  const mapping = candidate && displayMappingFromUri(candidate.uri.path, displayName);
+  if (mapping && placeholderPathForRemote(folder, mapping.remoteRoot) === mapping.placeholderRoot) {
+    folder.displayRoot = mapping.displayRoot;
+    folder.displayRemoteRoot = mapping.remoteRoot;
+  } else {
+    setRemoteWorkspaceDisplayRoot(folder, folder.defaultRemotePath ?? folder.remoteRoot);
+  }
 }
 
 function reportedRemoteTerminalCwd(
@@ -768,8 +821,8 @@ async function openDirectoryItem(requested: MountConfig): Promise<void> {
     .get<string[]>(aiForwardMountsKey, []).includes(requested.name);
   agentTrace('Open', `准备打开 ${requested.name}，Agent 转发=${forwarding ? '启用' : '关闭'}`);
   if (forwarding) {
-    startAgentHttpRouterLeadership(vscodeContext);
-    await ensureAgentHttpRouter(vscodeContext);
+    startAgentIpcRouterLeadership(vscodeContext);
+    await ensureAgentIpcRouter(vscodeContext);
   }
   const folder = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
@@ -856,12 +909,13 @@ async function openRemoteDirectory(): Promise<void> {
     .get<string[]>(aiForwardMountsKey, []).includes(mount.name);
   agentTrace('Open', `准备在新窗口打开 ${mount.name}:${resolved}，Agent 转发=${forwarding ? '启用' : '关闭'}`);
   if (forwarding) {
-    startAgentHttpRouterLeadership(vscodeContext);
-    await ensureAgentHttpRouter(vscodeContext);
+    startAgentIpcRouterLeadership(vscodeContext);
+    await ensureAgentIpcRouter(vscodeContext);
   }
   const localRoot = localRootForFolder(folder);
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, resolved);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, resolved);
+  setRemoteWorkspaceDisplayRoot(folder, resolved);
   await recordDirectoryHistory(vscodeContext, mount.name, resolved);
   agentTrace('Open', `创建新窗口打开远程目录：${resolved}`);
   await vscode.commands.executeCommand(
@@ -876,6 +930,7 @@ async function switchRemoteDirectory(): Promise<void> {
   const localRoot = localRootForFolder(folder);
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, resolved);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, resolved);
+  setRemoteWorkspaceDisplayRoot(folder, resolved);
   await recordDirectoryHistory(vscodeContext, mount.name, resolved);
   agentTrace('Open', `切换远程目录：${previousPath ?? '<local>'} -> ${resolved}`);
   await vscode.commands.executeCommand(
@@ -970,6 +1025,7 @@ async function cloneGitRepository(): Promise<void> {
   const localRoot = localRootForFolder(folder);
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, remoteRepository);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, remoteRepository);
+  setRemoteWorkspaceDisplayRoot(folder, remoteRepository);
   await vscode.commands.executeCommand(
     'vscode.openFolder', vscode.Uri.parse(folderUri(folder, remoteRepository)),
     action === '在新窗口打开'
@@ -2119,7 +2175,7 @@ async function activityForwardingState(): Promise<AgentTerminalTargetState> {
     state.label = [config.host_aliases?.[host.ip] ?? host.ip, host.user,
       location?.remotePath ?? agentCommandTerminalCwd].filter(Boolean).join(' → ');
     const enabled = vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []).includes(mountName);
-    if (forwardingRecoveryRunning || httpRouterStart || httpRouterCreation) {
+    if (forwardingRecoveryRunning || ipcRouterStart || ipcRouterCreation) {
       return { ...state, availability: 'checking', detail: '正在准备 Agent 转发' };
     }
     if (!enabled) return { ...state, availability: 'disabled', recoveryLabel: '启动 Agent 转发' };
@@ -2139,14 +2195,14 @@ async function activityForwardingState(): Promise<AgentTerminalTargetState> {
         .then((content) => {
           try { return JSON.parse(content); } catch { return undefined; }
         }).catch(() => undefined);
-      if (connection?.version !== 1 || connection.url !== (httpRouter && cliRouterUrl(httpRouter.url))) {
+      if (connection?.version !== 2 || connection.socketPath !== ipcRouter?.socketPath) {
         return { ...state, availability: 'error', detail: 'CLI 连接配置需要更新', recoveryLabel: '修复 CLI' };
       }
     }
-    if (!backend?.running || backend.portUnavailable || backendBoundMountName !== mountName) {
+    if (!backend?.running || backendBoundMountName !== mountName) {
       throw new Error('当前窗口的转发服务尚未就绪');
     }
-    if (!httpRouter || !await httpRouter.healthy()) throw new Error('本地转发连接不可用');
+    if (!ipcRouter || !await ipcRouter.healthy()) throw new Error('本地转发连接不可用');
     return { ...state, availability: 'ready', detail: '本地转发服务正常；远程连接将在操作时验证' };
   } catch (error) {
     return { ...state, availability: 'error',
@@ -2176,7 +2232,7 @@ async function recoverActivityForwarding(): Promise<void> {
       await configureAgentInterface(vscodeContext, true);
     }
     await ensureFolder(mount);
-    startAgentHttpRouterLeadership(vscodeContext);
+    startAgentIpcRouterLeadership(vscodeContext);
     await ensureAgentBackendServer(vscodeContext);
     await publishAgentWorkspace(vscodeContext);
   } catch (error) {
@@ -2213,6 +2269,7 @@ async function openAgentTerminalDirectory(): Promise<void> {
   const localRoot = localRootForFolder(folder);
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, resolved);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, resolved);
+  setRemoteWorkspaceDisplayRoot(folder, resolved);
   await recordDirectoryHistory(vscodeContext, info.mount.name, resolved);
   await vscode.commands.executeCommand(
     'vscode.openFolder', vscode.Uri.parse(folderUri(folder, resolved)), { forceReuseWindow: true }
@@ -2329,10 +2386,10 @@ async function prepareOpenedTerminalForAgent(
   const forwarding = vscodeContext.globalState
     .get<string[]>(aiForwardMountsKey, []).includes(info.mount.name);
   if (!forwarding) return;
-  startAgentHttpRouterLeadership(vscodeContext);
-  await ensureAgentHttpRouter(vscodeContext);
-  const server = await ensureAgentBackendServer(vscodeContext);
-  if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
+  startAgentIpcRouterLeadership(vscodeContext);
+  await ensureAgentIpcRouter(vscodeContext);
+  await ensureAgentBackendServer(vscodeContext);
+  await publishAgentWorkspace(vscodeContext);
 }
 
 async function executeWithTerminalShellIntegration(
@@ -4372,18 +4429,10 @@ async function rememberMountRenames(renamed: Map<string, string>): Promise<void>
   );
 }
 
-/**
- * 把已打开的 `safs://` 工作区文件夹换成当前配置名。
- *
- * 左下角的远程指示器显示的就是工作区 URI 的 authority：配置改名后旧窗口仍然存着
- * 旧名字，所以这里主动替换。多根工作区可以直接换文件夹；单文件夹窗口 VS Code 不
- * 允许改文件夹列表，只写日志、不做任何弹窗——旧 authority 仍由别名解析到当前配置，
- * 功能不受影响，指示器等用户自己重开窗口时更新。
- */
+/** Update legacy SAFS workspace URIs without converting single-folder windows to untitled workspaces. */
 async function refreshRemoteWorkspaceNames(): Promise<void> {
   const folders = [...(vscode.workspace.workspaceFolders ?? [])];
-  for (let index = 0; index < folders.length; index += 1) {
-    const folder = folders[index];
+  for (const folder of folders) {
     if (folder.uri.scheme !== remoteFileSystemScheme) continue;
     let location: RemoteUriLocation;
     try {
@@ -4391,30 +4440,17 @@ async function refreshRemoteWorkspaceNames(): Promise<void> {
     } catch {
       continue;
     }
-    // 只换 authority，路径/query 原样保留：不依赖 vscode.Uri.path 的编码约定。
-    const host = lastReadConfig?.hosts.find(candidate => candidate.name === location.mountName);
-    if (!host) continue;
-    const label = lastReadConfig?.host_aliases?.[host.ip] ?? host.ip;
-    const desired = vscode.Uri.parse(remoteUri(location.mountName, location.remotePath, label));
+    const remoteFolder = registry?.get(location.mountName);
+    if (!remoteFolder) continue;
+    const remotePath = remotePathForUri(remoteFolder, location.remotePath);
+    setRemoteWorkspaceDisplayRoot(remoteFolder, remotePath);
+    const desired = vscode.Uri.parse(folderUri(remoteFolder, remotePath));
     if (desired.toString() === folder.uri.toString()) continue;
-    bridgeOutput?.info(
-      `[工作区] 远程配置名已更新：${folder.uri.authority} → ${desired.authority}`
-    );
-    let replaced = false;
-    try {
-      replaced = vscode.workspace.updateWorkspaceFolders(index, 1, {
-        uri: desired, name: folder.name
-      });
-    } catch (error) {
-      logAsyncFailure('更新远程工作区名称失败', error);
-    }
-    // 单文件夹窗口换不了文件夹列表：不弹窗询问是否重开（会打断当前会话），
-    // 旧 authority 靠上面的别名照常解析，只是左下角指示器要等用户自己重开才更新。
-    if (!replaced) {
-      bridgeOutput?.info(
-        `[工作区] 左下角仍显示旧名字 ${folder.uri.authority}：重开这个窗口后变为 ${desired.authority}`
-      );
-    }
+    bridgeOutput?.info(`[工作区] 更新远程工作区显示名：${folder.name} → ${desired.authority}`);
+    // Reopen as a folder URI. updateWorkspaceFolders() turns this single-folder
+    // workspace into an "Untitled (Workspace)" multi-root container.
+    await vscode.commands.executeCommand('vscode.openFolder', desired, { forceReuseWindow: true });
+    return;
   }
 }
 
@@ -5043,94 +5079,68 @@ function auditBackendTool(entry: {
   });
 }
 
-async function ensureAgentHttpRouter(
+async function ensureAgentIpcRouter(
   context: vscode.ExtensionContext
-): Promise<AgentHttpRouter> {
-  let router = httpRouter;
+): Promise<AgentIpcRouter> {
+  let router = ipcRouter;
   if (!router) {
-    if (!httpRouterCreation) {
-      httpRouterCreation = (async () => {
-        const router = new AgentHttpRouter(
-          agentHttpRouterPort(platformAdapter.kind, settings().get<number>('agentHttpRouterPort', 0)),
+    if (!ipcRouterCreation) {
+      ipcRouterCreation = (async () => {
+        const router = new AgentIpcRouter(
+          ipcPath('router-v2-' + platformAdapter.kind),
           await agentBackendToken(context),
           {
-            log: (message) => logBackendMessage('Agent HTTP Router', message),
+            log: (message) => logBackendMessage('Agent IPC Router', message),
             audit: auditBackendTool,
             forwardTimeoutMs: settings().get<number>('agentBackendTimeoutMs', 120_000),
             toolProfile: routerOperationProfile
           }
         );
-        httpRouter = router;
+        ipcRouter = router;
         context.subscriptions.push({ dispose: () => void router.stop() });
         return router;
       })().finally(() => {
-        httpRouterCreation = undefined;
+        ipcRouterCreation = undefined;
       });
     }
-    router = await httpRouterCreation;
+    router = await ipcRouterCreation;
   }
-  if (!httpRouterStart) {
-    httpRouterStart = router.start().then(() => router).finally(() => {
-      httpRouterStart = undefined;
+  if (!ipcRouterStart) {
+    ipcRouterStart = router.start().then(() => router).finally(() => {
+      ipcRouterStart = undefined;
     });
   }
-  return httpRouterStart;
+  return ipcRouterStart;
 }
 
-function startAgentHttpRouterLeadership(context: vscode.ExtensionContext): void {
-  if (agentHttpRouterHeartbeat) return;
-  // 相同错误只记录一次，避免非 leader 窗口每 ~4.5s 刷屏（端口被无关程序占用时）。
+function startAgentIpcRouterLeadership(context: vscode.ExtensionContext): void {
+  if (agentIpcRouterHeartbeat) return;
+  // 相同错误只记录一次，避免共享 IPC 地址不可用时反复刷屏。
   let lastLog = '';
   const logOnce = (message: string) => {
     if (lastLog === message) return;
     lastLog = message;
-    bridgeOutput?.appendLine(`[Agent HTTP Router] ${message}`);
+    bridgeOutput?.appendLine(`[Agent IPC Router] ${message}`);
   };
-  const promptSettingsOnce = (error: unknown, message: string) => {
-    const code = (error as NodeJS.ErrnoException | null)?.code;
-    const permissionDenied = code === 'EACCES' || code === 'EPERM';
-    if (agentHttpRouterSettingsPromptShown
-      || (!permissionDenied && !message.includes('safs.agentHttpRouterPort'))) {
-      return;
-    }
-    agentHttpRouterSettingsPromptShown = true;
-    const detail = permissionDenied
-      ? `${message}\n请将 safs.agentHttpRouterPort 改为其他可用端口，然后重新加载 VS Code 窗口。`
-      : message;
-    void vscode.window.showErrorMessage(
-      'SAFS 无法启动 HTTP CLI 路由器',
-      { modal: true, detail },
-      '打开端口设置'
-    ).then((selected) => {
-      if (selected === '打开端口设置') {
-        return vscode.commands.executeCommand(
-          'workbench.action.openSettings',
-          '@id:safs.agentHttpRouterPort'
-        );
-      }
-      return undefined;
-    });
-  };
-  const retry = () => void ensureAgentHttpRouter(context).catch((error) => {
+  const retry = () => void ensureAgentIpcRouter(context).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     logOnce(message);
-    promptSettingsOnce(error, message);
   });
   retry();
-  agentHttpRouterHeartbeat = setInterval(retry, 4_000 + Math.floor(Math.random() * 1_000));
+  agentIpcRouterHeartbeat = setInterval(retry, 4_000 + Math.floor(Math.random() * 1_000));
   context.subscriptions.push({
     dispose: () => {
-      if (agentHttpRouterHeartbeat) clearInterval(agentHttpRouterHeartbeat);
-      agentHttpRouterHeartbeat = undefined;
+      if (agentIpcRouterHeartbeat) clearInterval(agentIpcRouterHeartbeat);
+      agentIpcRouterHeartbeat = undefined;
     }
   });
 }
 
-async function stopAgentHttpRouterLeadership(): Promise<void> {
-  if (agentHttpRouterHeartbeat) clearInterval(agentHttpRouterHeartbeat);
-  agentHttpRouterHeartbeat = undefined;
-  await httpRouterStart?.catch(() => undefined);
-  await httpRouter?.stop();
+async function stopAgentIpcRouterLeadership(): Promise<void> {
+  if (agentIpcRouterHeartbeat) clearInterval(agentIpcRouterHeartbeat);
+  agentIpcRouterHeartbeat = undefined;
+  await ipcRouterStart?.catch(() => undefined);
+  await ipcRouter?.stop();
 }
 
 async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promise<AgentBackendServer> {
@@ -5149,7 +5159,6 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
     const token = await agentBackendToken(context);
     agentTrace('CLI', `创建窗口级 CLI，绑定挂载 ${boundMountName}`);
     backend = new AgentBackendServer(
-      settings().get<number>('agentBackendPort', 0),
       token,
       {
         toolProfile: windowOperationProfile,
@@ -5304,11 +5313,9 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
     backendBoundMountName = boundMountName;
     context.subscriptions.push({ dispose: () => void backend?.stop() });
   }
-  agentTrace('CLI', `启动窗口级 CLI，configuredPort=${settings().get<number>('agentBackendPort', 0)}`);
+  agentTrace('CLI', '启动窗口级 CLI IPC 服务');
   await backend.start();
-  agentTrace('CLI', backend.portUnavailable
-    ? 'CLI 启动失败：端口不可用'
-    : `CLI 已运行，port=${new URL(backend.url).port}`);
+  agentTrace('CLI', `CLI 已运行，IPC=${backend.socketPath}`);
   return backend;
 }
 
@@ -5322,13 +5329,13 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   if (mountName && enabled.has(mountName) && backendBoundMountName !== mountName) {
     await ensureAgentBackendServer(context);
   }
-  if (!mountName || !enabled.has(mountName) || !backend?.running || backend.portUnavailable) {
+  if (!mountName || !enabled.has(mountName) || !backend?.running) {
     refreshSafsEntryLabel();
     if (mountName && !enabled.has(mountName)) await backend?.stop();
     await agentWorkspacePublisher.remove();
     const reason = !mountName ? '非远程工作区'
       : !enabled.has(mountName) ? `挂载 ${mountName} 未启用 Agent 转发`
-        : !backend?.running ? 'CLI 未运行' : 'CLI 端口不可用';
+        : !backend?.running ? 'CLI 未运行' : 'CLI IPC 不可用';
     if (lastAgentDiscoveryState !== `removed:${reason}`) {
       lastAgentDiscoveryState = `removed:${reason}`;
       agentTrace('Discovery', `未发布工作区记录：${reason}`);
@@ -5355,7 +5362,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   const editorWorkspacePath = currentWorkspacePath(folder);
   const terminalCommandOnly = activeAgentCommandTerminal() !== undefined;
   const workspacePath = terminalCommandOnly ? agentCommandTerminalCwd! : editorWorkspacePath;
-  const localRoot = vscode.Uri.from({ scheme: 'file', path: workspacePathForRemote(folder, editorWorkspacePath) }).fsPath;
+  const localRoot = vscode.Uri.from({ scheme: 'file', path: placeholderPathForRemote(folder, editorWorkspacePath) }).fsPath;
   const workspaceUri = folderUri(folder, editorWorkspacePath);
   await mkdir(localRoot, { recursive: true });
   await writeWorkspaceId(localRoot, workspaceIdFor({
@@ -5371,16 +5378,17 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     host: mount.host,
     hostName: config.host_aliases?.[resolveMount(config, mount).hostConfig.ip] ?? resolveMount(config, mount).hostConfig.ip,
     user: resolveMount(config, mount).hostConfig.user,
-    backendUrl: backend.url,
+    backendSocketPath: backend.socketPath,
+    backendToken: await agentBackendToken(context),
     ...(terminalCommandOnly ? { terminalCommandOnly: true } : {})
   });
   refreshSafsEntryLabel();
-  const state = `published:${mount.name}:${workspacePath}:${backend.url}:${vscode.window.state.focused}:${terminalCommandOnly}`;
+  const state = `published:${mount.name}:${workspacePath}:${backend.socketPath}:${vscode.window.state.focused}:${terminalCommandOnly}`;
   if (lastAgentDiscoveryState !== state) {
     lastAgentDiscoveryState = state;
     agentTrace(
       'Discovery',
-      `已发布挂载 ${mount.name}，focused=${vscode.window.state.focused}，port=${new URL(backend.url).port}`
+      `已发布挂载 ${mount.name}，focused=${vscode.window.state.focused}，IPC=${backend.socketPath}`
     );
   }
 }
@@ -5498,7 +5506,7 @@ async function ensureGlobalCliVersion(
 }
 
 async function installGlobalCli(
-  context: vscode.ExtensionContext, routerUrl: string
+  context: vscode.ExtensionContext, routerSocketPath: string, routerToken: string
 ): Promise<string> {
   const agentHome = os.homedir();
   const cliPlatform = process.platform;
@@ -5507,19 +5515,19 @@ async function installGlobalCli(
   await ensureGlobalCliVersion(
     context, executable, cliPlatform, agentHome
   );
-  await configureGlobalCliConnection(context, executable, routerUrl);
+  await configureGlobalCliConnection(context, executable, routerSocketPath, routerToken);
   return executable;
 }
 
 async function configureGlobalCliConnection(
-  context: vscode.ExtensionContext, executable: string, routerUrl: string
+  context: vscode.ExtensionContext, executable: string, routerSocketPath: string, routerToken: string
 ): Promise<void> {
   const agentHome = os.homedir();
   const cliPlatform = process.platform;
   const forwardingTimeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
   const cliTimeoutMs = forwardingTimeoutMs > 0 ? forwardingTimeoutMs + 5_000 : 0;
   await writeCliConnectionFile(
-    nodeCliConnectionPath(executable), routerUrl, cliTimeoutMs
+    nodeCliConnectionPath(executable), routerSocketPath, routerToken, cliTimeoutMs
   );
   const binDirectory = path.dirname(executable);
   if (cliPlatform === 'win32') {
@@ -5586,10 +5594,10 @@ function configureAgentInterface(
 async function performAgentInterfacePreparation(
   context: vscode.ExtensionContext, interactive: boolean
 ): Promise<{ cliExecutable?: string }> {
-  const router = await ensureAgentHttpRouter(context);
+  const router = await ensureAgentIpcRouter(context);
   let executable: string;
   try {
-    executable = await installGlobalCli(context, cliRouterUrl(router.url));
+    executable = await installGlobalCli(context, router.socketPath, await agentBackendToken(context));
     await installGlobalCliSkill(executable);
     await updateInstalledNodeCliSkills(os.homedir(), async (target) => {
       if (target !== 'agents') await installGlobalCliSkill(executable, target);
@@ -5666,16 +5674,16 @@ async function updateAiForwardEnabled(
     }
     if (enabledValue) {
       await prepareAgentCwd(mount);
-      agentTrace('Preference', '先启动固定 HTTP 路由，再启动当前窗口服务');
-      startAgentHttpRouterLeadership(vscodeContext);
-      await ensureAgentHttpRouter(vscodeContext);
+      agentTrace('Preference', '先启动共享 IPC 路由，再启动当前窗口服务');
+      startAgentIpcRouterLeadership(vscodeContext);
+      await ensureAgentIpcRouter(vscodeContext);
       if (activeMountName === mount.name) {
-        const server = await ensureAgentBackendServer(vscodeContext);
-        if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
+        await ensureAgentBackendServer(vscodeContext);
+        await publishAgentWorkspace(vscodeContext);
       }
     } else if (enabled.size === 0) {
       agentTrace('Preference', '已无启用挂载，停止固定路由；Agent 配置由用户手动管理');
-      await stopAgentHttpRouterLeadership();
+      await stopAgentIpcRouterLeadership();
     }
   });
   if (!changed) return;
@@ -5715,8 +5723,8 @@ async function restartAgentForwarding(mount: MountConfig): Promise<void> {
     const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
     if (!enabled.has(mount.name)) await setAiForwardEnabled(mount, true);
     await configureAgentInterface(vscodeContext, true);
-    startAgentHttpRouterLeadership(vscodeContext);
-    await ensureAgentHttpRouter(vscodeContext);
+    startAgentIpcRouterLeadership(vscodeContext);
+    await ensureAgentIpcRouter(vscodeContext);
 
     const location = currentRemoteLocation();
     const terminal = activeAgentCommandTerminal();
@@ -5728,8 +5736,8 @@ async function restartAgentForwarding(mount: MountConfig): Promise<void> {
       backend = undefined;
       backendBoundMountName = undefined;
       await ensureFolder(mount);
-      const server = await ensureAgentBackendServer(vscodeContext);
-      if (!server.portUnavailable) await publishAgentWorkspace(vscodeContext);
+      await ensureAgentBackendServer(vscodeContext);
+      await publishAgentWorkspace(vscodeContext);
     }
   });
   await refreshAgentCommandTerminalState();
@@ -6034,6 +6042,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     { dispose: () => { void pool.close(); syncManager?.dispose(); } }
   );
+  await refreshRemoteWorkspaceNames().catch(error =>
+    logAsyncFailure('设置远程工作区显示名称失败', error));
 
   const uiOperations = new UiOperationGate();
   const command = (name: string, callback: (...args: never[]) => Promise<unknown>) => {
@@ -6115,7 +6125,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tree.refresh();
   });
   command('installAgentForwarding', async () => {
-    startAgentHttpRouterLeadership(context);
+    startAgentIpcRouterLeadership(context);
     const result = await configureAgentInterface(context, true);
     if (result.cliExecutable) {
       bridgeOutput?.info(`[Agent CLI] 安装完成：${result.cliExecutable}`);
@@ -6184,12 +6194,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const forwarding = vscodeContext.globalState
       .get<string[]>(aiForwardMountsKey, []).includes(mount.name);
     if (forwarding) {
-      startAgentHttpRouterLeadership(vscodeContext);
-      await ensureAgentHttpRouter(vscodeContext);
+      startAgentIpcRouterLeadership(vscodeContext);
+      await ensureAgentIpcRouter(vscodeContext);
     }
     const localRoot = localRootForFolder(folder);
     await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, item.path);
     await writeLastRemoteDirectory(localRoot, folder.remoteRoot, item.path);
+    setRemoteWorkspaceDisplayRoot(folder, item.path);
     await recordDirectoryHistory(vscodeContext, item.mountName, item.path);
     await vscode.commands.executeCommand(
       'vscode.openFolder',
@@ -6367,7 +6378,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshShellTerminalTarget(terminal))
   );
 
-  // Agent CLI: keep one in-extension fixed HTTP router alive, then start the
+  // Agent CLI: keep one in-extension shared IPC router alive, then start the
   // dynamic backend only in an enabled remote window.
   await guard(async () => {
     const current = currentRemoteLocation();
@@ -6386,20 +6397,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       `当前远程挂载=${current?.mountName ?? '<none>'}，启用列表=${[...enabled].join(',') || '<empty>'}`
     );
     if (enabled.size > 0) {
-      agentTrace('Activate', '启动或连接固定 HTTP CLI 路由器');
-      startAgentHttpRouterLeadership(context);
-      await ensureAgentHttpRouter(context);
+      agentTrace('Activate', '启动或连接共享 IPC CLI 路由器');
+      startAgentIpcRouterLeadership(context);
+      await ensureAgentIpcRouter(context);
       if (current && enabled.has(current.mountName)) {
         agentTrace('Activate', `挂载 ${current.mountName} 已启用，启动窗口动态 CLI 后端`);
         const config = await readConfig();
         const mount = config.mounts.find((candidate) => candidate.name === current.mountName);
         if (mount) await prepareAgentCwd(mount);
-        const server = await ensureAgentBackendServer(context);
-        if (!server.portUnavailable) {
-          await publishAgentWorkspace(context);
-        }
+        await ensureAgentBackendServer(context);
+        await publishAgentWorkspace(context);
       } else {
-        agentTrace('Activate', '当前不是已启用的远程窗口，仅提供固定 HTTP 路由');
+        agentTrace('Activate', '当前不是已启用的远程窗口，仅提供共享 IPC 路由');
       }
     } else {
       agentTrace('Activate', '当前没有启用 Agent 转发的远程挂载，本地 CLI 在后台准备');
@@ -6417,11 +6426,11 @@ export async function deactivate(): Promise<void> {
   await agentActivityStore?.flush();
   agentActivityStore?.dispose();
   if (agentWorkspaceHeartbeat) clearInterval(agentWorkspaceHeartbeat);
-  if (agentHttpRouterHeartbeat) clearInterval(agentHttpRouterHeartbeat);
+  if (agentIpcRouterHeartbeat) clearInterval(agentIpcRouterHeartbeat);
   await discoveryCleanup;
   await backend?.stop();
-  await httpRouterStart?.catch(() => undefined);
-  await httpRouter?.stop();
+  await ipcRouterStart?.catch(() => undefined);
+  await ipcRouter?.stop();
   await pool?.close();
   closeSshConnections();
 }
