@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { redactSensitiveText } from '../security/redact';
 
-export type AgentActivitySource = 'cli';
+export type AgentActivitySource = 'cli' | 'mcp';
 export type AgentActivityStatus = 'running' | 'success' | 'error' | 'interrupted';
 export type AgentActivityCategory = 'read' | 'write' | 'command' | 'transfer';
 
@@ -146,7 +146,7 @@ function validEvent(value: unknown): value is AgentActivityEvent {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const event = value as Partial<AgentActivityEvent>;
   return event.version === 1 && typeof event.id === 'string'
-    && (event.source === 'cli' || event.source === 'cli')
+    && (event.source === 'cli' || event.source === 'mcp')
     && typeof event.agentName === 'string' && typeof event.toolName === 'string'
     && ['read', 'write', 'command', 'transfer'].includes(event.category ?? '')
     && ['running', 'success', 'error', 'interrupted'].includes(event.status ?? '')

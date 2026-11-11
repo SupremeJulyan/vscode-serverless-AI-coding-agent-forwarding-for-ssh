@@ -6,7 +6,7 @@ export const agentActivityViewId = 'safs.agentActivity';
 
 export interface AgentTerminalTargetState {
   enabled: boolean;
-  interface?: 'cli';
+  interface?: 'cli' | 'mcp';
   mode?: 'workspace' | 'terminal';
   label?: string;
   availability?: 'disabled' | 'checking' | 'ready' | 'error';
@@ -238,7 +238,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
     <div id="agentModeDetail" class="agent-mode-detail">使用当前远程工作区</div>
     <div id="modeCapabilities" class="agent-mode-detail" hidden>仅支持终端命令；文件、搜索和传输工具不可用。命令沿用所选终端的权限和环境。</div>
     <div id="forwardingStatus" class="agent-mode-detail" role="status"></div>
-    <button id="recoverForwarding" type="button" hidden>重试连接</button>
+    <button id="recoverForwarding" type="button" class="action-button" hidden>重试连接</button>
   </section>
   <div class="controls">
     <select id="category" aria-label="按操作类型筛选">
