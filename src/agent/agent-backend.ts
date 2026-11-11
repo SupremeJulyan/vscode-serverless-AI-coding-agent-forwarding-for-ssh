@@ -1,84 +1,11 @@
 import { createIpcServer, ipcPath, listenIpc, IpcRequestError } from './agent-ipc';
 import { operationMetric } from '../shared/operation-metric';
-import { listDirectories } from '../remote/remote-results';
-import { readTextBatch } from '../remote/remote-read-batch';
-import { RemoteSearchOptions } from '../remote/remote-search';
-import { RemoteReadOptions } from '../remote/remote-read';
 import { RemoteOutputStore } from '../remote/remote-output';
-import { type AgentToolProfile, terminalCliOnlyCommandMessage } from './agent-operations';
-import { AgentActivitySource } from './agent-activity';
-
-export interface RemoteFolderInfo {
-  name: string;
-  workspaceUri: string;
-  workspaceRoot: string;
-  host: string;
-}
-
-export interface AgentBackendCallbacks {
-  toolProfile?(): AgentToolProfile;
-  listFolders(): Promise<RemoteFolderInfo[]>;
-  currentWorkspace(): Promise<RemoteFolderInfo | null>;
-  /** 当前打开的远程文件元数据（无活动远程文件时为 null）。 */
-  currentFile(input: { mountName?: string }): Promise<unknown>;
-  list(input: { mountName?: string; path?: string; limit?: number; cursor?: string }): Promise<unknown>;
-  read(input: RemoteReadOptions & { mountName?: string }): Promise<unknown>;
-  edit(input: {
-    mountName?: string; path: string;
-    edits: Array<{ oldText: string; newText: string }>;
-    expectedHash?: string;
-  }): Promise<unknown>;
-  write(input: { mountName?: string; path: string; content: string }): Promise<unknown>;
-  create?(input: {
-    mountName?: string; path: string; type: 'file' | 'directory'; content?: string;
-  }): Promise<unknown>;
-  delete(input: { mountName?: string; path: string; recursive?: boolean }): Promise<unknown>;
-  chmod(input: { mountName?: string; path: string; mode: string }): Promise<unknown>;
-  move(input: {
-    mountName?: string; sourcePath: string; targetPath: string; overwrite?: boolean;
-  }): Promise<unknown>;
-  upload(input: {
-    mountName?: string; localPaths: string[]; remoteDirectory: string;
-  }): Promise<unknown>;
-  download(input: {
-    mountName?: string; remotePath: string; localPath: string;
-  }): Promise<unknown>;
-  search(input: RemoteSearchOptions & {
-    mountName?: string; agentName?: string;
-  }): Promise<unknown>;
-  run(input: {
-    command: string; mountName?: string; remoteCwd?: string; agentName?: string;
-  }): Promise<unknown>;
-  runTerminal?(input: {
-    command: string; mountName?: string; agentName?: string; source?: AgentActivitySource;
-  }): Promise<unknown>;
-  request?(agentName?: string): void;
-  audit?(entry: {
-    toolName: string; input: Record<string, unknown>;
-    agentName?: string;
-  }): void;
-  activity?: {
-    start(entry: {
-      source: AgentActivitySource; toolName: string; input: Record<string, unknown>;
-      agentName?: string;
-    }): string | undefined;
-    succeed(id: string, result: unknown): void;
-    fail(id: string, error: unknown): void;
-  };
-  log?(message: string): void;
-}
-
-/** A structured operation error whose recovery hints are safe to expose to Agents. */
-export class AgentToolError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly details: Record<string, unknown> = {}
-  ) {
-    super(message);
-    this.name = 'AgentToolError';
-  }
-}
+import { terminalCliOnlyCommandMessage } from './agent-operations';
+import { createAgentOperationRuntime, dispatchAgentOperation, AgentOperationCallbacks, AgentRemoteFolderInfo, AgentToolError } from './agent-operation-dispatcher';
+export { AgentToolError } from './agent-operation-dispatcher';
+export type RemoteFolderInfo = AgentRemoteFolderInfo;
+export type AgentBackendCallbacks = AgentOperationCallbacks<'cli'>;
 
 export class AgentBackendServer {
   private readonly outputs = new RemoteOutputStore();
@@ -89,6 +16,23 @@ export class AgentBackendServer {
     private readonly callbacks: AgentBackendCallbacks
   ) {}
 
+  private async callOperation(name: string, input: Record<string, unknown>, agentName?: string) {
+    const runtime = createAgentOperationRuntime({
+      callbacks: this.callbacks, outputs: this.outputs, source: 'cli', agentName,
+      profile: this.callbacks.toolProfile?.(),
+      formatResult: value => ({ ok: true, result: value }),
+      formatError: error => {
+        const structured = error instanceof AgentToolError ? error : undefined;
+        return { ok: false, error: {
+          ...(structured?.details ?? {}), code: structured?.code ?? 'REMOTE_TOOL_ERROR',
+          message: error instanceof Error ? error.message : String(error)
+        } };
+      }
+    });
+    try { return await dispatchAgentOperation(this.callbacks, this.outputs, name, input, runtime); }
+    catch (error) { return runtime.formatError(error); }
+  }
+
   get socketPath(): string {
     return ipcPath('window-' + process.pid + '-' + this.token);
   }
@@ -96,171 +40,6 @@ export class AgentBackendServer {
   get running(): boolean {
     return this.server !== undefined;
   }
-
-  private async callOperation(name: string, input: Record<string, unknown>, agentName?: string) {
-    const source: AgentActivitySource = 'cli';
-    const profile = this.callbacks.toolProfile?.();
-    // 紧凑 JSON：结果只回传必要字段，缩进空白会白白消耗模型 token。
-    const result = (value: unknown) => ({ ok: true, result: value });
-    const toolError = (error: unknown) => {
-      const structured = error instanceof AgentToolError ? error : undefined;
-      return { ok: false, error: {
-        ...(structured?.details ?? {}), code: structured?.code ?? 'REMOTE_TOOL_ERROR',
-        message: error instanceof Error ? error.message : String(error)
-      } };
-    };
-    const trackedTools = new Set([
-      'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many',
-      'remote_edit', 'remote_write', 'remote_delete', 'remote_chmod', 'remote_move',
-      'remote_create',
-      'remote_upload', 'remote_download', 'remote_output', 'remote_search', 'run_remote_command'
-    ]);
-    const invoke = async (
-      toolName: string, input: Record<string, unknown>, callback: () => Promise<unknown>
-    ) => {
-      let activityId: string | undefined;
-      if (trackedTools.has(toolName)) {
-        try {
-          activityId = this.callbacks.activity?.start({
-            source, toolName, input, agentName
-          });
-        } catch (error) {
-          this.callbacks.log?.(
-            `Agent 活动开始记录失败：${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
-      try {
-        const value = await callback();
-        if (activityId) {
-          try { this.callbacks.activity?.succeed(activityId, value); }
-          catch (error) {
-            this.callbacks.log?.(
-              `Agent 活动完成记录失败：${error instanceof Error ? error.message : String(error)}`
-            );
-          }
-        }
-        return result(value);
-      } catch (error) {
-        if (activityId) {
-          try { this.callbacks.activity?.fail(activityId, error); }
-          catch (activityError) {
-            this.callbacks.log?.(
-              `Agent 活动失败记录失败：${activityError instanceof Error ? activityError.message : String(activityError)}`
-            );
-          }
-        }
-        return toolError(error);
-      }
-    };
-    const publicCurrentFile = (value: unknown): unknown => {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-      const { mountName: _mountName, ...publicValue } = value as Record<string, unknown>;
-      return publicValue;
-    };
-    const outputScope = async () => {
-      const workspace = await this.callbacks.currentWorkspace();
-      if (!workspace) throw new Error('No active workspace for retained output.');
-      return JSON.stringify([workspace.host, workspace.workspaceUri, agentName]);
-    };
-    const capture = async (callback: () => Promise<unknown>) => {
-      const scope = await outputScope();
-      const value = await callback();
-      if (scope !== await outputScope()) throw new Error('Workspace changed during execution.');
-      return this.outputs.capture(value, scope);
-    };
-        switch (name) {
-          case 'list_remote_workspaces':
-            return invoke(name, input, async () => {
-              throw new Error('Workspace listing is only available through the SAFS router');
-            });
-          case 'current_remote_file':
-            return invoke(name, input, async () => publicCurrentFile(
-              await this.callbacks.currentFile(input)
-            ));
-          case 'remote_list':
-            return invoke(name, input, () => {
-              if (!input.paths) return this.callbacks.list(input);
-              if (input.path !== undefined || input.cursor !== undefined) {
-                throw new Error('Choose paths for a batch or path/cursor for a single directory.');
-              }
-              return listDirectories(input.paths as string[], (input.limit as number | undefined) ?? 100,
-                request => this.callbacks.list(request));
-            });
-          case 'remote_read_many':
-            return invoke(name, input, () => readTextBatch(input.requests as RemoteReadOptions[],
-              (input.maxBytes as number | undefined) ?? 16384,
-              request => this.callbacks.read(request)));
-          case 'remote_read':
-            return invoke(name, input, () => this.callbacks.read(input as {
-              mountName?: string; path: string; offset?: number; length?: number;
-            }));
-          case 'remote_edit':
-            return invoke(name, input, () => this.callbacks.edit(input as {
-              mountName?: string; path: string;
-              edits: Array<{ oldText: string; newText: string }>;
-              expectedHash?: string;
-            }));
-          case 'remote_write':
-            return invoke(name, input, () => this.callbacks.write(input as {
-              mountName?: string; path: string; content: string;
-            }));
-          case 'remote_create':
-            return invoke(name, input, () => {
-              if (!this.callbacks.create) throw new Error('Remote create is unavailable.');
-              return this.callbacks.create(input as Parameters<NonNullable<AgentBackendCallbacks['create']>>[0]);
-            });
-          case 'remote_delete':
-            return invoke(name, input, () => this.callbacks.delete(input as {
-              mountName?: string; path: string; recursive?: boolean;
-            }));
-          case 'remote_chmod':
-            return invoke(name, input, () => this.callbacks.chmod(input as {
-              mountName?: string; path: string; mode: string;
-            }));
-          case 'remote_move':
-            return invoke(name, input, () => this.callbacks.move(input as {
-              mountName?: string; sourcePath: string; targetPath: string; overwrite?: boolean;
-            }));
-          case 'remote_upload':
-            return invoke(name, input, () => this.callbacks.upload(
-              input as Parameters<AgentBackendCallbacks['upload']>[0]
-            ));
-          case 'remote_download':
-            return invoke(name, input, () => this.callbacks.download(
-              input as Parameters<AgentBackendCallbacks['download']>[0]
-            ));
-          case 'remote_output':
-            return invoke(name, input, async () => this.outputs.read(
-              input.outputId as string, await outputScope(),
-              input.stream as 'stdout' | 'stderr', input.offset as number | undefined,
-              input.length as number | undefined
-            ));
-          case 'remote_search':
-            return invoke(name, input, () => capture(() => this.callbacks.search({
-              ...input, agentName
-            } as Parameters<AgentBackendCallbacks['search']>[0])));
-          case 'run_remote_command':
-            return invoke(name, input, () => {
-              if (profile !== 'terminal') {
-                return capture(() => this.callbacks.run({
-                  ...input, agentName
-                } as Parameters<AgentBackendCallbacks['run']>[0]));
-              }
-              if (!this.callbacks.runTerminal) {
-                throw new Error('No SAFS terminal is selected for Agent command forwarding.');
-              }
-              return this.callbacks.runTerminal({
-                command: input.command as string,
-                ...(typeof input.mountName === 'string' ? { mountName: input.mountName } : {}),
-                agentName,
-                source
-              });
-            });
-        }
-    throw new AgentToolError('UNKNOWN_OPERATION', 'Unknown CLI operation: ' + name);
-  }
-
 
   async start(): Promise<void> {
     if (this.server) return;
