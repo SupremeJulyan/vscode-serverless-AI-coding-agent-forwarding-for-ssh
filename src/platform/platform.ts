@@ -1,6 +1,11 @@
 import * as os from 'node:os';
 export type PlatformKind = 'windows' | 'macos' | 'linux' | 'wsl';
 
+export function agentHttpRouterPort(platform: PlatformKind, configuredPort = 0): number {
+  if (!configuredPort || configuredPort === 9848 || configuredPort === 9849) return platform === 'wsl' ? 9849 : 9848;
+  return configuredPort;
+}
+
 export function platformExtensionStateKey(name: string, platform: PlatformKind): string {
   return `safs.${name}.${platform}`;
 }

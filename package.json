@@ -817,6 +817,26 @@
           "default": 120000,
           "description": "Unified timeout for Agent CLI forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
         },
+        "safs.agentInterface": {
+          "type": "string", "enum": ["mcp", "cli"], "default": "cli",
+          "description": "Agent 接口。MCP 使用 HTTP Streamable transport，CLI 使用独立 IPC。"
+        },
+        "safs.agentMcpToolProfile": {
+          "type": "string", "enum": ["full", "core"], "default": "full",
+          "description": "MCP 工具集：full 包含完整远程文件操作，core 使用精简工具集。"
+        },
+        "safs.agentMcpTimeoutMs": {
+          "type": "number", "minimum": 0, "default": 120000,
+          "description": "MCP 操作超时时间（毫秒），0 表示不限制。"
+        },
+        "safs.agentMcpPort": {
+          "type": "number", "minimum": 0, "default": 0,
+          "description": "当前窗口 MCP HTTP 监听端口，0 表示自动分配。"
+        },
+        "safs.agentHttpRouterPort": {
+          "type": "number", "minimum": 0, "default": 0,
+          "description": "共享 MCP HTTP 路由端口；0 表示使用 SAFS 默认端口。"
+        },
         "safs.git.operationTimeoutMs": {
           "type": "number",
           "minimum": 0,
@@ -960,6 +980,7 @@
     "vsix": "npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/SupremeJulyan/vscode-serverless-AI-coding-agent-forwarding-for-ssh/blob/main --baseImagesUrl https://raw.githubusercontent.com/SupremeJulyan/vscode-serverless-AI-coding-agent-forwarding-for-ssh/main"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",
     "@types/shell-quote": "^1.7.5",
     "@types/ssh2": "^1.15.6",
@@ -970,8 +991,10 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "jsonc-parser": "^3.3.1",
     "shell-quote": "1.8.3",
-    "ssh2": "^1.17.0"
+    "ssh2": "^1.17.0",
+    "zod": "^4.4.3"
   }
 }
