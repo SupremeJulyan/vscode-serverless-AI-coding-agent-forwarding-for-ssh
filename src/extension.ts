@@ -54,6 +54,7 @@ import {
   configEntryOffset, passwordValueOffset
 } from './config/authentication';
 import { AgentBackendServer, AgentToolError } from './agent/agent-backend';
+import { BackendLifecycle } from './agent/backend-lifecycle';
 import { writeWorkspaceId } from './agent/workspace-id';
 import { AgentIpcRouter, workspaceIdFor } from './agent/agent-ipc-router';
 import { ipcPath } from './agent/agent-ipc';
@@ -162,6 +163,8 @@ let output: vscode.OutputChannel;
 let bridgeOutput: vscode.LogOutputChannel | undefined;
 let backend: AgentBackendServer | undefined;
 let backendBoundMountName: string | undefined;
+const backendLifecycle = new BackendLifecycle<AgentBackendServer>();
+const mcpLifecycle = new BackendLifecycle<AgentMcpServer>();
 let ipcRouter: AgentIpcRouter | undefined;
 let ipcRouterCreation: Promise<AgentIpcRouter> | undefined;
 let ipcRouterStart: Promise<AgentIpcRouter> | undefined;
@@ -2953,7 +2956,9 @@ async function disconnect(requested?: MountConfig): Promise<void> {
 
   // Keep the Agent-forwarding preference so reconnecting this mount can
   // restore Agent access through the stable CLI router.
-  await backend?.stop();
+  await backendLifecycle.stop();
+  backend = undefined;
+  backendBoundMountName = undefined;
   await agentWorkspacePublisher.remove();
 }
 
@@ -5182,7 +5187,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
   const terminalInfo = terminal ? managedRemoteTerminals.get(terminal) : undefined;
   const mountName = location?.mountName ?? terminalInfo?.mount.name;
   if (!mountName) throw new Error('当前窗口没有 SAFS 远程目标');
-  if (mcpServer) await mcpServer.stop();
+  if (mcpServer && mcpLifecycle.mountName === mountName) return mcpServer;
   const callbacks: any = {
     toolProfile: backendMcpToolProfile,
     listFolders: async () => (await forwardedFolders(context)).filter((x) => x.name === mountName),
@@ -5235,8 +5240,11 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
     },
     log: (message: string) => logBackendMessage('Agent MCP', message)
   };
-  mcpServer = new AgentMcpServer(settings().get<number>('agentMcpPort', 0), await agentMcpToken(context), callbacks);
-  await mcpServer.start();
+  mcpServer = await mcpLifecycle.ensure(mountName, async () => {
+    const server = new AgentMcpServer(settings().get<number>('agentMcpPort', 0), await agentMcpToken(context), callbacks);
+    await server.start();
+    return server;
+  });
   return mcpServer;
 }
 
@@ -5310,16 +5318,11 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
   const terminalInfo = selectedTerminal ? managedRemoteTerminals.get(selectedTerminal) : undefined;
   const boundMountName = location?.mountName ?? terminalInfo?.mount.name;
   if (!boundMountName) throw new Error('当前窗口不是 Serverless Remote 工作区');
-  if (backend && backendBoundMountName !== boundMountName) {
-    await agentWorkspacePublisher.remove();
-    await backend.stop();
-    backend = undefined;
-    backendBoundMountName = undefined;
-  }
-  if (!backend) {
+  if (backendLifecycle.mountName === boundMountName && backend) return backend;
+  backend = await backendLifecycle.ensure(boundMountName, async () => {
     const token = await agentBackendToken(context);
     agentTrace('CLI', `创建窗口级 CLI，绑定挂载 ${boundMountName}`);
-    backend = new AgentBackendServer(
+    const server = new AgentBackendServer(
       token,
       {
         toolProfile: windowOperationProfile,
@@ -5471,11 +5474,11 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
         log: (message) => logBackendMessage('Agent CLI', message)
       }
     );
-    backendBoundMountName = boundMountName;
-    context.subscriptions.push({ dispose: () => void backend?.stop() });
-  }
+    await server.start();
+    return server;
+  });
+  backendBoundMountName = boundMountName;
   agentTrace('CLI', '启动窗口级 CLI IPC 服务');
-  await backend.start();
   agentTrace('CLI', `CLI 已运行，IPC=${backend.socketPath}`);
   return backend;
 }
@@ -5493,7 +5496,11 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   }
   if (!mountName || !enabled.has(mountName) || !backend?.running) {
     refreshSafsEntryLabel();
-    if (mountName && !enabled.has(mountName)) await backend?.stop();
+    if (mountName && !enabled.has(mountName)) {
+      await backendLifecycle.stop();
+      backend = undefined;
+      backendBoundMountName = undefined;
+    }
     await agentWorkspacePublisher.remove();
     const reason = !mountName ? '非远程工作区'
       : !enabled.has(mountName) ? `挂载 ${mountName} 未启用 Agent 转发`
@@ -5860,8 +5867,11 @@ async function updateAiForwardEnabled(
     const activeMountName = current?.mountName ?? terminalInfo?.mount.name;
     if (!enabledValue && activeMountName === mount.name) {
       agentTrace('Preference', `当前窗口绑定 ${mount.name}，正在停止 Agent 服务并移除发现记录`);
-      await backend?.stop();
-      await mcpServer?.stop();
+      await backendLifecycle.stop();
+      await mcpLifecycle.stop();
+      backend = undefined;
+      mcpServer = undefined;
+      backendBoundMountName = undefined;
       await agentWorkspacePublisher.remove();
     }
     if (enabledValue && cliEnabled()) {
@@ -5930,7 +5940,7 @@ async function restartAgentForwarding(mount: MountConfig): Promise<void> {
     const activeMountName = location?.mountName ?? terminalInfo?.mount.name;
     if (activeMountName === mount.name) {
       await agentWorkspacePublisher.remove();
-      await backend?.stop();
+      await backendLifecycle.stop();
       backend = undefined;
       backendBoundMountName = undefined;
       await ensureFolder(mount);
@@ -6073,11 +6083,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void guard(async () => {
       if (next === 'cli') {
         await configureAgentInterface(context, true);
-        await mcpServer?.stop();
+        await mcpLifecycle.stop();
+        mcpServer = undefined;
         await mcpRouter?.stop();
         if (shouldCopyMcpUninstallPrompt(previous, next, vscode.window.state.focused)) await copyMcpUninstallPromptAndNotify(context);
       } else {
-        await backend?.stop();
+        await backendLifecycle.stop();
+        backend = undefined;
+        backendBoundMountName = undefined;
         await stopAgentIpcRouterLeadership();
         await ensureAgentMcpRouter(context);
         if (vscode.window.state.focused) await installAgentForwardingIntegration(context);
@@ -6670,8 +6683,11 @@ export async function deactivate(): Promise<void> {
   if (agentWorkspaceHeartbeat) clearInterval(agentWorkspaceHeartbeat);
   if (agentIpcRouterHeartbeat) clearInterval(agentIpcRouterHeartbeat);
   await discoveryCleanup;
-  await backend?.stop();
-  await mcpServer?.stop();
+  await backendLifecycle.stop();
+  await mcpLifecycle.stop();
+  backend = undefined;
+  mcpServer = undefined;
+  backendBoundMountName = undefined;
   await ipcRouterStart?.catch(() => undefined);
   await ipcRouter?.stop();
   await mcpRouter?.stop();
