@@ -4701,7 +4701,7 @@ class RemoteFoldersProvider implements vscode.TreeDataProvider<TreeElement> {
         ? '连接中'
         : connectionState === 'error' ? '连接错误' : '未连接';
     item.contextValue = 'safs.host.safs.hostGroup';
-    item.iconPath = new vscode.ThemeIcon(connected ? 'vm-active' : 'remote');
+    item.iconPath = new vscode.ThemeIcon('server');
     item.tooltip = new vscode.MarkdownString([
       `**${group.displayName}**`,
       '',
@@ -4745,7 +4745,8 @@ const aiForwarded = this.context.globalState
     item.contextValue = [
       'safs.connection',
       connected ? 'connected' : 'disconnected',
-      aiForwarded ? 'aiEnabled' : 'aiDisabled'
+      aiForwarded ? 'aiEnabled' : 'aiDisabled',
+      aiForwarded && forwardingError && !forwarding ? 'forwardingFailed' : 'forwardingIdle'
     ].join('.');
     item.tooltip = new vscode.MarkdownString([
       `**${mount.name}**`,
@@ -4759,7 +4760,7 @@ const aiForwarded = this.context.globalState
         : forwardingError
           ? 'Agent 转发：发生错误，请重启转发'
         : aiForwarded
-          ? 'Agent 转发：等待远程工作区就绪'
+          ? 'Agent 转发：已启用'
           : 'Agent 转发：已关闭',
       '',
       '展开可查看历史远程主机目录。'
@@ -4801,20 +4802,16 @@ const aiForwarded = this.context.globalState
       && workspaces.some((workspace) => workspace.mountName === item.hostName);
     const forwardingError = forwardingRecoveryError?.mountName === item.hostName || !!cliSetupError;
     treeItem.description = forwarding ? 'Agent 转发中'
-      : forwardingError ? 'Agent 转发错误' : aiForwarded ? 'Agent 等待工作区' : 'Agent 未连接';
-    treeItem.iconPath = new vscode.ThemeIcon(
-      'circle-filled',
-      new vscode.ThemeColor(forwardingError ? 'testing.iconFailed'
-        : forwarding ? 'testing.iconPassed' : aiForwarded ? 'testing.iconQueued' : 'disabledForeground')
-    );
+      : forwardingError ? 'Agent 转发错误' : aiForwarded ? '' : 'Agent 未连接';
+    treeItem.iconPath = new vscode.ThemeIcon('account');
     treeItem.contextValue = item.user.trim()
       ? [
         'safs.connection', 'safs.user',
         connected ? 'connected' : 'disconnected',
-        aiForwarded ? 'aiEnabled' : 'aiDisabled'
+        aiForwarded ? 'aiEnabled' : 'aiDisabled',
+        aiForwarded && forwardingError && !forwarding ? 'forwardingFailed' : 'forwardingIdle'
       ].join('.')
       : 'safs.user.missingCredentials';
-    if (!item.user.trim()) treeItem.iconPath = new vscode.ThemeIcon('account');
     treeItem.tooltip = item.user
       ? `SSH 账号：${item.user}\n配置：${item.hostName}`
       : '点击新增账号，也可点击主机旁的 +。';
