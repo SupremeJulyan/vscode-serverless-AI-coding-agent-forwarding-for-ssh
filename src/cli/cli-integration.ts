@@ -22,6 +22,24 @@ export async function writeCliConnectionFile(target: string, socketPath: string,
 
 const begin = '<!-- SAFS CLI BEGIN -->';
 const end = '<!-- SAFS CLI END -->';
+export async function writePlaceholderGuidance(directory: string, terminalOnly: boolean): Promise<void> {
+  const target = path.join(directory, 'AGENTS.md');
+  let previous = '';
+  try {
+    const stat = await lstat(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Invalid instruction file: ${target}`);
+    previous = await readFile(target, 'utf8');
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  const block = `${begin}\n# ARW remote workspace\n\nThis local directory is a startup placeholder, not a project copy or mount.\nRead .awm/workspace.json locally for the remote workspace binding. Run safs from this directory; omit --id for this workspace. Explicit --id overrides the binding. Never change targets automatically.\n${terminalOnly
+    ? 'This workspace is in terminal mode. Use safs exec -- COMMAND for all remote operations.'
+    : 'Use safs list/read/search/find for remote inspection, safs edit/write/create/delete/move/chmod for file changes, and safs exec for builds, tests and Git. Read applicable remote AGENTS.md instructions before changing project files.'}\nDo not create or edit project files in this placeholder. Use safs --help or safs COMMAND --help for syntax.\n${end}\n`;
+  const a = previous.indexOf(begin), b = previous.indexOf(end);
+  if ((a < 0) !== (b < 0) || (a >= 0 && b < a)) throw new Error(`Malformed SAFS instruction block: ${target}`);
+  const next = a < 0 ? previous + (previous && !previous.endsWith('\n') ? '\n' : '') + block
+    : previous.slice(0, a) + block + previous.slice(b + end.length).replace(/^\n/, '');
+  if (next !== previous) await writeFile(target, next, { mode: 0o600 });
+}
+
 /** Remove instruction blocks written by pre-global-CLI releases. */
 export async function updateCliInstructions(parent: string) {
   for (const name of ['AGENTS.md', 'CLAUDE.md']) {
