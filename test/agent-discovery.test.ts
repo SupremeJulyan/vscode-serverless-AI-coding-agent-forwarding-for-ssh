@@ -129,7 +129,7 @@ test('ignores a fresh record owned by a terminated process', async () => {
   assert.deepEqual(discoverAgentWorkspaces([directory]), []);
 });
 
-test('foreign platform PIDs are not checked against the local process table', async () => {
+test('foreign platform IPC records are excluded from local discovery', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'safs-discovery-foreign-'));
   const directory = agentDiscoveryDirectory(home);
   await mkdir(directory, { recursive: true });
@@ -140,5 +140,5 @@ test('foreign platform PIDs are not checked against the local process table', as
     mountName: 'project', workspaceRoot: '/srv/project', host: 'dev',
     backendSocketPath: '/tmp/safs-backend.sock', backendToken: 'secret', updatedAt: new Date().toISOString()
   }));
-  assert.equal(discoverAgentWorkspaces([directory]).length, 1);
+  assert.equal(discoverAgentWorkspaces([directory]).length, 0);
 });

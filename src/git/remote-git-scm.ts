@@ -1,30 +1,47 @@
 import {
-  applyObservedPushState, GitSyncState, ObservedPushState, readGitSyncState,
-  syncStateLabel, syncStateTooltip
+  applyObservedPushState, GitSyncState, ObservedPushState, readGitSyncState
 } from './git-sync-state';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { GitChange, GitRunner, isGitConflict, RemoteGit } from './remote-git';
+import { describeGitOperationError } from './git-error';
+import { validatePushUrl } from './local-git-push';
 import { createBranch, GitBranch, listBranches, switchBranch } from './remote-git-branch';
 
-interface Repository {
+export interface Repository {
+  kind: 'repository';
+  message: string;
+  count: number;
   uri: vscode.Uri;
   name: string;
   git: RemoteGit;
-  scm: vscode.SourceControl;
-  index: vscode.SourceControlResourceGroup;
-  working: vscode.SourceControlResourceGroup;
-  conflicts: vscode.SourceControlResourceGroup;
+  index: ChangeGroup;
+  working: ChangeGroup;
+  conflicts: ChangeGroup;
   queue: Promise<unknown>;
   pendingOperations?: number;
   disposed: boolean;
   revision: number;
   syncState?: GitSyncState;
 }
+interface ChangeGroup { kind: 'group'; label: string; staged: boolean; resourceStates: Resource[] }
+interface BranchNode { kind: 'branch'; repository: Repository; branch: GitBranch }
+type GitSource = vscode.Uri | Repository | { repository: { uri: vscode.Uri } };
 interface Resource extends vscode.SourceControlResourceState {
   repository: Repository;
   change: GitChange;
   staged: boolean;
+}
+
+function selectedResources(values: unknown[]): Resource[] {
+  const flattened = values.flatMap(value => {
+    if (Array.isArray(value)) return selectedResources(value);
+    if (value && typeof value === 'object' && 'resourceStates' in value) {
+      return selectedResources((value as ChangeGroup).resourceStates);
+    }
+    return value && typeof value === 'object' && 'change' in value ? [value as Resource] : [];
+  });
+  return [...new Set(flattened)];
 }
 
 /** 提交内容不可变，历史视图可以不带 revision 直接引用某个提交里的文件。 */
@@ -38,6 +55,7 @@ export function gitSnapshotUri(repository: vscode.Uri, file: string, ref: string
 /** Runs Git on the SSH host; never treats a SAFS placeholder as a local repository. */
 export class RemoteGitScm implements vscode.Disposable {
   private readonly repositories = new Map<string, Repository>();
+  private readonly handlers = new Map<string, (...args: any[]) => Promise<unknown>>();
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly repositoryEmitter = new vscode.EventEmitter<void>();
   private readonly historyEmitter = new vscode.EventEmitter<void>();
@@ -51,24 +69,27 @@ export class RemoteGitScm implements vscode.Disposable {
   private readonly failures = new Map<string, { message: string; retryAt: number }>();
   private disposed = false;
   private refreshTimer?: ReturnType<typeof setTimeout>;
+  private readonly discoveredFolders = new Map<string, Array<{ uri: vscode.Uri; name: string }>>();
+  private discoveryController?: AbortController;
 
   /** 供历史视图复用同一批仓库实例（同一个 RemoteGit，避免重复发现）。 */
   repositoriesInUse(): { uri: vscode.Uri; name: string; git: RemoteGit; syncState?: GitSyncState; pendingChanges: number }[] {
     return [...this.repositories.values()].map(repository => ({
       uri: repository.uri, name: repository.name, git: repository.git,
-      syncState: repository.syncState, pendingChanges: repository.scm.count ?? 0
+      syncState: repository.syncState, pendingChanges: repository.count
     }));
   }
 
   constructor(
     private readonly runner: (uri: vscode.Uri) => Promise<GitRunner>,
     private readonly log: (message: string) => void,
-    private readonly localPush: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
-    private readonly localPull: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
-    private readonly localFetch: (uri: vscode.Uri, git: RemoteGit) => Promise<void>,
+    private readonly localPush: (uri: vscode.Uri, git: RemoteGit, signal?: AbortSignal, report?: (message: string) => void) => Promise<void>,
+    private readonly localPull: (uri: vscode.Uri, git: RemoteGit, signal?: AbortSignal, report?: (message: string) => void) => Promise<void>,
+    private readonly localFetch: (uri: vscode.Uri, git: RemoteGit, signal?: AbortSignal, report?: (message: string) => void) => Promise<void>,
     private readonly prepareSyncState?: (
       uri: vscode.Uri, git: RemoteGit
-    ) => Promise<ObservedPushState | undefined>
+    ) => Promise<ObservedPushState | undefined>,
+    private readonly discoverRepositories?: (uri: vscode.Uri, signal: AbortSignal) => Promise<Array<{ uri: vscode.Uri; name: string }>>
   ) {
     this.subscriptions.push(this.repositoryEmitter, this.historyEmitter, this.statusEmitter);
     this.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('safs-git', {
@@ -82,12 +103,18 @@ export class RemoteGitScm implements vscode.Disposable {
       }
     }));
     const command = (name: string, handler: (...args: any[]) => Promise<unknown>) => {
+      this.handlers.set(name, handler);
       this.subscriptions.push(vscode.commands.registerCommand(`safs.git.${name}`, async (...args) => {
         try { await handler(...args); }
-        catch (error) { void vscode.window.showErrorMessage(`SAFS Git: ${error instanceof Error ? error.message : String(error)}`); }
+        catch (error) { void vscode.window.showErrorMessage(`SAFS Git: ${describeGitOperationError(error)}`); }
       }));
     };
-    command('refresh', async () => this.refresh(true));
+    command('refresh', async () => vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification, title: 'SAFS：扫描远程 Git 仓库', cancellable: true
+    }, async (_progress, token) => {
+      const listener = token.onCancellationRequested(() => this.discoveryController?.abort());
+      try { await this.refresh(true); } finally { listener.dispose(); }
+    }));
     command('init', async () => {
       const folders = (vscode.workspace.workspaceFolders ?? [])
         .filter(folder => folder.uri.scheme === 'safs');
@@ -97,28 +124,44 @@ export class RemoteGitScm implements vscode.Disposable {
       ).then(selected => selected?.folder);
       if (!folder) return;
       const git = new RemoteGit(await this.runner(folder.uri), this.log);
-      await git.run(['init']);
-      await this.refresh(true);
+      let existing: string | undefined;
+      try { existing = await git.run(['rev-parse', '--show-toplevel']); }
+      catch (error) { if (!/not a git repository|不是.*git.*仓库/i.test(String(error))) throw error; }
+      if (existing) throw new Error('当前目录已属于 Git 仓库，请刷新 Git。');
       const name = await vscode.window.showInputBox({
-        title: '配置远程仓库提交身份（1/2）', prompt: 'Git 用户名，仅保存到当前远程仓库',
+        title: '初始化远程仓库（1/3）', prompt: 'Git 用户名，仅保存到当前远程仓库',
         value: await git.config('user.name') ?? '',
-        validateInput: value => value.trim() ? undefined : '请输入 Git 用户名'
+        validateInput: value => value.trim() && !/[<>\x00-\x1f\x7f]/.test(value) ? undefined : '请输入有效 Git 用户名'
       });
-      if (name !== undefined) {
-        const email = await vscode.window.showInputBox({
-          title: '配置远程仓库提交身份（2/2）', prompt: 'Git 邮箱，仅保存到当前远程仓库',
-          value: await git.config('user.email') ?? '',
-          validateInput: value => /^[^\s@]+@[^\s@]+$/.test(value.trim()) ? undefined : '请输入有效邮箱'
-        });
-        if (email !== undefined) {
-          await git.run(['config', '--local', 'user.name', name.trim()]);
-          await git.run(['config', '--local', 'user.email', email.trim()]);
+      if (name === undefined) return;
+      const email = await vscode.window.showInputBox({
+        title: '初始化远程仓库（2/3）', prompt: 'Git 邮箱，仅保存到当前远程仓库',
+        value: await git.config('user.email') ?? '',
+        validateInput: value => /^[^\s@<>]+@[^\s@<>]+$/.test(value.trim()) ? undefined : '请输入有效邮箱'
+      });
+      if (email === undefined) return;
+      const url = await vscode.window.showInputBox({
+        title: '初始化远程仓库（3/3）', prompt: '远程仓库 HTTPS/SSH 地址，留空可稍后配置',
+        validateInput: value => {
+          if (!value.trim()) return undefined;
+          try { validatePushUrl(value.trim()); return undefined; }
+          catch (error) { return String(error); }
         }
+      });
+      if (url === undefined) return;
+      await git.run(['init', '--initial-branch=main']);
+      await git.run(['config', '--local', 'user.name', name.trim()]);
+      await git.run(['config', '--local', 'user.email', email.trim()]);
+      if (url.trim()) {
+        await git.run(['remote', 'add', 'origin', url.trim()]);
+        await git.run(['config', '--local', 'branch.main.remote', 'origin']);
+        await git.run(['config', '--local', 'branch.main.merge', 'refs/heads/main']);
       }
+      await this.refresh(true);
       void vscode.window.showInformationMessage(`SAFS：已在远程工作区 ${folder.name} 初始化 Git 仓库。`);
     });
     command('openChange', async (resource: Resource) => this.openChange(resource));
-    command('branch', async (source?: vscode.SourceControl | vscode.Uri) => {
+    command('branch', async (source?: GitSource) => {
       const selected = await vscode.window.showQuickPick([
         {
           label: '$(git-branch) 切换分支',
@@ -133,7 +176,7 @@ export class RemoteGitScm implements vscode.Disposable {
       ], { placeHolder: '选择要执行的分支操作' });
       if (selected) await vscode.commands.executeCommand(selected.command, source);
     });
-    command('switchBranch', async (source?: vscode.SourceControl | vscode.Uri) => {
+    command('switchBranch', async (source?: GitSource) => {
       const repository = await this.select(source);
       if (!repository) return;
       await this.enqueue(repository, async () => {
@@ -152,7 +195,7 @@ export class RemoteGitScm implements vscode.Disposable {
         this.historyEmitter.fire();
       });
     });
-    command('createBranch', async (source?: vscode.SourceControl | vscode.Uri) => {
+    command('createBranch', async (source?: GitSource) => {
       const repository = await this.select(source);
       if (!repository) return;
       const name = await vscode.window.showInputBox({
@@ -168,14 +211,17 @@ export class RemoteGitScm implements vscode.Disposable {
         this.historyEmitter.fire();
       });
     });
+    command('checkoutBranch', async (node: BranchNode) => {
+      if (node?.kind !== 'branch' || node.branch.current) return;
+      await this.enqueue(node.repository, async () => {
+        await switchBranch(node.repository.git, node.branch);
+        await this.update(node.repository);
+        this.historyEmitter.fire();
+      });
+    });
     for (const action of ['stage', 'unstage'] as const) {
       command(action, async (...resources: Resource[]) => {
-        resources = resources.flatMap(resource => {
-          if (resource && 'resourceStates' in resource) {
-            return (resource as unknown as vscode.SourceControlResourceGroup).resourceStates as Resource[];
-          }
-          return [resource];
-        });
+        resources = selectedResources(resources);
         const groups = new Map<Repository, GitChange[]>();
         for (const resource of resources) {
           if (!resource?.repository || !resource.change) continue;
@@ -194,7 +240,7 @@ export class RemoteGitScm implements vscode.Disposable {
       });
     }
     command('discard', async (...resources: Resource[]) => {
-      const selected = resources.filter(resource =>
+      const selected = selectedResources(resources).filter(resource =>
         resource?.repository && resource.change && !resource.staged && !isGitConflict(resource.change));
       if (!selected.length) return;
       const confirmation = await vscode.window.showWarningMessage(
@@ -217,16 +263,17 @@ export class RemoteGitScm implements vscode.Disposable {
       }
     });
     for (const action of ['fetch', 'pull', 'push'] as const) {
-      command(action, async (source?: vscode.SourceControl) => {
+      command(action, async (source?: GitSource, signal?: AbortSignal, report?: (message: string) => void) => {
         const repository = await this.select(source);
         if (!repository) return;
-        await vscode.window.withProgress({ location: vscode.ProgressLocation.SourceControl, title: `Git ${action}` },
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification,
+          title: action === 'fetch' ? 'Git 提取' : action === 'pull' ? 'Git 拉取' : 'Git 推送' },
           () => this.enqueue(repository, async () => {
             try {
               // 推送、拉取、提取全部经本地 Git 中转（远端不需要出网或凭据）。
-              if (action === 'push') await this.localPush(repository.uri, repository.git);
-              else if (action === 'pull') await this.localPull(repository.uri, repository.git);
-              else await this.localFetch(repository.uri, repository.git);
+              if (action === 'push') await this.localPush(repository.uri, repository.git, signal, report);
+              else if (action === 'pull') await this.localPull(repository.uri, repository.git, signal, report);
+              else await this.localFetch(repository.uri, repository.git, signal, report);
               this.historyEmitter.fire();
             } finally {
               await this.update(repository).catch(error => this.log(String(error)));
@@ -234,11 +281,11 @@ export class RemoteGitScm implements vscode.Disposable {
           }));
       });
     }
-    command('commit', async (source?: vscode.SourceControl) => {
+    command('commit', async (source?: GitSource, submittedMessage?: string) => {
       const repository = await this.select(source);
       if (!repository) return;
-      let message = repository.scm.inputBox.value;
-      if (!source) {
+      let message = repository.message;
+      if (submittedMessage === undefined) {
         // 从 SAFS Git View 标题栏触发时没有输入框上下文，直接问一句提交说明。
         message = await vscode.window.showInputBox({
           prompt: `${repository.name}：提交说明（只提交已暂存更改）`,
@@ -246,13 +293,14 @@ export class RemoteGitScm implements vscode.Disposable {
           validateInput: value => value.trim() ? undefined : '请输入提交说明。'
         }) ?? '';
         if (!message.trim()) return;
-      }
+        repository.message = message;
+      } else { message = submittedMessage; repository.message = message; }
       await this.enqueue(repository, async () => {
         await this.update(repository, false);
         if (repository.conflicts.resourceStates.length) throw new Error('请先解决并暂存冲突。');
         if (!repository.index.resourceStates.length) throw new Error('请先暂存需要提交的更改。');
         await repository.git.commit(message);
-        if (repository.scm.inputBox.value === message) repository.scm.inputBox.value = '';
+        if (repository.message === message) repository.message = '';
         await this.update(repository);
         this.historyEmitter.fire();
       });
@@ -279,13 +327,25 @@ export class RemoteGitScm implements vscode.Disposable {
     }, delay);
   }
 
-  private async select(source?: vscode.SourceControl | vscode.Uri): Promise<Repository | undefined> {
+  execute(action: string, ...args: unknown[]): Promise<unknown> {
+    const handler = this.handlers.get(action);
+    if (!handler) throw new Error('Unsupported Git action');
+    return handler(...args);
+  }
+
+  repository(key: string): Repository | undefined { return this.repositories.get(key); }
+  repositoriesForView(): Repository[] { return [...this.repositories.values()]; }
+  cancelScan(): void { this.discoveryController?.abort(); }
+  get scanning(): boolean { return this.discovering; }
+
+  private async select(source?: GitSource): Promise<Repository | undefined> {
     const repositories = [...this.repositories.values()];
-    const selected = repositories.find(repository => repository.scm === source || repository.uri === source);
+    const uri = source && ('repository' in source ? source.repository.uri : 'uri' in source ? source.uri : source);
+    const selected = repositories.find(repository => repository === source || repository.uri.toString() === uri?.toString());
     if (selected) return selected;
     if (repositories.length === 1) return repositories[0];
     const item = await vscode.window.showQuickPick(repositories.map(repository => ({
-      label: repository.scm.label, description: repository.uri.toString(), repository
+      label: repository.name, description: repository.uri.toString(), repository
     })), { placeHolder: '选择远程 Git 仓库' });
     return item?.repository;
   }
@@ -303,8 +363,25 @@ export class RemoteGitScm implements vscode.Disposable {
   async refresh(interactive = false): Promise<void> {
     if (this.discovering || this.disposed) return;
     this.discovering = true;
+    const controller = new AbortController();
+    this.discoveryController = controller;
     try {
-      const folders = (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'safs');
+      const workspaceFolders = (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'safs');
+      const current = new Set(workspaceFolders.map(folder => folder.uri.toString()));
+      for (const key of this.discoveredFolders.keys()) if (!current.has(key)) this.discoveredFolders.delete(key);
+      const folders: Array<{ uri: vscode.Uri; name: string }> = [];
+      for (const folder of workspaceFolders) {
+        const key = folder.uri.toString();
+        if (this.discoverRepositories && (interactive || !this.discoveredFolders.has(key))) {
+          try { this.discoveredFolders.set(key, await this.discoverRepositories(folder.uri, controller.signal)); }
+          catch (error) {
+            controller.signal.throwIfAborted();
+            this.log(`Git 仓库扫描：${String(error)}`);
+            if (interactive) void vscode.window.showErrorMessage(`SAFS Git: ${String(error)}`);
+          }
+        }
+        folders.push(...(this.discoveredFolders.get(key) ?? [folder]));
+      }
       const active = new Set(folders.map(folder => folder.uri.toString()));
       let changed = false;
       for (const [key, repository] of this.repositories) {
@@ -323,18 +400,14 @@ export class RemoteGitScm implements vscode.Disposable {
             if (prefix.trim()) throw new Error('请在 SAFS 中打开 Git 仓库根目录以启用源代码管理。');
             await git.status();
             if (this.disposed) return;
-            const scm = vscode.scm.createSourceControl('safs-git', `Git (SAFS) · ${folder.name}`, folder.uri);
             repository = {
-              uri: folder.uri, name: folder.name, git, scm,
-              index: scm.createResourceGroup('index', '已暂存的更改'),
-              working: scm.createResourceGroup('working', '更改'),
-              conflicts: scm.createResourceGroup('conflicts', '合并冲突'),
+              kind: 'repository', message: '', count: 0,
+              uri: folder.uri, name: folder.name, git,
+              index: { kind: 'group', label: '已暂存的更改', staged: true, resourceStates: [] },
+              working: { kind: 'group', label: '更改', staged: false, resourceStates: [] },
+              conflicts: { kind: 'group', label: '合并冲突', staged: false, resourceStates: [] },
               queue: Promise.resolve(), disposed: false, revision: 0
             };
-            repository.index.hideWhenEmpty = true;
-            repository.conflicts.hideWhenEmpty = true;
-            scm.inputBox.placeholder = '提交说明（Ctrl+Enter 提交已暂存更改）';
-            scm.acceptInputCommand = { command: 'safs.git.commit', title: '提交', arguments: [scm] };
             this.repositories.set(key, repository);
             changed = true;
           }
@@ -352,8 +425,13 @@ export class RemoteGitScm implements vscode.Disposable {
           if (interactive) void vscode.window.showErrorMessage(`SAFS Git: ${message}`);
         }
       }
-      if (changed && !this.disposed) this.repositoryEmitter.fire();
-    } finally { this.discovering = false; }
+      if (changed && !this.disposed) { this.repositoryEmitter.fire(); }
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      this.discovering = false; this.discoveryController = undefined;
+      if (!this.disposed) this.statusEmitter.fire();
+    }
   }
 
   private async update(repository: Repository, refreshSyncState = true): Promise<void> {
@@ -373,11 +451,7 @@ export class RemoteGitScm implements vscode.Disposable {
     repository.syncState = syncState;
     if (repository.disposed) return;
     repository.revision++;
-    repository.scm.count = changes.length;
-    repository.scm.statusBarCommands = [
-      { command: 'safs.git.branch', title: `$(git-branch) ${syncState.branch}`, tooltip: '切换或创建远端 Git 分支', arguments: [repository.scm] },
-      { command: 'safs.git.fetch', title: syncStateLabel(syncState), tooltip: syncStateTooltip(syncState), arguments: [repository.scm] }
-    ];
+    repository.count = changes.length;
     if (changed) this.historyEmitter.fire();
     const resource = (change: GitChange, staged: boolean): Resource => {
       const uri = vscode.Uri.joinPath(repository.uri, change.path);
@@ -391,6 +465,7 @@ export class RemoteGitScm implements vscode.Disposable {
     repository.working.resourceStates = changes.filter(c => !isGitConflict(c) && ![' ', '!'].includes(c.working)).map(c => resource(c, false));
     repository.conflicts.resourceStates = changes.filter(isGitConflict).map(c => resource(c, false));
     this.statusEmitter.fire();
+
   }
 
   private snapshot(repository: Repository, file: string, ref: string, empty = false): vscode.Uri {
@@ -419,10 +494,10 @@ export class RemoteGitScm implements vscode.Disposable {
 
   private close(repository: Repository): void {
     repository.disposed = true;
-    repository.index.dispose(); repository.working.dispose(); repository.conflicts.dispose(); repository.scm.dispose();
   }
   dispose(): void {
     this.disposed = true;
+    this.discoveryController?.abort();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.subscriptions.forEach(subscription => subscription.dispose());
     this.repositories.forEach(repository => this.close(repository));

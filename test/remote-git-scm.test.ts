@@ -1,3 +1,5 @@
+import { syncStateLabel } from '../src/git/git-sync-state';
+import { listBranches } from '../src/git/remote-git-branch';
 import { mockGitBatch } from './git-runner-helper';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
@@ -17,7 +19,7 @@ class EventEmitter {
   dispose() { this.listeners.length = 0; }
 }
 
-test('SCM isolates repositories, compares index vs worktree and disposes removed roots', async () => {
+test('SAFS sidebar isolates repositories, compares index vs worktree and disposes removed roots', async () => {
   const commands = new Map<string, (...args: any[]) => Promise<unknown>>();
   const sources: any[] = [];
   const errors: string[] = [];
@@ -37,22 +39,18 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   Object.assign(vscode, {
     Uri: { joinPath: (uri: Uri, file: string) => uri.with({ path: path.posix.join(uri.path, file) }) },
     EventEmitter,
-    ProgressLocation: { SourceControl: 1 },
+    TreeItem: class { constructor(public label: string, public collapsibleState?: number) {} },
+    ThemeIcon: class { constructor(public id: string) {} },
+    TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+    ProgressLocation: { Notification: 1 },
     commands: {
       registerCommand: (name: string, callback: (...args: any[]) => Promise<unknown>) => {
         commands.set(name, callback); return disposable();
       },
       executeCommand: async (...args: any[]) => { opened.push(args); }
     },
-    scm: { createSourceControl: (_id: string, label: string, rootUri: Uri) => {
-      const source = { label, rootUri, inputBox: { value: '' }, disposed: false,
-        groups: [] as any[], dispose() { this.disposed = true; },
-        createResourceGroup(id: string) {
-          const group = { id, resourceStates: [], dispose() {} }; this.groups.push(group); return group;
-        }
-      };
-      sources.push(source); return source;
-    } }
+    scm: { createSourceControl: () => { throw new Error('Must not register native SCM repositories'); } }
+
   });
   Object.assign(vscode.workspace, {
     workspaceFolders: [{ uri: rootA, name: 'A' }, { uri: rootB, name: 'B' }],
@@ -61,16 +59,17 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     onDidSaveTextDocument: (listener: typeof saveDocument) => { saveDocument = listener; return disposable(); }
   });
   Object.assign(vscode.window, {
+    createTreeView: (_id: string, _options: unknown) => disposable(),
     state: { focused: true },
     onDidChangeWindowState: (listener: typeof changeWindowState) => { changeWindowState = listener; return disposable(); },
     showErrorMessage: async (message: string) => { errors.push(message); },
     showWarningMessage: async (message: string) => { warnings.push(message); return '还原更改'; },
     // 历史视图标题栏没有输入框：提交走 showInputBox，多仓库时走 showQuickPick。
-    showInputBox: async (options?: { prompt?: string }) =>
-      options?.prompt?.includes('创建并切换') ? 'feature/new' : 'view commit',
+    showInputBox: async (options?: { prompt?: string; value?: string }) =>
+      options?.prompt?.includes('创建并切换') ? 'feature/new' : options?.value || 'view commit',
     showQuickPick: async (items: any[], options?: { placeHolder?: string }) =>
       options?.placeHolder?.includes('选择分支') ? items[1] : items[0],
-    withProgress: async (_options: unknown, task: () => Promise<void>) => task()
+    withProgress: async (_options: unknown, task: (progress: unknown, token: unknown) => Promise<void>) => task({}, { onCancellationRequested: disposable })
   });
   const { RemoteGitScm } = require('../src/git/remote-git-scm') as typeof import('../src/git/remote-git-scm');
   let counts = '2\t3';
@@ -89,18 +88,24 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
   }), message => (message.startsWith('[Performance]') ? metrics : errors).push(message), async uri => { localPushes.push(uri.path); counts = '0\t3'; },
   async uri => { localPulls.push(uri.path); }, async uri => { localFetches.push(uri.path); });
   try {
-    for (let attempt = 0; attempt < 100 && sources.length < 2; attempt++) await new Promise(resolve => setImmediate(resolve));
+    for (let attempt = 0; attempt < 100 && scm.repositoriesForView().length < 2; attempt++) await new Promise(resolve => setImmediate(resolve));
     await scm.refresh();
+    sources.push(...scm.repositoriesForView());
     assert.equal(sources.length, 2);
     const a = sources[0];
     const b = sources[1];
-    assert.match(a.statusBarCommands[1].title, /已提交待推送 ↑2.*待拉取 ↓3/);
-    assert.equal(a.statusBarCommands[0].command, 'safs.git.branch');
-    const index = a.groups.find((group: any) => group.id === 'index');
-    const working = a.groups.find((group: any) => group.id === 'working');
+    assert.match(syncStateLabel(a.syncState), /已提交待推送 ↑2.*待拉取 ↓3/);
+    const branches = await listBranches(a.git);
+    assert.equal(branches.length, 2);
+    assert.equal(branches[0].current, true);
+    assert.equal(branches[1].current, false);
+    await commands.get('safs.git.checkoutBranch')!({kind:'branch',repository:a,branch:branches[1]});
+    assert.ok(executions.some(value => value.root === rootA.path && value.command.includes("'switch' 'topic'")));
+    const index = a.index;
+    const working = a.working;
     assert.equal(index.resourceStates.length, 4);
     assert.equal(working.resourceStates.length, 1);
-    assert.equal(a.groups.find((group: any) => group.id === 'conflicts').resourceStates.length, 1);
+    assert.equal(a.conflicts.resourceStates.length, 1);
     const automaticRefreshStart = executions.length;
     await scm.refresh();
     assert.ok(executions.slice(automaticRefreshStart).some(command => command.command.includes("'status'")));
@@ -131,9 +136,9 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
       command.root === rootA.path && command.command.includes("'restore' '--worktree' '--' 'file.txt'")));
     assert.match(warnings[0], /file\.txt/);
     status = 'M  file.txt\0';
-    b.inputBox.value = 'commit B';
+    b.message = 'commit B';
     await commands.get('safs.git.commit')!(b);
-    assert.equal(b.inputBox.value, '');
+    assert.equal(b.message, '');
     assert.ok(executions.some(command => command.root === rootB.path && command.command.includes("'commit' '-m' 'commit B'")));
     // 历史视图标题栏触发：没有 SourceControl 上下文，先选仓库（单选走 QuickPick）再问提交说明。
     await commands.get('safs.git.commit')!();
@@ -153,7 +158,7 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     assert.ok(executions.slice(createStart).every(command => !/fetch|pull|--force/.test(command.command)));
     await commands.get('safs.git.push')!(b);
     assert.deepEqual(localPushes, [rootB.path]);
-    assert.equal(b.statusBarCommands[1].title, '待拉取 ↓3');
+    assert.match(syncStateLabel(b.syncState), /待拉取 ↓3/);
     assert.ok(!executions.some(command => command.command.includes("'push'")));
     await commands.get('safs.git.pull')!(a);
     assert.deepEqual(localPulls, [rootA.path]);
@@ -170,10 +175,10 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     assert.equal(a.disposed, true);
     assert.equal(b.disposed, false);
     const waitForStatus = async (expected: string) => {
-      for (let attempt = 0; attempt < 300 && b.groups[1].resourceStates[0]?.change.path !== expected; attempt++) {
+      for (let attempt = 0; attempt < 300 && b.working.resourceStates[0]?.change.path !== expected; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
-      assert.equal(b.groups[1].resourceStates[0]?.change.path, expected);
+      assert.equal(b.working.resourceStates[0]?.change.path, expected);
     };
     const backgroundStart = executions.length;
     status = ' M saved.txt\0';
@@ -197,4 +202,35 @@ test('SCM isolates repositories, compares index vs worktree and disposes removed
     assert.ok(metrics.length > 0);
   } finally { scm.dispose(); }
   assert.equal(sources[1].disposed, true);
+});
+
+test('sidebar discovery caches scans and refreshes nested repositories without native SCM registration', async () => {
+  const commands = new Map<string, (...args: any[]) => Promise<unknown>>();
+  const root = new Uri('safs', '/parent');
+  let names = ['one', 'two'];
+  let scans = 0;
+  Object.assign(vscode.workspace, { workspaceFolders: [{ uri: root, name: 'parent' }] });
+  Object.assign(vscode.commands, {
+    registerCommand: (name: string, callback: (...args: any[]) => Promise<unknown>) => {
+      commands.set(name, callback); return disposable();
+    }
+  });
+  const { RemoteGitScm } = require('../src/git/remote-git-scm') as typeof import('../src/git/remote-git-scm');
+  const controller = new RemoteGitScm(async () => mockGitBatch(async command => ({
+    exitCode: 0, stderr: '', stdout: command.includes("'symbolic-ref'") ? 'main\n'
+      : command.includes("'HEAD^{commit}'") ? 'a'.repeat(40) : ''
+  })), () => {}, async () => {}, async () => {}, async () => {}, undefined, async (_uri, signal) => {
+    signal.throwIfAborted(); scans++;
+    return names.map(name => ({ name, uri: root.with({ path: `/parent/${name}` }) })) as any;
+  });
+  try {
+    for (let i = 0; i < 100 && controller.repositoriesInUse().length < 2; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(controller.repositoriesInUse().length, 2);
+    await controller.refresh();
+    assert.equal(scans, 1);
+    names = ['two', 'three'];
+    await commands.get('safs.git.refresh')!();
+    assert.equal(scans, 2);
+    assert.deepEqual(controller.repositoriesInUse().map(repo => repo.name), names);
+  } finally { controller.dispose(); }
 });

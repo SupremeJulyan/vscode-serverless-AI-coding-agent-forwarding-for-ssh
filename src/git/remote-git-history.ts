@@ -169,10 +169,11 @@ export class RemoteGitHistory implements vscode.TreeDataProvider<HistoryNode>, v
     private readonly repositories: () => HistoryRepository[],
     private readonly log: (message: string) => void,
     onRepositoriesChanged?: vscode.Event<void>,
-    onHistoryChanged?: vscode.Event<void>
+    onHistoryChanged?: vscode.Event<void>,
+    registerView = true
   ) {
     this.subscriptions.push(this.emitter);
-    this.subscriptions.push(vscode.window.createTreeView('safs.gitHistory', {
+    if (registerView) this.subscriptions.push(vscode.window.createTreeView('safs.gitHistory', {
       treeDataProvider: this, showCollapseAll: true
     }));
     this.subscriptions.push(vscode.commands.registerCommand('safs.git.refreshHistory', () => this.refresh()));

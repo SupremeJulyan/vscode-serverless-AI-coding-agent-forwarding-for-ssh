@@ -129,7 +129,11 @@ async function invoke(configPath: string, request: Awaited<ReturnType<typeof par
     if (!envelope || !('result' in envelope)) throw new Error('SAFS router returned no result');
     return envelope.result;
   } catch (error) {
-    throw new Error(`Local SAFS router request failed: ${redact(error instanceof Error ? error.message : String(error))}`);
+    const unavailable = ['ENOENT', 'ECONNREFUSED'].includes((error as { code?: string })?.code ?? '');
+    const hint = unavailable
+      ? '\n提示：请先在 VS Code 的 SAFS 侧栏打开远程目录，等待 Agent 转发就绪后重试。若已打开，请检查“Agent 活动”中的转发状态；转发失败时点击刷新按钮重连。'
+      : '';
+    throw new Error(`Local SAFS router request failed: ${redact(error instanceof Error ? error.message : String(error))}${hint}`);
   }
 }
 function exitCode(result: any): number {

@@ -279,6 +279,8 @@ test('Node.js CLI applies IPC connection-file timeout', async () => {
     ] });
     assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /Local SAFS router request failed/);
+    assert.match(result.stderr, /请先在 VS Code 的 SAFS 侧栏打开远程目录/);
+    assert.match(result.stderr, /Agent 转发就绪/);
     assert.ok(Date.now() - started < 2_000);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });

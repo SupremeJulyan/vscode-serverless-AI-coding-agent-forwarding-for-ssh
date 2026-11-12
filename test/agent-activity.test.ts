@@ -182,9 +182,9 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('recoverForwarding').disabled, true);
   send({ mode: 'terminal', availability: 'checking' });
   assert.equal(get('forwardingStatus').textContent, '准备中');
-  send({ interface: 'backend', mode: 'workspace', label: target, availability: 'ready' });
+  send({ interface: 'mcp', mode: 'workspace', label: target, availability: 'ready' });
   assert.equal(get('statusDetail').textContent, '');
-  assert.equal(get('timeline').children[0].textContent, '暂无 Agent 远程操作。提示：在 Agent 中输入 use safs backend');
+  assert.equal(get('timeline').children[0].textContent, '暂无 Agent 远程操作。提示：使用 SAFS MCP 工具');
   assert.equal(get('switchWorkspace').hidden, false);
   assert.equal(get('openTerminalDirectory').hidden, true);
   assert.equal(get('modeCapabilities').hidden, true);

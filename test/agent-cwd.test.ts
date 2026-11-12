@@ -90,8 +90,9 @@ test('new placeholders use readable endpoint and remote directory names', async 
     assert.notEqual(agentCwdDirectoryName('host', 22, 'user', '/a-b/c'), agentCwdDirectoryName('host', 22, 'user', '/a/b-c'));
     const { workspacePathForRemote, remotePathForUri } = await import('../src/ssh2/filesystem-provider');
     const folder = { mountName: 'alias', hostName: 'alias', remoteRoot: '/', workspaceRoot: root.localPath };
-    assert.equal(workspacePathForRemote(folder, remote), cwd);
-    assert.equal(remotePathForUri(folder, cwd + '/file.txt'), remote + '/file.txt');
+    const uriPath = process.platform === 'win32' ? '/' + cwd.replaceAll('\\', '/') : cwd;
+    assert.equal(workspacePathForRemote(folder, remote), uriPath);
+    assert.equal(remotePathForUri(folder, uriPath + '/file.txt'), remote + '/file.txt');
   } finally { await rm(storage, { recursive: true, force: true }); }
 });
 

@@ -93,7 +93,7 @@ When an upload or download of a large file (1 MiB or more) is interrupted, trans
 
 ## Remote Git source control
 
-Open a remote **Git repository root** with SAFS to see `Git (SAFS)` in VS Code Source Control. Status, diffs, staging, and commits run on the SSH host using its Git configuration and commit identity. Push and pull relay through local Git using local networking and credentials. Workspace synchronization and Agent forwarding are not required.
+Open a remote directory with SAFS, then expand **SAFS Git** in VS Code's **Source Control** sidebar. Its webview follows the Tabby plugin's repository header, path, branch/sync status, History/Branches tabs, commit badges, relay controls, commit editor and change groups. Expand commits for file diffs, right-click a commit to copy its ID, and stage/unstage/discard individual or grouped changes. Inline forms initialize or clone repositories. Discovery includes nested repositories and worktrees. Cloning transfers a Git bundle and checks out on the SSH host to preserve symbolic links and executable modes. Fetch, fast-forward pull and push use local networking and credentials; scans and relay operations support cancellation. Workspace synchronization and Agent forwarding are not required.
 
 ## Common settings
 

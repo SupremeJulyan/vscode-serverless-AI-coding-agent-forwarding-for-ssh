@@ -466,10 +466,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
       }
       if (event.data.type === 'state') acceptState(event.data);
       if (event.data.type === 'terminalTarget') {
-        if (event.data.interface === 'cli' || event.data.interface === 'cli') {
+        if (event.data.interface === 'cli' || event.data.interface === 'mcp') {
           idleHint = event.data.interface === 'cli'
             ? '提示：在 Agent 中输入 /safs-cli'
-            : '提示：在 Agent 中输入 use safs backend';
+            : '提示：使用 SAFS MCP 工具';
           if (!events.length) render();
         }
         const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'

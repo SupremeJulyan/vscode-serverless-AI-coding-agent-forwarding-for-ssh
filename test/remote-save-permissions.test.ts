@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Ssh2SftpSession } from '../src/ssh2/sftp-client';
 
-test('SFTP in-place save retains inode, owner, group and executable mode and truncates old content', async () => {
+test('SFTP in-place save retains inode, owner, group and executable mode and truncates old content', { skip: process.platform === 'win32' ? 'POSIX inode and permission semantics' : false }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'safs-save-'));
   const handles = new Map<string, Awaited<ReturnType<typeof open>>>();
   let sequence = 0;
@@ -66,7 +66,7 @@ test('editor saves overwrite the original file rather than renaming a temporary 
   assert.deepEqual((calls[0] as unknown[]).slice(0, 3), ['/project/script', Buffer.from('data'), { create: false, overwrite: true }]);
 });
 
-test('SCP fallback saves preserve existing executable permissions for small and large files', async () => {
+test('SCP fallback saves preserve existing executable permissions for small and large files', { skip: process.platform === 'win32' ? 'POSIX SSH shell fixture' : false }, async () => {
   const { ScpSession } = await import('../src/ssh2/scp-session');
   const { spawn } = await import('node:child_process');
   const root = await mkdtemp(join(tmpdir(), 'safs-scp-save-'));

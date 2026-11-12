@@ -35,7 +35,9 @@ esbuild.build({
   outdir: 'dist',
   // cpu-features is an optional native optimization in ssh2; omitting it lets
   // ssh2 use its built-in crypto path on every supported VS Code platform.
-  external: ['vscode', 'cpu-features'],
+  // ssh2 may build sshcrypto.node during npm ci. Leave optional native loads
+  // unresolved so its guarded require falls back to portable Node.js crypto.
+  external: ['vscode', 'cpu-features', '*.node'],
   logLevel: 'info',
 }).catch(() => process.exit(1));
 
@@ -47,4 +49,9 @@ esbuild.build({
     CLI_SKILL: JSON.stringify(fs.readFileSync('skills/safs-cli/SKILL.md', 'utf8')),
     CLI_REFERENCE: JSON.stringify(fs.readFileSync('skills/safs-cli/references/commands.md', 'utf8'))
   }
+}).catch(() => process.exit(1));
+
+esbuild.build({
+  entryPoints: ['src/git/git-view-client.ts'], bundle: true, platform: 'browser',
+  format: 'iife', outfile: 'dist/git-view.js', minify: production, target: 'es2020'
 }).catch(() => process.exit(1));

@@ -16,3 +16,9 @@ connection leases and stream adapters, and add incremental sudo prompt parsing.
 The SSH and SFTP client is [`ssh2`](https://github.com/mscdex/ssh2) 1.17.0 (MIT).
 Its upstream license is reproduced in [third-party/ssh2-MIT.txt](third-party/ssh2-MIT.txt).
 `shell-quote` (MIT) is bundled with the extension; its license is in `third-party/`.
+
+The Git webview uses Font Awesome Free icons by Fonticons, Inc. (CC BY 4.0 for
+SVG icons; MIT for code). The license is reproduced in
+[third-party/Font-Awesome-Free-LICENSE.txt](third-party/Font-Awesome-Free-LICENSE.txt).
+Its Git layout and workflows are adapted from Julyan's MIT-licensed
+`tabby-ai-workspace-manager` project.

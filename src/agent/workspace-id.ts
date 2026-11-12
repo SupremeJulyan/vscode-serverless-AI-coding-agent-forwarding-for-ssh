@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -56,11 +56,15 @@ export async function resolveWorkspaceId(
   if (!marker) throw new Error(`No ${workspaceIdFileName} found. Run safs workspaces and pass --id ID; use explicit --id for operations across multiple workspaces.`);
   const workspaces = await discover();
   if (marker.id && workspaces.some(w => w.workspaceId === marker.id)) return marker.id;
-  const matches = workspaces.filter(w => {
-    if (!w.localRoot) return false;
-    const rel = relative(resolve(w.localRoot), resolve(cwd));
-    return rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel);
-  });
+  const canonicalCwd = await realpath(cwd);
+  const matches: LocalWorkspace[] = [];
+  for (const workspace of workspaces) {
+    if (!workspace.localRoot) continue;
+    const root = await realpath(workspace.localRoot).catch(() => undefined);
+    if (!root) continue;
+    const rel = relative(root, canonicalCwd);
+    if (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel)) matches.push(workspace);
+  }
   if (matches.length !== 1) throw new Error(`Workspace ID is expired or invalid; ${matches.length ? 'multiple placeholder workspaces match' : 'no active placeholder workspace matches'}. Run safs workspaces and pass --id ID.`);
   await writeWorkspaceId(marker.directory, matches[0].workspaceId);
   return matches[0].workspaceId;
