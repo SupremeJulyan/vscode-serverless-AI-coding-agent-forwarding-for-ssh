@@ -12,11 +12,14 @@ import {
 } from './git/local-git-push';
 import {
   pullThroughLocalGit, resolvePullTarget, fetchThroughLocalGit, resolveFetchTarget,
-  localGitAuthenticationError, LocalGitAuthenticationError
+  LocalGitAuthenticationError
 } from './git/local-git-pull';
-import { RemoteGit } from './git/remote-git';
+import { RemoteGit, gitCommand, GitResult } from './git/remote-git';
+import { cloneThroughLocalGit, initializeRemoteGit, validateGitIdentity, CloneTransport } from './git/git-bootstrap';
+import { discoverGitRepositories } from './git/git-discovery';
 import { RemoteGitScm } from './git/remote-git-scm';
 import { RemoteGitHistory } from './git/remote-git-history';
+import { RemoteGitView } from './git/git-view';
 import { updateCliInstructions, writeCliConnectionFile, writePlaceholderGuidance } from './cli/cli-integration';
 import {
   ensureUnixCliPath, globalNodeCli, globalNodeCliSkill, installNodeCli, removeNodeCli,
@@ -31,7 +34,7 @@ import { pageDirectory, searchResult } from './remote/remote-results';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import * as vscode from 'vscode';
 import {
@@ -987,7 +990,54 @@ export function gitCloneDirectoryName(repositoryUrl: string): string {
   return safe || 'repository';
 }
 
-/** Clone with local Git/credentials, transfer the working tree, then offer either open mode. */
+function remoteGitCloneTransport(mountName: string, session: SftpSession, root: string): CloneTransport {
+  return {
+        root,
+        realpath: (remote, signal) => session.realpath(remote, signal),
+        run: (command, signal) => executeRemoteGitCommand(vscodeContext, mountName, root, command, signal),
+        upload: async (source, remote, signal) => {
+          const target = await session.writeFileStream(remote, { create: true, overwrite: false, mode: 0o600 }, signal);
+          await pipeStreams(createReadStream(source), target, { signal });
+        },
+        remove: remote => session.deleteFile(remote, AbortSignal.timeout(10_000)),
+        publish: async (source, destination, signal) => {
+          signal?.throwIfAborted();
+          if (session.transport !== 'scp') {
+            await session.rename(source, destination, false, signal);
+            return;
+          }
+          const result = await executeRemoteGitCommand(vscodeContext, mountName, root,
+            `mv -nT -- ${shellQuote(source)} ${shellQuote(destination)} && test ! -e ${shellQuote(source)}`, signal);
+          if (result.exitCode !== 0) throw new Error(result.stderr || '无法发布克隆目录，目标可能已存在。');
+        }
+      };
+}
+
+async function setupRemoteGit(input: {
+  mode: 'init' | 'clone'; target: string; name: string; email: string; url: string; directory: string;
+}, signal: AbortSignal, report: (message: string) => void): Promise<void> {
+  const workspace = vscode.workspace.workspaceFolders?.find(folder => folder.uri.scheme === remoteFileSystemScheme
+    && folder.uri.toString() === input.target);
+  if (!workspace) throw new Error('远程工作区已关闭，请重新打开。');
+  const location = parseRemoteUri(workspace.uri.toString());
+  const { folder } = await mountAndFolder(location.mountName);
+  const session = await pool.get(folder.hostName, signal);
+  const root = await session.realpath(remotePathForUri(folder, location.remotePath), signal);
+  const transport = remoteGitCloneTransport(location.mountName, session, root);
+  const identity = validateGitIdentity(input);
+  if (input.mode === 'init') {
+    report('正在初始化远程 Git 仓库…');
+    await initializeRemoteGit(transport, identity, signal);
+  } else {
+    await cloneThroughLocalGit(transport, { ...identity, directory: input.directory }, {
+      storagePath: path.join(vscodeContext.globalStorageUri.fsPath, 'git-clone'),
+      local: localGitRunner(settings().get<string>('git.localPath', 'git')),
+      signal, report
+    });
+  }
+}
+
+/** Clone locally, transfer Git objects and check out remotely, preserving repository file types. */
 async function cloneGitRepository(): Promise<void> {
   const repositoryUrl = await input({
     title: '克隆 Git 仓库',
@@ -1022,43 +1072,31 @@ async function cloneGitRepository(): Promise<void> {
     if (!isMissingRemoteError(error)) throw error;
   }
 
-  const stagingRoot = path.join(vscodeContext.globalStorageUri.fsPath, 'git-clone');
-  await mkdir(stagingRoot, { recursive: true });
-  const temporary = await mkdtemp(path.join(stagingRoot, 'clone-'));
-  const localRepository = path.join(temporary, repositoryName);
-  try {
-    await vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification,
-      title: 'SAFS：正在使用本地 Git 克隆仓库',
-      cancellable: true
-    }, async (progress, token) => {
-      const controller = new AbortController();
-      const cancelled = token.onCancellationRequested(() => controller.abort());
-      try {
-        progress.report({ message: repositoryUrl.trim() });
-        try {
-          await localGitRunner()(
-            ['clone', '--', repositoryUrl.trim(), localRepository], controller.signal
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          throw localGitAuthenticationError(repositoryUrl, redactSensitiveText(message)) ?? error;
-        }
-      } finally {
-        cancelled.dispose();
-      }
-    });
-    const uploaded = await visualUpload(
-      [vscode.Uri.file(localRepository)], mount.name, resolvedParent
-    );
-    if (!uploaded) return;
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
+  const local = localGitRunner(settings().get<string>('git.localPath', 'git'));
+  const name = await input({ title: '克隆仓库提交身份（1/2）', prompt: 'Git 用户名，仅保存到新仓库',
+    value: (await local(['config', '--get', 'user.name']).catch(() => '')).trim(), validateInput: required('Git 用户名') });
+  if (name === undefined) return;
+  const email = await input({ title: '克隆仓库提交身份（2/2）', prompt: 'Git 邮箱，仅保存到新仓库',
+    value: (await local(['config', '--get', 'user.email']).catch(() => '')).trim(),
+    validateInput: value => /^[^\s@<>]+@[^\s@<>]+$/.test(value.trim()) ? undefined : '请输入有效邮箱' });
+  if (email === undefined) return;
+  const identity = validateGitIdentity({ name, email, url: repositoryUrl });
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 克隆仓库', cancellable: true
+  }, async (progress, token) => {
+    const controller = new AbortController();
+    const cancelled = token.onCancellationRequested(() => controller.abort());
+    try {
+      await cloneThroughLocalGit(remoteGitCloneTransport(mount.name, session, resolvedParent), { ...identity, directory: repositoryName }, {
+        storagePath: path.join(vscodeContext.globalStorageUri.fsPath, 'git-clone'),
+        local, signal: controller.signal, report: message => progress.report({ message })
+      });
+    } finally { cancelled.dispose(); }
+  });
 
   await recordDirectoryHistory(vscodeContext, mount.name, remoteRepository);
   const action = await vscode.window.showInformationMessage(
-    `SAFS：Git 仓库已上传到 ${mount.name}:${remoteRepository}`,
+    `SAFS：Git 仓库已克隆到 ${mount.name}:${remoteRepository}`,
     '切换到此目录', '在新窗口打开'
   );
   if (!action) return;
@@ -3866,6 +3904,28 @@ async function executeRemoteCommand(
 }
 
 /** --git-path also resolves correctly for linked worktrees; bundles stay out of the work tree. */
+/** Adapt cancellable Git work to the SSH executor while keeping UI operations outside Agent routing. */
+async function executeRemoteGitCommand(
+  context: vscode.ExtensionContext, mountName: string, remoteCwd: string,
+  command: string, signal?: AbortSignal
+): Promise<GitResult> {
+  signal?.throwIfAborted();
+  const cancellation = new vscode.CancellationTokenSource();
+  const abort = () => cancellation.cancel();
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    const result = await executeRemoteCommand(context, {
+      command, mountName, remoteCwd, source: 'remote_git', captureForBackend: true
+    }, cancellation.token);
+    signal?.throwIfAborted();
+    return { exitCode: typeof result.exitCode === 'number' ? result.exitCode : null,
+      stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? ''), truncated: result.truncated === true };
+  } finally {
+    signal?.removeEventListener('abort', abort);
+    cancellation.dispose();
+  }
+}
+
 async function remoteGitBundlePath(git: RemoteGit, remoteCwd: string): Promise<string> {
   const bundlePath = (await git.run(['rev-parse', '--git-path', `safs-${randomBytes(16).toString('hex')}.bundle`])).trim();
   return path.posix.resolve(remoteCwd, bundlePath);
@@ -3882,7 +3942,7 @@ async function removeRemoteGitTemporaries(session: SftpSession, paths: string[])
   }
 }
 
-async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Promise<void> {
+async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit, externalSignal?: AbortSignal, externalReport?: (message: string) => void): Promise<void> {
   const head = await git.probe(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   if (!head) throw new Error('当前仓库尚无提交，请先暂存文件并创建首次提交后再推送。');
   if ((await git.status()).length) {
@@ -3914,9 +3974,14 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
   // 浅克隆的远端只能打出到边界提交为止的 bundle：先问远端要边界，本地照样声明。
   const shallowBoundaries = await resolveShallowBoundaries(git, `refs/heads/${target.branch}`);
   await vscode.window.withProgress({
-    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 推送'
-  }, async progress => {
+    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 推送', cancellable: true
+  }, async (progress, cancellation) => {
     const controller = new AbortController();
+    const abortExternal = () => controller.abort();
+    externalSignal?.addEventListener('abort', abortExternal, { once: true });
+    if (externalSignal?.aborted) controller.abort();
+    git = git.withSignal(controller.signal);
+    const cancelled = cancellation.onCancellationRequested(() => controller.abort());
     const timeoutMs = configuration.get<number>('git.operationTimeoutMs', 600000);
     const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
@@ -3925,7 +3990,7 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
         target, local: localGitRunner(configuration.get<string>('git.localPath', 'git'),
           message => bridgeOutput?.appendLine(message)),
         shallowBoundaries,
-        signal: controller.signal, report: message => progress.report({ message }),
+        signal: controller.signal, report: message => { progress.report({ message }); externalReport?.(message); },
         verifyRemote: async () => {
           const ref = `refs/heads/${target.branch}`;
           const expected = target.oid;
@@ -3968,13 +4033,14 @@ async function pushRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
       });
       void vscode.window.showInformationMessage('SAFS：已通过本地 Git 推送。');
     } catch (error) {
+      if (cancellation.isCancellationRequested) throw new Error('Git 操作已取消，请刷新确认仓库状态。');
       if (controller.signal.aborted) throw new Error(`本地 Git 推送超时（${timeoutMs} ms），请刷新目标仓库确认是否已收到提交。`);
       throw new Error(redactSensitiveText(error instanceof Error ? error.message : String(error)));
-    } finally { if (timeout) clearTimeout(timeout); }
+    } finally { externalSignal?.removeEventListener('abort', abortExternal); cancelled.dispose(); if (timeout) clearTimeout(timeout); }
   });
 }
 
-async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Promise<void> {
+async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit, externalSignal?: AbortSignal, externalReport?: (message: string) => void): Promise<void> {
   const location = parseRemoteUri(uri.toString());
   const { folder } = await mountAndFolder(location.mountName);
   const remoteCwd = remotePathForUri(folder, location.remotePath);
@@ -3984,9 +4050,14 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
   // 浅克隆的远端只能打出到边界提交为止的 bundle：先问远端要边界，本地照样声明。
   const shallowBoundaries = await resolveShallowBoundaries(git, `refs/heads/${target.branch}`);
   await vscode.window.withProgress({
-    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 拉取'
-  }, async progress => {
+    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 拉取', cancellable: true
+  }, async (progress, cancellation) => {
     const controller = new AbortController();
+    const abortExternal = () => controller.abort();
+    externalSignal?.addEventListener('abort', abortExternal, { once: true });
+    if (externalSignal?.aborted) controller.abort();
+    git = git.withSignal(controller.signal);
+    const cancelled = cancellation.onCancellationRequested(() => controller.abort());
     const timeoutMs = configuration.get<number>('git.operationTimeoutMs', 600000);
     const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
@@ -3995,7 +4066,7 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
         target, local: localGitRunner(configuration.get<string>('git.localPath', 'git'),
           message => bridgeOutput?.appendLine(message)),
         shallowBoundaries,
-        signal: controller.signal, report: message => progress.report({ message }),
+        signal: controller.signal, report: message => { progress.report({ message }); externalReport?.(message); },
         verifyRemote: async () => {
           const ref = `refs/heads/${target.branch}`;
           const expected = target.oid;
@@ -4060,13 +4131,14 @@ async function pullRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pro
       void vscode.window.showInformationMessage(
         result.status === 'up-to-date' ? 'SAFS：已是最新，无需拉取。' : 'SAFS：已通过本地 Git 拉取。');
     } catch (error) {
+      if (cancellation.isCancellationRequested) throw new Error('Git 操作已取消，请刷新确认仓库状态。');
       if (controller.signal.aborted) throw new Error(`本地 Git 拉取超时（${timeoutMs} ms），请刷新远端仓库确认是否已更新。`);
       throw new Error(redactSensitiveText(error instanceof Error ? error.message : String(error)));
-    } finally { if (timeout) clearTimeout(timeout); }
+    } finally { externalSignal?.removeEventListener('abort', abortExternal); cancelled.dispose(); if (timeout) clearTimeout(timeout); }
   });
 }
 
-async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Promise<void> {
+async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit, externalSignal?: AbortSignal, externalReport?: (message: string) => void): Promise<void> {
   const location = parseRemoteUri(uri.toString());
   const { folder } = await mountAndFolder(location.mountName);
   const remoteCwd = remotePathForUri(folder, location.remotePath);
@@ -4075,9 +4147,14 @@ async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pr
   // 浅克隆的远端只能打出到边界提交为止的 bundle：先问远端要边界，本地照样声明。
   const shallowBoundaries = await resolveShallowBoundaries(git, target.tracking);
   await vscode.window.withProgress({
-    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 提取'
-  }, async progress => {
+    location: vscode.ProgressLocation.Notification, title: 'SAFS：通过本地 Git 提取', cancellable: true
+  }, async (progress, cancellation) => {
     const controller = new AbortController();
+    const abortExternal = () => controller.abort();
+    externalSignal?.addEventListener('abort', abortExternal, { once: true });
+    if (externalSignal?.aborted) controller.abort();
+    git = git.withSignal(controller.signal);
+    const cancelled = cancellation.onCancellationRequested(() => controller.abort());
     const timeoutMs = configuration.get<number>('git.operationTimeoutMs', 600000);
     const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
@@ -4086,7 +4163,7 @@ async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pr
         target, local: localGitRunner(configuration.get<string>('git.localPath', 'git'),
           message => bridgeOutput?.appendLine(message)),
         shallowBoundaries,
-        signal: controller.signal, report: message => progress.report({ message }),
+        signal: controller.signal, report: message => { progress.report({ message }); externalReport?.(message); },
         verifyRemote: async () => {
           const ref = target.tracking;
           const expected = target.base;
@@ -4149,9 +4226,10 @@ async function fetchRemoteRepositoryLocally(uri: vscode.Uri, git: RemoteGit): Pr
       void vscode.window.showInformationMessage(
         result.status === 'up-to-date' ? 'SAFS：远程跟踪引用已是最新。' : 'SAFS：已通过本地 Git 提取上游更新。');
     } catch (error) {
+      if (cancellation.isCancellationRequested) throw new Error('Git 操作已取消，请刷新确认仓库状态。');
       if (controller.signal.aborted) throw new Error(`本地 Git 提取超时（${timeoutMs} ms），请稍后重试。`);
       throw new Error(redactSensitiveText(error instanceof Error ? error.message : String(error)));
-    } finally { if (timeout) clearTimeout(timeout); }
+    } finally { externalSignal?.removeEventListener('abort', abortExternal); cancelled.dispose(); if (timeout) clearTimeout(timeout); }
   });
 }
 
@@ -6530,19 +6608,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const location = parseRemoteUri(uri.toString());
     const { folder } = await mountAndFolder(location.mountName);
     const remoteCwd = remotePathForUri(folder, location.remotePath);
-    return async (command) => {
-      if (!(vscode.workspace.workspaceFolders ?? []).some(candidate => candidate.uri.toString() === uri.toString())) {
+    return async (command, signal) => {
+      if (!(vscode.workspace.workspaceFolders ?? []).some(candidate =>
+        candidate.uri.scheme === uri.scheme && candidate.uri.authority === uri.authority
+        && isRemotePathInsideRoot(candidate.uri.path, uri.path))) {
         throw new Error('远程 Git 工作区已关闭。');
       }
-      const result = await executeRemoteCommand(context, {
-        command, mountName: location.mountName, remoteCwd,
-        source: 'remote_git', captureForBackend: true
-      });
-      return {
-        exitCode: typeof result.exitCode === 'number' ? result.exitCode : null,
-        stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? ''),
-        truncated: result.truncated === true
-      };
+      return executeRemoteGitCommand(context, location.mountName, remoteCwd, command, signal);
     };
   }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally,
   pullRemoteRepositoryLocally, fetchRemoteRepositoryLocally, async (uri, git) => {
@@ -6565,6 +6637,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // remains available when a repository has no valid push destination.
       bridgeOutput?.appendLine(`[Git] 跨主机推送状态未同步：${redactSensitiveText(String(error))}`);
     }
+  }, async (uri, signal) => {
+    const location = parseRemoteUri(uri.toString());
+    const { folder } = await mountAndFolder(location.mountName);
+    const root = remotePathForUri(folder, location.remotePath);
+    const session = await pool.get(folder.hostName);
+    const realRoot = await session.realpath(root, signal);
+    const result = await discoverGitRepositories({
+      kind: 'remote', root,
+      runGit: (args, signal) => executeRemoteGitCommand(context, location.mountName, root, gitCommand(args), signal),
+      list: async (relative, signal) => (await session.readDirectory(path.posix.resolve(root, relative), signal))
+        .map(entry => ({ name: entry.name, path: path.posix.join(relative, entry.name),
+          directory: entry.type === 'directory', symlink: entry.type === 'symbolic-link' }))
+    }, { signal });
+    if (result.truncated || result.skipped.length) {
+      bridgeOutput?.appendLine(`[Git] 仓库扫描已达范围限制或跳过不可访问目录：${result.skipped.join(', ')}`);
+    }
+    return result.roots.map(remoteRoot => ({
+      uri: vscode.Uri.joinPath(uri, path.posix.relative(realRoot, remoteRoot)),
+      name: path.posix.basename(remoteRoot) || remoteRoot
+    }));
   });
   const refreshGitStatus = () => {
     const repositories = gitScm.repositoriesInUse();
@@ -6578,10 +6670,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(gitScm.onDidChangeRepositories(refreshGitStatus),
     gitScm.onDidChangeStatus(refreshGitStatus), gitScm.onDidChangeHistory(refreshGitStatus));
   refreshGitStatus();
-  context.subscriptions.push(gitScm, new RemoteGitHistory(
+  const gitHistory = new RemoteGitHistory(
     () => gitScm.repositoriesInUse(),
     (message) => bridgeOutput?.appendLine(`[Git] ${message}`),
-    gitScm.onDidChangeRepositories, gitScm.onDidChangeHistory));
+    gitScm.onDidChangeRepositories, gitScm.onDidChangeHistory, false);
+  const gitView = new RemoteGitView(context.extensionUri, gitScm, gitHistory, {
+    root: uri => {
+      const location = parseRemoteUri(uri.toString());
+      const folder = registry.get(location.mountName);
+      return folder ? remotePathForUri(folder, location.remotePath) : location.remotePath;
+    },
+    setup: setupRemoteGit
+  });
+  context.subscriptions.push(gitScm, gitHistory, gitView,
+    vscode.window.registerWebviewViewProvider('safs.gitHistory', gitView, {
+      webviewOptions: { retainContextWhenHidden: true }
+    }));
 
   tree.refresh();
 

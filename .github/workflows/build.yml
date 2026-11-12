@@ -19,7 +19,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # The universal VSIX uses ssh2's portable crypto. esbuild's platform
+      # executable is installed as an optional package, without postinstall.
+      - run: npm ci --ignore-scripts
       - run: npm test
       - run: npm run vsix
         if: runner.os == 'Linux'

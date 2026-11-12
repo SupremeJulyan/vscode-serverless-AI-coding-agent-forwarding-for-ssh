@@ -135,3 +135,17 @@ test('batched metadata preserves NUL output and distinguishes missing configurat
   await git.run(['config', 'safs.present', 'a value']);
   assert.deepEqual(await git.configMany(['safs.present', 'safs.missing']), ['a value', undefined]);
 });
+
+test('Git operation cancellation reaches the transport and prevents later commands', async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const git = new RemoteGit(async (_command, signal) => {
+    calls++;
+    assert.equal(signal, controller.signal);
+    controller.abort();
+    return { exitCode: 0, stdout: '', stderr: '' };
+  }).withSignal(controller.signal);
+  await assert.rejects(git.run(['status']));
+  await assert.rejects(git.run(['status']));
+  assert.equal(calls, 1);
+});

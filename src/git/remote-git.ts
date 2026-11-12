@@ -8,7 +8,7 @@ export interface GitResult {
   stderr: string;
   truncated?: boolean;
 }
-export type GitRunner = (command: string) => Promise<GitResult>;
+export type GitRunner = (command: string, signal?: AbortSignal) => Promise<GitResult>;
 export interface GitChange { index: string; working: string; path: string; originalPath?: string }
 
 /** Porcelain -z preserves whitespace, newlines, Unicode and literal pathspec characters. */
@@ -38,10 +38,10 @@ export function gitCommand(args: string[]): string {
 export class RemoteGit {
   private readonly runner: GitRunner;
   constructor(runner: GitRunner, log?: (message: string) => void) {
-    this.runner = async command => {
+    this.runner = async (command, signal) => {
       const started = performance.now();
       try {
-        const result = await runner(command);
+        const result = await runner(command, signal);
         operationMetric(log, 'git.remote.command', started,
           Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr));
         return result;
@@ -50,6 +50,14 @@ export class RemoteGit {
         throw error;
       }
     };
+  }
+  withSignal(signal: AbortSignal): RemoteGit {
+    return new RemoteGit(async command => {
+      signal.throwIfAborted();
+      const result = await this.runner(command, signal);
+      signal.throwIfAborted();
+      return result;
+    });
   }
   /** Frame read-only command results in one SSH exec, preserving each exit status and NUL data. */
   async batch(commands: string[][]): Promise<GitResult[]> {
@@ -126,6 +134,7 @@ export class RemoteGit {
     await this.run(['rm', '--cached', '-f', '--', ...paths]);
   }
   async discard(changes: GitChange[]): Promise<void> {
+    if (changes.some(isGitConflict)) throw new Error('冲突文件需要先解决冲突，不能直接还原。');
     const tracked = new Set<string>();
     const untracked = new Set<string>();
     for (const change of changes) {
@@ -136,7 +145,12 @@ export class RemoteGit {
     if (tracked.size) await this.run(['restore', '--worktree', '--', ...tracked]);
     // `restore` cannot remove untracked files. Git clean keeps literal pathspec handling and
     // removes only the explicitly selected, non-ignored files reported by status.
-    if (untracked.size) await this.run(['clean', '-f', '--', ...untracked]);
+    if (untracked.size) {
+      await this.run(['clean', '-f', '-d', '--', ...untracked]);
+      const remaining = (await this.status()).filter(change => change.index === '?' && [...untracked].some(file =>
+        change.path === file || change.path.startsWith(file.endsWith('/') ? file : `${file}/`)));
+      if (remaining.length) throw new Error(`未能删除未跟踪路径：${remaining.map(change => change.path).join('、')}。目录可能包含独立 Git 仓库，请检查后在终端处理。`);
+    }
   }
   async commit(message: string): Promise<void> {
     if (!message.trim()) throw new Error('请输入提交说明。');

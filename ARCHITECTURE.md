@@ -63,3 +63,10 @@ npm test
 
 `build/sync-high-risk-defaults.ts` 从 `security/` 读取默认命令策略，
 `build/backend-efficiency.ts` 从 `agent/` 和 `remote/` 读取其基准测试入口。
+
+## Git 界面
+
+`src/git/git-view.ts` 在 VS Code 源代码管理容器中托管统一 Webview。
+`git-view-client.ts` 与 `resources/git-view.css` 复用 Tabby Git 的布局与交互；
+前端只发送受限的动作和条目 ID，仓库验证、Git 执行与取消保留在扩展宿主。
+`remote-git-scm.ts` 管理仓库操作和队列，`remote-git-history.ts` 提供缓存的历史与差异模型，均不注册原生 SCM 仓库或额外 Git 树视图。

@@ -171,7 +171,14 @@ export class AgentActivityStore {
     const stored = this.state.get<unknown[]>(this.key, []);
     const now = this.now();
     let changed = false;
-    this.events = stored.filter(validEvent).slice(-agentActivityLimit).map((event) => {
+    const migrated = stored.map(event => {
+      if (event && typeof event === 'object' && 'source' in event && event.source === 'backend') {
+        changed = true;
+        return { ...event, source: 'cli' };
+      }
+      return event;
+    });
+    this.events = migrated.filter(validEvent).slice(-agentActivityLimit).map((event) => {
       const cloned = { ...event, summary: { ...event.summary } };
       if (cloned.status !== 'running') return cloned;
       changed = true;

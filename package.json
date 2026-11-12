@@ -67,6 +67,12 @@
   "contributes": {
     "commands": [
       {
+        "command": "safs.git.checkoutBranch",
+        "title": "切换到此分支",
+        "category": "SAFS Git",
+        "icon": "$(git-branch)"
+      },
+      {
         "command": "safs.git.init",
         "title": "初始化远程仓库",
         "category": "SAFS Git"
@@ -334,22 +340,15 @@
       "scm": [
         {
           "id": "safs.gitHistory",
-          "name": "SAFS Git View",
-          "contextualTitle": "SAFS Git View",
-          "visibility": "visible"
+          "name": "SAFS Git",
+          "type": "webview",
+          "contextualTitle": "SAFS Git",
+          "visibility": "visible",
+          "icon": "resources/git-branch.svg"
         }
       ]
     },
     "viewsWelcome": [
-      {
-        "view": "safs.gitHistory",
-        "contents": "[初始化远程 Git 仓库](command:safs.git.init)",
-        "when": "safs.hasRemoteWorkspace"
-      },
-      {
-        "view": "safs.gitHistory",
-        "contents": "尚未打开远程 Git 仓库。\n[克隆 Git 仓库](command:safs.cloneGitRepository)\n[添加远程 Git 目录](command:safs.addRemoteDirectory)"
-      },
       {
         "view": "safs.mounts",
         "contents": "尚未配置远程主机。\n[新增主机配置](command:safs.addRemoteDirectory)\n[打开配置](command:safs.openConfig)",
@@ -426,34 +425,9 @@
           "command": "safs.status",
           "when": "view == safs.mounts",
           "group": "safs@2"
-        },
-        {
-          "command": "safs.git.refreshHistory",
-          "when": "view == safs.gitHistory",
-          "group": "navigation@0"
-        },
-        {
-          "command": "safs.git.fetch",
-          "when": "view == safs.gitHistory",
-          "group": "remote"
-        },
-        {
-          "command": "safs.git.pull",
-          "when": "view == safs.gitHistory",
-          "group": "remote"
-        },
-        {
-          "command": "safs.git.push",
-          "when": "view == safs.gitHistory",
-          "group": "remote"
         }
       ],
       "view/item/context": [
-        {
-          "command": "safs.git.copyCommitId",
-          "when": "view == safs.gitHistory && viewItem == safsGitCommit",
-          "group": "safs@1"
-        },
         {
           "command": "safs.addHostCredentials",
           "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
@@ -560,82 +534,6 @@
           "command": "safs.visualSync",
           "when": "resourceScheme == file && explorerResourceIsFolder",
           "group": "safs@0"
-        }
-      ],
-      "scm/title": [
-        {
-          "command": "safs.git.refresh",
-          "when": "scmProvider == safs-git",
-          "group": "navigation@0"
-        },
-        {
-          "command": "safs.git.branch",
-          "when": "scmProvider == safs-git",
-          "group": "3_checkout@1"
-        },
-        {
-          "command": "safs.git.commit",
-          "when": "scmProvider == safs-git",
-          "group": "navigation@1"
-        },
-        {
-          "command": "safs.git.fetch",
-          "when": "scmProvider == safs-git",
-          "group": "remote"
-        },
-        {
-          "command": "safs.git.pull",
-          "when": "scmProvider == safs-git",
-          "group": "remote"
-        },
-        {
-          "command": "safs.git.push",
-          "when": "scmProvider == safs-git",
-          "group": "remote"
-        }
-      ],
-      "scm/resourceGroup/context": [
-        {
-          "command": "safs.git.stage",
-          "when": "scmProvider == safs-git && scmResourceGroup != index",
-          "group": "inline@1"
-        },
-        {
-          "command": "safs.git.unstage",
-          "when": "scmProvider == safs-git && scmResourceGroup == index",
-          "group": "inline@1"
-        }
-      ],
-      "scm/resourceState/context": [
-        {
-          "command": "safs.git.stage",
-          "when": "scmProvider == safs-git && scmResourceGroup != index",
-          "group": "1_modification@1"
-        },
-        {
-          "command": "safs.git.unstage",
-          "when": "scmProvider == safs-git && scmResourceGroup == index",
-          "group": "1_modification@1"
-        },
-        {
-          "command": "safs.git.discard",
-          "when": "scmProvider == safs-git && scmResourceGroup == working",
-          "group": "1_modification@2"
-        },
-        {
-          "command": "safs.git.stage",
-          "when": "scmProvider == safs-git && scmResourceGroup != index",
-          "group": "inline"
-        },
-        {
-          "command": "safs.git.unstage",
-          "when": "scmProvider == safs-git && scmResourceGroup == index",
-          "group": "inline"
-        },
-        {
-          "command": "safs.git.discard",
-          "when": "scmProvider == safs-git && scmResourceGroup == working",
-          "group": "inline"
         }
       ]
     },
@@ -818,23 +716,39 @@
           "description": "Unified timeout for Agent CLI forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
         },
         "safs.agentInterface": {
-          "type": "string", "enum": ["mcp", "cli"], "default": "cli",
+          "type": "string",
+          "enum": [
+            "mcp",
+            "cli"
+          ],
+          "default": "cli",
           "description": "Agent 接口。MCP 使用 HTTP Streamable transport，CLI 使用独立 IPC。"
         },
         "safs.agentMcpToolProfile": {
-          "type": "string", "enum": ["full", "core"], "default": "full",
+          "type": "string",
+          "enum": [
+            "full",
+            "core"
+          ],
+          "default": "full",
           "description": "MCP 工具集：full 包含完整远程文件操作，core 使用精简工具集。"
         },
         "safs.agentMcpTimeoutMs": {
-          "type": "number", "minimum": 0, "default": 120000,
+          "type": "number",
+          "minimum": 0,
+          "default": 120000,
           "description": "MCP 操作超时时间（毫秒），0 表示不限制。"
         },
         "safs.agentMcpPort": {
-          "type": "number", "minimum": 0, "default": 0,
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
           "description": "当前窗口 MCP HTTP 监听端口，0 表示自动分配。"
         },
         "safs.agentHttpRouterPort": {
-          "type": "number", "minimum": 0, "default": 0,
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
           "description": "共享 MCP HTTP 路由端口；0 表示使用 SAFS 默认端口。"
         },
         "safs.git.operationTimeoutMs": {
@@ -991,6 +905,8 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
+    "@fortawesome/free-regular-svg-icons": "^7.3.1",
+    "@fortawesome/free-solid-svg-icons": "^7.3.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "jsonc-parser": "^3.3.1",
     "shell-quote": "1.8.3",

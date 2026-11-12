@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createIpcServer, ipcPath, ipcRequest, listenIpc } from '../src/agent/agent-ipc';
 
-import { writeWorkspaceId } from '../src/agent/workspace-id';
+import { writeWorkspaceId, resolveWorkspaceId } from '../src/agent/workspace-id';
 
 const exec = promisify(execFile);
 test('CLI uses native IPC and resolves placeholder cwd and explicit IDs', async () => {
@@ -81,4 +81,19 @@ test('IPC requests require the matching local capability token', async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+
+test('expired workspace binding matches canonical directories through a local alias', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safs-canonical-binding-'));
+  try {
+    const actual = join(root, 'actual');
+    const alias = join(root, 'alias');
+    await mkdir(actual);
+    await symlink(actual, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    await writeWorkspaceId(actual, 'expired');
+    const id = await resolveWorkspaceId(actual, async () => [{ workspaceId: 'active', localRoot: alias }]);
+    assert.equal(id, 'active');
+    assert.equal(JSON.parse(await readFile(join(actual, '.awm', 'workspace.json'), 'utf8')).workspaceId, 'active');
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
