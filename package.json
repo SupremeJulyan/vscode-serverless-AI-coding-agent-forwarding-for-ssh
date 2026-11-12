@@ -110,7 +110,7 @@
       },
       {
         "command": "safs.addRemoteDirectory",
-        "title": "新增配置",
+        "title": "新增主机配置",
         "icon": "$(add)"
       },
       {
@@ -163,7 +163,7 @@
       {
         "command": "safs.restartAgentForwardItem",
         "title": "重启 Agent 转发",
-        "icon": "$(debug-restart)"
+        "icon": "$(refresh)"
       },
       {
         "command": "safs.deleteHostGroup",
@@ -321,7 +321,7 @@
       "safs": [
         {
           "id": "safs.mounts",
-          "name": "远程目录",
+          "name": "远程主机配置",
           "icon": "resources/remote-ssh.svg"
         },
         {
@@ -352,7 +352,7 @@
       },
       {
         "view": "safs.mounts",
-        "contents": "尚未配置远程目录。\n[新增配置](command:safs.addRemoteDirectory)\n[打开配置](command:safs.openConfig)",
+        "contents": "尚未配置远程主机。\n[新增主机配置](command:safs.addRemoteDirectory)\n[打开配置](command:safs.openConfig)",
         "when": "safs.hasNoMounts"
       }
     ],
@@ -476,7 +476,7 @@
         },
         {
           "command": "safs.restartAgentForwardItem",
-          "when": "view == safs.mounts && viewItem =~ /safs\\.connection/",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.connection/ && viewItem =~ /forwardingFailed/",
           "group": "inline@1"
         },
         {
