@@ -139,6 +139,15 @@ export async function installNodeCli(
     throw new Error('打包的 Node.js CLI 无效或版本不一致');
   }
   await mkdir(directory, { recursive: true });
+  if (platform !== 'win32') {
+    const previous = await readFile(destination, 'utf8').catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return undefined;
+    });
+    if (previous !== undefined && previous !== content && !previous.includes('safs_cli_batch')) {
+      throw new Error(`已有其他 safs 命令，未覆盖：${destination}`);
+    }
+  }
   const payload = platform === 'win32' ? path.join(directory, 'safs-cli.js') : destination;
   const temporary = `${payload}.${randomBytes(6).toString('hex')}.tmp`;
   const launcherTemporary = `${destination}.${randomBytes(6).toString('hex')}.tmp`;

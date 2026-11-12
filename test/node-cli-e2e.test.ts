@@ -34,7 +34,7 @@ test('Node.js CLI installs its bundled Agent Skill without a router', async () =
     const commands = await readFile(join(skillRoot, 'references', 'commands.md'), 'utf8');
     assert.match(skill, /^---\nname: safs-cli\n/);
     assert.match(skill, /safs workspaces/);
-    assert.match(commands, /safs read PATH --workspace ID/);
+    assert.match(commands, /safs read PATH --id ID/);
 
     const globalCodex = await executeCaptured({
       command: executable,
@@ -145,19 +145,19 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     }] });
     const workspaceId = JSON.parse(workspaces.stdout).workspaces[0].workspaceId as string;
     const positionalRead = await executeCaptured({ command: executable, args: [
-      '--config', config, 'read', 'concise.txt', '--workspace', workspaceId
+      '--config', config, 'read', 'concise.txt', '--id', workspaceId
     ] });
     assert.equal(positionalRead.exitCode, 0, positionalRead.stderr);
     assert.equal(JSON.parse(positionalRead.stdout).content, 'content:concise.txt');
     const run = await executeCaptured({ command: executable, args: [
-      '--config', config, 'exec', 'exit 7', '--workspace', workspaceId
+      '--config', config, 'exec', 'exit 7', '--id', workspaceId
     ] });
     assert.equal(run.exitCode, 7);
     assert.equal(run.stdout, 'node-out');
     assert.equal(run.stderr, 'node-err');
     assert.equal(runs, 1);
     const blockedRun = await executeCaptured({ command: executable, args: [
-      '--config', config, 'exec', '--workspace', workspaceId, '--', 'blocked-write'
+      '--config', config, 'exec', '--id', workspaceId, '--', 'blocked-write'
     ] });
     assert.equal(blockedRun.exitCode, 1);
     assert.equal(blockedRun.stdout, '');
@@ -167,7 +167,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     );
     assert.equal(runs, 1);
     const currentFile = await executeCaptured({ command: executable, args: [
-      '--config', config, 'current-file', '--workspace', workspaceId
+      '--config', config, 'current-file', '--id', workspaceId
     ] });
     assert.equal(currentFile.exitCode, 0, currentFile.stderr);
     assert.deepEqual(JSON.parse(currentFile.stdout), {
@@ -191,7 +191,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     const edit = await executeCaptured({
       command: executable,
       args: [
-        '--config', config, 'edit', '--workspace', workspaceId,
+        '--config', config, 'edit', '--id', workspaceId,
         '--path', 'a.txt', '--input', '-'
       ],
       stdin: JSON.stringify({ edits: [{ oldText: 'a', newText: 'b' }] })
@@ -199,14 +199,14 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     assert.equal(edit.exitCode, 0, edit.stderr);
     for (const call of structuredCalls) {
       const result = await executeCaptured({ command: executable, args: [
-        '--config', config, call[0], '--workspace', workspaceId, ...call.slice(1)
+        '--config', config, call[0], '--id', workspaceId, ...call.slice(1)
       ] });
       assert.equal(result.exitCode, 0, `${call[0]}: ${result.stderr}`);
     }
     const write = await executeCaptured({
       command: executable,
       args: [
-        '--config', config, 'write', '--workspace', workspaceId,
+        '--config', config, 'write', '--id', workspaceId,
         '--path', 'write.txt', '--file', '-'
       ],
       stdin: 'replacement'
@@ -218,7 +218,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     );
     const batchStarts = activity.filter((event) => event.phase === 'start').length;
     const batch = await executeCaptured({ command: executable, args: [
-      '--config', config, '--compact', 'batch', '--workspace', workspaceId, '--input',
+      '--config', config, '--compact', 'batch', '--id', workspaceId, '--input',
       JSON.stringify({ operations: [
         { command: 'read', arguments: { path: 'a.txt' } },
         { command: 'list', arguments: { path: 'src' } }
@@ -234,13 +234,13 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       batchStarts + 2
     );
     const conciseError = await executeCaptured({ command: executable, args: [
-      '--config', config, 'list', '--workspace', workspaceId, '--path', 'forbidden'
+      '--config', config, 'list', '--id', workspaceId, '--path', 'forbidden'
     ] });
     assert.equal(conciseError.exitCode, 1);
     assert.match(conciseError.stderr, /REMOTE_TOOL_ERROR: denied detail/);
     assert.equal(conciseError.stderr.includes('{"code"'), false);
     const syntaxError = await executeCaptured({ command: executable, args: [
-      '--config', config, 'read', '--workspace', workspaceId, '--unknown', 'value'
+      '--config', config, 'read', '--id', workspaceId, '--unknown', 'value'
     ] });
     assert.equal(syntaxError.exitCode, 1);
     assert.match(syntaxError.stderr, /Invalid option for read: --unknown/);
@@ -251,13 +251,13 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       (event) => event.source === 'cli'
     ));
     const removedAgentOption = await executeCaptured({ command: executable, args: [
-      '--config', config, 'read', 'named.txt', '--workspace', workspaceId,
+      '--config', config, 'read', 'named.txt', '--id', workspaceId,
       '--agent', 'Explicit Agent'
     ] });
     assert.equal(removedAgentOption.exitCode, 1);
     assert.match(removedAgentOption.stderr, /Invalid option for read: --agent/);
     const removedCwdOption = await executeCaptured({ command: executable, args: [
-      '--config', config, 'exec', 'pwd', '--workspace', workspaceId, '--cwd', 'subdirectory'
+      '--config', config, 'exec', 'pwd', '--id', workspaceId, '--cwd', 'subdirectory'
     ] });
     assert.equal(removedCwdOption.exitCode, 1);
     assert.match(removedCwdOption.stderr, /Invalid option for exec: --cwd/);
@@ -299,7 +299,7 @@ test('Node.js CLI global options preserve content values over IPC', async () => 
     assert.match(help.stdout, /^Usage: safs edit /);
     for (const content of ['--compact', '--verbose', '--help', '-h']) {
       const result = await executeCaptured({ command: developmentNodeCli(), args: [
-        '--config', config, '--compact', 'write', 'note.txt', '--workspace', 'chosen', '--content', content
+        '--config', config, '--compact', 'write', 'note.txt', '--id', 'chosen', '--content', content
       ] });
       assert.equal(result.exitCode, 0, result.stderr);
       assert.equal(JSON.parse(result.stdout).content, content);

@@ -17,7 +17,7 @@ import {
 import { RemoteGit } from './git/remote-git';
 import { RemoteGitScm } from './git/remote-git-scm';
 import { RemoteGitHistory } from './git/remote-git-history';
-import { updateCliInstructions, writeCliConnectionFile } from './cli/cli-integration';
+import { updateCliInstructions, writeCliConnectionFile, writePlaceholderGuidance } from './cli/cli-integration';
 import {
   ensureUnixCliPath, globalNodeCli, globalNodeCliSkill, installNodeCli, removeNodeCli,
   NodeRuntimeUnavailableError, requireNodeRuntime, updateInstalledNodeCliSkills, NodeCliSkillTarget,
@@ -5533,7 +5533,12 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   await mkdir(localRoot, { recursive: true });
   await writeWorkspaceId(localRoot, workspaceIdFor({
     instanceId: agentInstanceId, workspaceUri, host: mount.host
-  }));
+  }), {
+    remoteRoot: workspacePath, host: resolveMount(config, mount).hostConfig.ip,
+    port: resolveMount(config, mount).hostConfig.port ?? 22,
+    user: resolveMount(config, mount).hostConfig.user, terminalOnly: terminalCommandOnly
+  });
+  await writePlaceholderGuidance(localRoot, terminalCommandOnly);
   await agentWorkspacePublisher.publish({
     focused: vscode.window.state.focused,
     execution: 'remote',

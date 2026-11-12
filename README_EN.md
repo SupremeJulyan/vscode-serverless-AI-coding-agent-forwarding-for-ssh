@@ -45,7 +45,7 @@ The first time you open the configured remote home from a parent connection node
 
 After installing Node.js, fully quit all VS Code windows and reopen VS Code so it picks up the updated PATH; reloading the window is insufficient. Run `safs --version` to check installation, then enter `/safs-cli` in your Agent and select a remote workspace.
 
-The CLI communicates over Unix sockets or Windows named pipes, without listening on local TCP ports. The extension creates `.safs-workspace-id` in each Agent local working directory. The CLI reads the marker in cwd only, without searching parent directories. Expired IDs refresh only after unique active-placeholder matching. Missing markers or failed/ambiguous matches require `--id ID`. Explicit IDs take priority without modifying the marker; Agents must run `safs` in their current local working directory without `cd` or cwd/workdir overrides; for other workspaces, stay in cwd and specify an ID on each command.
+The CLI communicates over Unix sockets or Windows named pipes, without listening on local TCP ports. The extension creates `.awm/workspace.json` in each Agent local working directory. The CLI reads the marker in cwd only, without searching parent directories. Expired IDs refresh only after unique active-placeholder matching. Missing markers or failed/ambiguous matches require `--id ID`. Explicit IDs take priority without modifying the marker; Agents must run `safs` in their current local working directory without `cd` or cwd/workdir overrides; for other workspaces, stay in cwd and specify an ID on each command.
 
 Once enabled, the Agent can operate within the current remote workspace:
 
