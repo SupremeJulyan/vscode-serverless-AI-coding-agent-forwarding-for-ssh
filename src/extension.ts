@@ -639,13 +639,9 @@ function displayMappingFromUri(uriPath: string, displayName: string): {
 }
 
 function setRemoteWorkspaceDisplayRoot(folder: RemoteFolder, remoteRoot: string): void {
-  const host = lastReadConfig?.hosts.find(candidate => candidate.name === folder.hostName);
-  const displayName = host
-    ? remoteWorkspaceDisplayName(host, lastReadConfig?.host_aliases)
-    : folder.mountName.replace(/[\\/]/g, '_');
   const placeholderRoot = placeholderPathForRemote(folder, remoteRoot);
   folder.displayRemoteRoot = remoteRoot;
-  folder.displayRoot = path.posix.join(placeholderRoot, displayName);
+  folder.displayRoot = placeholderRoot;
 }
 
 async function restoreRemoteWorkspaceDisplayRoot(folder: RemoteFolder): Promise<void> {
@@ -668,7 +664,15 @@ async function restoreRemoteWorkspaceDisplayRoot(folder: RemoteFolder): Promise<
     return;
   }
   const remembered = await readLastRemoteDirectory(localRootForFolder(folder));
-  setRemoteWorkspaceDisplayRoot(folder, remembered ?? folder.defaultRemotePath ?? folder.remoteRoot);
+  const remoteRoot = remembered ?? folder.defaultRemotePath ?? folder.remoteRoot;
+  const previousDisplayRoot = path.posix.join(placeholderPathForRemote(folder, remoteRoot), displayName);
+  if (candidate?.uri.path === previousDisplayRoot) {
+    folder.legacyMappings = [
+      ...(folder.legacyMappings ?? []).filter(item => item.workspaceRoot !== previousDisplayRoot),
+      { workspaceRoot: previousDisplayRoot, remoteRoot }
+    ];
+  }
+  setRemoteWorkspaceDisplayRoot(folder, remoteRoot);
 }
 
 function reportedRemoteTerminalCwd(
