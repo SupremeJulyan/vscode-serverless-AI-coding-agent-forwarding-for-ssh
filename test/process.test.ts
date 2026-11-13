@@ -118,3 +118,16 @@ test('executeCaptured runs npm .cmd shims on Windows', async (t) => {
   const result = await executeCaptured({ command: 'codex', args: ['--version'] });
   assert.equal(result.exitCode, 0);
 });
+
+
+test('early child exit with pending stdin preserves diagnostics in both runners', async () => {
+  const plan = {
+    command: process.execPath,
+    args: ['-e', "process.stderr.write('early failure'); process.exit(2)"],
+    stdin: 'x'.repeat(8 * 1024 * 1024)
+  };
+  await assert.rejects(executeWithStdin(plan), /early failure/);
+  const result = await executeCaptured(plan);
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stderr, 'early failure');
+});
