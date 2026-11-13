@@ -235,9 +235,9 @@ export async function executeCaptured(
       });
     });
     // A command may exit or deliberately close stdin before the write drains.
-    // Keep its exit status/stderr as the result instead of throwing an unhandled EPIPE.
+    // Keep its exit status/stderr as the result instead of throwing an unhandled EPIPE (or EOF on Windows).
     child.stdin.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code !== 'EPIPE') reject(error);
+      if (error.code !== 'EPIPE' && error.code !== 'EOF') reject(error);
     });
     child.stdin.end(plan.stdin);
   });
@@ -282,9 +282,9 @@ export async function executeWithStdin(
       reject(new Error(detail || `${plan.command} exited with code ${code ?? 'unknown'}`));
     });
     // A command may exit or deliberately close stdin before the write drains.
-    // Keep its exit status/stderr as the result instead of throwing an unhandled EPIPE.
+    // Keep its exit status/stderr as the result instead of throwing an unhandled EPIPE (or EOF on Windows).
     child.stdin.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code !== 'EPIPE') reject(error);
+      if (error.code !== 'EPIPE' && error.code !== 'EOF') reject(error);
     });
     child.stdin.end(plan.stdin);
   });
