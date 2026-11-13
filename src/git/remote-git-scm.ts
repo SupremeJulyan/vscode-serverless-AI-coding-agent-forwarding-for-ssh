@@ -306,7 +306,7 @@ export class RemoteGitScm implements vscode.Disposable {
       });
     });
     this.subscriptions.push(
-      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.refresh()),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => void this.refresh(false, false)),
       vscode.workspace.onDidSaveTextDocument(document => {
         if (document.uri.scheme === 'safs') this.scheduleRefresh(200);
       }),
@@ -314,7 +314,7 @@ export class RemoteGitScm implements vscode.Disposable {
         if (state.focused) this.scheduleRefresh(0);
       })
     );
-    void this.refresh().finally(() => this.scheduleRefresh());
+    void this.refresh();
   }
 
   private scheduleRefresh(delay = 2000): void {
@@ -322,8 +322,7 @@ export class RemoteGitScm implements vscode.Disposable {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined;
-      const refresh = vscode.window.state.focused ? this.refresh() : Promise.resolve();
-      void refresh.finally(() => this.scheduleRefresh());
+      if (vscode.window.state.focused) void this.refresh(false, false);
     }, delay);
   }
 
@@ -360,7 +359,7 @@ export class RemoteGitScm implements vscode.Disposable {
     return next;
   }
 
-  async refresh(interactive = false): Promise<void> {
+  async refresh(interactive = false, discover = true): Promise<void> {
     if (this.discovering || this.disposed) return;
     this.discovering = true;
     const controller = new AbortController();
@@ -372,7 +371,7 @@ export class RemoteGitScm implements vscode.Disposable {
       const folders: Array<{ uri: vscode.Uri; name: string }> = [];
       for (const folder of workspaceFolders) {
         const key = folder.uri.toString();
-        if (this.discoverRepositories && (interactive || !this.discoveredFolders.has(key))) {
+        if (discover && this.discoverRepositories && (interactive || !this.discoveredFolders.has(key))) {
           try { this.discoveredFolders.set(key, await this.discoverRepositories(folder.uri, controller.signal)); }
           catch (error) {
             controller.signal.throwIfAborted();
@@ -380,7 +379,8 @@ export class RemoteGitScm implements vscode.Disposable {
             if (interactive) void vscode.window.showErrorMessage(`SAFS Git: ${String(error)}`);
           }
         }
-        folders.push(...(this.discoveredFolders.get(key) ?? [folder]));
+        const candidates = this.discoveredFolders.get(key) ?? [folder];
+        folders.push(...candidates.filter(candidate => discover || this.repositories.has(candidate.uri.toString())));
       }
       const active = new Set(folders.map(folder => folder.uri.toString()));
       let changed = false;

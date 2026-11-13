@@ -187,7 +187,9 @@ test('SAFS sidebar isolates repositories, compares index vs worktree and dispose
     await waitForStatus('saved.txt');
     assert.equal(executions.slice(backgroundStart).filter(command => command.command.includes("'status'")).length, 1);
     status = '?? external.txt\0';
-    await waitForStatus('external.txt');
+    const idleStart = executions.length;
+    await new Promise(resolve => setTimeout(resolve, 2100));
+    assert.equal(executions.length, idleStart, 'idle must not trigger periodic refresh');
     vscode.window.state.focused = false;
     status = ' M focused.txt\0';
     const pausedStart = executions.length;
@@ -229,6 +231,9 @@ test('sidebar discovery caches scans and refreshes nested repositories without n
     await controller.refresh();
     assert.equal(scans, 1);
     names = ['two', 'three'];
+    await controller.refresh(false, false);
+    assert.equal(scans, 1, 'event refresh must not discover repositories');
+    assert.deepEqual(controller.repositoriesInUse().map(repo => repo.name), ['one', 'two']);
     await commands.get('safs.git.refresh')!();
     assert.equal(scans, 2);
     assert.deepEqual(controller.repositoriesInUse().map(repo => repo.name), names);

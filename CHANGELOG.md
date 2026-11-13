@@ -2,6 +2,9 @@
 
 ## 2.1.6
 
+- 移除 Git 后台定时扫描；启动和手动刷新发现仓库，保存、聚焦及工作区变化仅刷新已发现的仓库。
+- 修复子进程提前关闭 stdin 时的 EPIPE 和 Windows EOF 错误，保留原命令退出诊断。
+
 - Agent CWD 占位目录改为 `~/.safs/remote_workspace/`。
 - 新增升级补丁，迁移 ≤2.1.5 的 Codex、Claude 会话路径绑定，并备份会话文件。
 
