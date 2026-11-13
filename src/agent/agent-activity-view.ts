@@ -285,6 +285,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
     let statusTimer;
     const seenStatus = new Map();
     const labels = {
+      list_remote_workspaces: '查询远程工作区', safs_cli_batch: '批量操作',
       current_remote_file: '查看当前文件', remote_list: '列出目录', remote_read: '读取文件',
       remote_read_many: '批量读取', remote_output: '续读命令输出', remote_search: '搜索远程代码',
       remote_edit: '编辑文件', remote_write: '写入文件', remote_create: '创建文件/目录', remote_delete: '删除路径',
