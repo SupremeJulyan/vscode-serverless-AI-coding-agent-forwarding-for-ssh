@@ -8,16 +8,15 @@ import {
   safeAgentCwdName, writeLastRemoteDirectory
 } from '../src/agent/agent-cwd';
 
-test('creates a real cwd below extension storage', async () => {
+test('creates a real cwd below the SAFS remote workspace directory', async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'agent-cwd-'));
   const storageRoot = path.join(temporary, 'storage');
-  const result = await ensureAgentCwdPlaceholder('/home/share/project', storageRoot, 'project');
-  assert.equal(result.created, true);
-  assert.equal(result.localPath.startsWith(path.join(storageRoot, 'agent-cwd')), true);
-  assert.equal(path.basename(result.localPath), 'project');
+  const result = await ensureAgentCwdPlaceholder('/home/share/project', storageRoot, 'project-' + path.basename(temporary));
+  assert.equal(result.localPath.startsWith(path.join(os.homedir(), '.safs', 'remote_workspace')), true);
+  assert.equal(path.basename(result.localPath), 'project-' + path.basename(temporary));
   assert.equal((await lstat(result.localPath)).isDirectory(), true);
 
-  const repeated = await ensureAgentCwdPlaceholder('/home/share/project', storageRoot, 'project');
+  const repeated = await ensureAgentCwdPlaceholder('/home/share/project', storageRoot, 'project-' + path.basename(temporary));
   assert.equal(repeated.created, false);
   assert.equal(repeated.localPath, result.localPath);
 });
@@ -53,7 +52,7 @@ test('creates a real cwd for a switched remote subdirectory', async () => {
 
 test('caches the last remote directory beside the empty cwd placeholder', async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'agent-cwd-cache-'));
-  const root = await ensureAgentCwdPlaceholder('/home/share/alice', temporary, 'dev');
+  const root = await ensureAgentCwdPlaceholder('/home/share/alice', temporary, 'dev-' + path.basename(temporary));
   assert.equal(await readLastRemoteDirectory(root.localPath), undefined);
 
   await writeLastRemoteDirectory(
@@ -96,7 +95,7 @@ test('new placeholders use readable endpoint and remote directory names', async 
   } finally { await rm(storage, { recursive: true, force: true }); }
 });
 
-test('existing legacy placeholders are reused without creating readable duplicates', async () => {
+test('existing legacy placeholders are no longer reused', async () => {
   const { legacyAgentCwdPath, agentCwdDirectoryName } = await import('../src/agent/agent-cwd');
   const storage = await mkdtemp(path.join(os.tmpdir(), 'safs-reuse-'));
   try {
@@ -105,10 +104,10 @@ test('existing legacy placeholders are reused without creating readable duplicat
     const oldProject = path.join(oldRoot, ...remote.split('/').filter(Boolean));
     await mkdir(oldProject, { recursive: true });
     const root = await ensureAgentCwdPlaceholder('/', storage, 'alias', '192.0.2.1', 'user');
-    assert.equal(root.localPath, oldRoot);
-    assert.equal(root.created, false);
-    assert.equal(await ensureAgentCwdSubdirectory(root.localPath, '/', remote), oldProject);
+    assert.notEqual(root.localPath, oldRoot);
+
+    assert.notEqual(await ensureAgentCwdSubdirectory(root.localPath, '/', remote), oldProject);
     await assert.rejects(lstat(path.join(storage, 'agent-cwd', agentCwdDirectoryName('192.0.2.1', 22, 'user', remote))), { code: 'ENOENT' });
-    assert.equal((await ensureAgentCwdPlaceholder(remote, storage, 'otherAlias', '192.0.2.1', 'user')).localPath, oldProject);
+    assert.equal((await ensureAgentCwdPlaceholder(remote, storage, 'otherAlias', '192.0.2.1', 'user')).localPath, await ensureAgentCwdSubdirectory(root.localPath, '/', remote));
   } finally { await rm(storage, { recursive: true, force: true }); }
 });
