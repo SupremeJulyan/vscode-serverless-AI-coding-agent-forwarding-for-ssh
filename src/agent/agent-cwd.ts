@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 
@@ -61,7 +62,7 @@ export function agentCwdMappings(localRoot: string): PlaceholderMapping[] {
 }
 
 async function readablePlaceholder(remoteRoot: string, identity: PlaceholderIdentity): Promise<AgentCwdPlaceholder> {
-  const parent = path.join(identity.storageRoot, 'agent-cwd');
+  const parent = path.join(homedir(), '.safs', 'remote_workspace');
   const key = identityKey(identity);
   if (!mappings.has(key)) {
     mappings.set(key, []);
@@ -85,12 +86,8 @@ async function readablePlaceholder(remoteRoot: string, identity: PlaceholderIden
   }
   const registered = mappings.get(key)!.find(item => item.remoteRoot === remoteRoot);
   const namedPath = path.join(parent, agentCwdDirectoryName(identity.host, identity.port, identity.user, remoteRoot));
-  const oldRoot = legacyAgentCwdPath('/', identity.storageRoot, identity.host, identity.user);
-  const candidates = [registered?.localPath, namedPath,
-    ...(identity.port === 22 ? [
-      path.join(oldRoot, ...remoteRoot.split('/').filter(Boolean)),
-      legacyAgentCwdPath(remoteRoot, identity.storageRoot, identity.host, identity.user)
-    ] : [])].filter((value): value is string => Boolean(value));
+  const candidates = [registered?.localPath, namedPath]
+    .filter((value): value is string => Boolean(value));
   let localPath = namedPath;
   for (const candidate of candidates) {
     if (mappings.get(key)!.some(item => item.localPath === candidate && item.remoteRoot !== remoteRoot)) continue;
@@ -136,7 +133,7 @@ export async function ensureAgentCwdPlaceholder(
   if (hostIp && user !== undefined) {
     return readablePlaceholder(path.posix.normalize(remoteRoot), { host: hostIp, port, user, storageRoot });
   }
-  const localPath = path.join(storageRoot, 'agent-cwd', createHash('sha256')
+  const localPath = path.join(homedir(), '.safs', 'remote_workspace', createHash('sha256')
     .update(mountName).update('\0').update(path.posix.normalize(remoteRoot))
     .digest('hex').slice(0, 16), safeAgentCwdName(mountName));
   const created = !await exists(localPath);

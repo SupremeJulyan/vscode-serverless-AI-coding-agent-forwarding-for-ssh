@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2.1.6
+
+- Agent CWD 占位目录改为 `~/.safs/remote_workspace/`。
+- 新增升级补丁，迁移 ≤2.1.5 的 Codex、Claude 会话路径绑定，并备份会话文件。
 
 - 移植 Tabby 的原生 russh SSH/SFTP 会话架构，统一终端、命令、SFTP 的认证与连接复用；删除 ssh2、系统 SSH/SFTP 和 SCP 回退实现。
 - 新增 keyboard-interactive、加密私钥口令存储、原生跳板与代理配置，以及按 Enter 填入保存的 sudo 密码。

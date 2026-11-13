@@ -1,3 +1,4 @@
+import { migrateSessionCwds, needsSessionMigration } from './patches/session-cwd';
 import { Preparation } from './shared/preparation';
 import { adoptedRemoteSaveResult } from './remote/save-result';
 import { saveConfirmation } from './remote/save-confirmation';
@@ -6124,6 +6125,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerConfigDiagnostics(context, configPath);
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
+  const previousVersion = context.globalState.get<string>('patches.previousVersion');
+  if (!context.globalState.get<boolean>('patches.sessionCwd215') && needsSessionMigration(previousVersion)) {
+    try {
+      await migrateSessionCwds(context.globalStorageUri.fsPath);
+      await context.globalState.update('patches.sessionCwd215', true);
+    } catch (error) {
+      bridgeOutput.error(`会话路径迁移失败，下次启动重试：${error}`);
+      await context.globalState.update('patches.previousVersion', previousVersion);
+    }
+  }
+  if (context.globalState.get<boolean>('patches.sessionCwd215') || !needsSessionMigration(previousVersion)) {
+    await context.globalState.update('patches.previousVersion', String(context.extension.packageJSON.version));
+  }
   // 旧配置名 → 当前配置名：改名后已保存的 safs:// 窗口/标签页仍然能打开。
   for (const [from, to] of Object.entries(
     context.globalState.get<Record<string, string>>(mountRenamesKey, {})
