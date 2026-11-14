@@ -1,10 +1,37 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, lstatSync, unlinkSync } from 'node:fs';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 
 const maxRecordAgeMs = 35_000;
+const cleanupGraceMs = 5 * 60_000;
+
+/** Clean only this runtime's directory; discovery may also read another OS's files. */
+export function cleanupAgentWorkspaceRecords(directory = agentDiscoveryDirectory(), now = Date.now()): void {
+  let names: string[];
+  try { names = readdirSync(directory); } catch { return; }
+  for (const name of names) {
+    if (!/^[\w-]+\.json(?:\.tmp)?$/.test(name)) continue;
+    const file = path.join(directory, name);
+    try {
+      const before = lstatSync(file);
+      if (!before.isFile() || now - before.mtimeMs <= cleanupGraceMs) continue;
+      let record: Partial<AgentWorkspaceRecord> | undefined;
+      try { record = JSON.parse(readFileSync(file, 'utf8')); } catch { /* Abandoned partial write. */ }
+      if (record?.processPlatform && record.processPlatform !== process.platform) continue;
+      if (record && Number.isInteger(record.processId) && record.processId! > 0) {
+        try { process.kill(record.processId!, 0); continue; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue; }
+      }
+      const updated = Date.parse(record?.updatedAt ?? '');
+      if (Number.isFinite(updated) && now - updated <= cleanupGraceMs) continue;
+      const current = lstatSync(file);
+      if (current.ino !== before.ino || current.mtimeMs !== before.mtimeMs || current.size !== before.size) continue;
+      unlinkSync(file);
+    } catch { /* A publisher or another cleaner may have replaced/removed the file. */ }
+  }
+}
 
 export interface AgentWorkspaceRecord {
   version: 2 | 3 | 4;
@@ -30,7 +57,7 @@ export interface AgentWorkspaceRecord {
 }
 
 export function agentDiscoveryDirectory(homeDirectory = os.homedir()): string {
-  return path.join(homeDirectory, '.safs', 'agent-workspaces');
+  return path.join(homeDirectory, '.safs', 'agent_discovery');
 }
 
 function windowsPathToWsl(value: string): string {
@@ -100,6 +127,7 @@ export function readAgentWorkspaceRecord(
 export function discoverAgentWorkspaces(
   directories = agentDiscoveryDirectories(), now = Date.now()
 ): DiscoveredAgentWorkspace[] {
+  cleanupAgentWorkspaceRecords();
   const records: DiscoveredAgentWorkspace[] = [];
   for (const directory of directories) {
     try {
