@@ -177,6 +177,7 @@ const cliVersionChecks = new Map<string, Promise<void>>();
 let cliSetupError: string | undefined;
 const cliPreparation = new Preparation<{ cliExecutable?: string }>();
 const cliAutoPrepareDisabledKey = 'safs.cliAutoPrepareDisabled';
+const cliNodeInstallSkippedKey = 'safs.cliNodeInstallSkipped';
 let agentIpcRouterHeartbeat: NodeJS.Timeout | undefined;
 let mcpServer: AgentMcpServer | undefined;
 let mcpRouter: AgentHttpRouter | undefined;
@@ -2897,7 +2898,13 @@ async function openTerminal(
     ?? await selectMount('选择要打开终端的远程连接');
   if (!mount) return undefined;
   if (!vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []).includes(mount.name)) {
-    await setAiForwardEnabled(mount, true);
+    try {
+      await setAiForwardEnabled(mount, true);
+    } catch (error) {
+      // The optional local CLI must not prevent opening an SSH shell.
+      if (!(error instanceof NodeRuntimeUnavailableError)) throw error;
+      bridgeOutput?.appendLine('[终端] 本地 Node.js 不可用，继续打开 SSH 终端，暂不启用 Agent 转发。');
+    }
   }
   const folder = await ensureFolder(mount);
   // Use the server-resolved root. Configured roots such as "." are relative
@@ -2970,7 +2977,10 @@ async function openTerminal(
         const entry = managedRemoteTerminals.get(terminal);
         if (entry) { entry.remoteCwd = reportedCwd; queueAgentCommandTerminalRefresh(terminal, reportedCwd); }
       },
-      remoteConnectionShortcutHint(platformAdapter.kind)
+      remoteConnectionShortcutHint(platformAdapter.kind) + (
+        cliEnabled() && context.globalState.get<boolean>(cliNodeInstallSkippedKey, false)
+          ? '；未安装 Node.js，CLI 模式下 Agent 转发能力受限' : ''
+      )
     );
     terminal = vscode.window.createTerminal({ name: terminalName, pty, isTransient: true });
     managedRemoteTerminals.set(terminal, { mount, remoteCwd, pty, startedAt: Date.now() });
@@ -5843,6 +5853,9 @@ function configureAgentInterface(
   context: vscode.ExtensionContext, force = false, interactive = true
 ): Promise<{ cliExecutable?: string }> {
   if (!cliEnabled()) return ensureAgentMcpRouter(context).then(() => ({}));
+  if (!force && context.globalState.get<boolean>(cliNodeInstallSkippedKey, false)) {
+    return Promise.reject(new NodeRuntimeUnavailableError());
+  }
   return cliPreparation.get(async () => {
     await context.globalState.update(cliAutoPrepareDisabledKey, false);
     return performAgentInterfacePreparation(context, interactive);
@@ -5893,7 +5906,7 @@ async function performAgentInterfacePreparation(
       { modal: true, detail: missingNode
         ? detail
         : `${detail}\n请检查本地 Node.js 环境与安装目录权限。` },
-      ...(missingNode ? ['安装 Node.js'] : [])
+      ...(missingNode ? ['安装 Node.js', '跳过'] : [])
     );
     if (action === '安装 Node.js') {
       await vscode.env.openExternal(vscode.Uri.parse('https://nodejs.org/zh-cn'));
@@ -5901,8 +5914,12 @@ async function performAgentInterfacePreparation(
         '安装后，请完全退出所有 VS Code 窗口再打开。'
       );
     }
+    if (missingNode && action !== '安装 Node.js') {
+      await context.globalState.update(cliNodeInstallSkippedKey, true);
+    }
     throw error;
   }
+  await context.globalState.update(cliNodeInstallSkippedKey, false);
   cliSetupError = undefined;
   bridgeOutput?.appendLine(`[Agent CLI] 已安装用户级 safs 命令；接口=${agentInterface()}。`);
   return { cliExecutable: executable };
