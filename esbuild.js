@@ -1,8 +1,20 @@
 const esbuild = require('esbuild');
 const fs = require('node:fs');
 const path = require('node:path');
+const { patchSftpSource } = require('./build/sftp-banner-patch');
 
 const production = process.argv.includes('--production');
+
+// Preserve SFTP on gateways that prepend login notices to subsystem data.
+const sftpBannerPatch = {
+  name: 'safs-sftp-banner-tolerance',
+  setup(build) {
+    build.onLoad({ filter: /[\\/]node_modules[\\/]ssh2[\\/]lib[\\/]protocol[\\/]SFTP\.js$/ }, async (args) => {
+      const contents = await fs.promises.readFile(args.path, 'utf8');
+      return { contents: patchSftpSource(contents), loader: 'js' };
+    });
+  }
+};
 
 // Resources are packaged directly; also handle existing Windows checkouts
 // whose scripts were materialized before the LF Git attribute was added.
@@ -54,6 +66,7 @@ esbuild.build({
   // unresolved so its guarded require falls back to portable Node.js crypto.
   external: ['vscode', 'cpu-features', '*.node'],
   logLevel: 'info',
+  plugins: [sftpBannerPatch],
 }).catch(() => process.exit(1));
 
 esbuild.build({
