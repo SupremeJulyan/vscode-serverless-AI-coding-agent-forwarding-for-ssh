@@ -129,11 +129,15 @@ async function invoke(configPath: string, request: Awaited<ReturnType<typeof par
     if (!envelope || !('result' in envelope)) throw new Error('SAFS router returned no result');
     return envelope.result;
   } catch (error) {
-    const unavailable = ['ENOENT', 'ECONNREFUSED'].includes((error as { code?: string })?.code ?? '');
-    const hint = unavailable
+    const code = (error as { code?: string })?.code;
+    const permissionDenied = ['EACCES', 'EPERM'].includes(code ?? '');
+    const unavailable = ['ENOENT', 'ECONNREFUSED'].includes(code ?? '');
+    const hint = permissionDenied
+      ? '\n提示：Agent 无权访问本地 SAFS IPC（Unix socket / Windows 命名管道）。若 Agent 正在沙箱或受限权限模式下运行，请将 Agent 权限设为“完全访问”（Full Access）后重试；仍失败时，请确认 Agent 与 VS Code 使用同一用户运行，并检查 IPC 路径权限。无需修改远程 SSH 权限。'
+      : unavailable
       ? '\n提示：请先在 VS Code 的 SAFS 侧栏打开远程目录，等待 Agent 转发就绪后重试。若已打开，请检查“Agent 活动”中的转发状态；转发失败时点击刷新按钮重连。'
       : '';
-    throw new Error(`Local SAFS router request failed: ${redact(error instanceof Error ? error.message : String(error))}${hint}`);
+    throw new Error(`Local SAFS router request failed${code ? ` [${code}]` : ''}: ${redact(error instanceof Error ? error.message : String(error))}${hint}`);
   }
 }
 function exitCode(result: any): number {
