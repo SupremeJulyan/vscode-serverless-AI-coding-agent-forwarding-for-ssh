@@ -178,6 +178,7 @@ let cliSetupError: string | undefined;
 const cliPreparation = new Preparation<{ cliExecutable?: string }>();
 const cliAutoPrepareDisabledKey = 'safs.cliAutoPrepareDisabled';
 const cliNodeInstallSkippedKey = 'safs.cliNodeInstallSkipped';
+const cliFirstRunCheckedKey = 'safs.cliFirstRunChecked';
 let agentIpcRouterHeartbeat: NodeJS.Timeout | undefined;
 let mcpServer: AgentMcpServer | undefined;
 let mcpRouter: AgentHttpRouter | undefined;
@@ -5850,12 +5851,9 @@ async function installGlobalCliSkill(executable: string, target: NodeCliSkillTar
 }
 
 function configureAgentInterface(
-  context: vscode.ExtensionContext, force = false, interactive = true
+  context: vscode.ExtensionContext, force = false, interactive = false
 ): Promise<{ cliExecutable?: string }> {
   if (!cliEnabled()) return ensureAgentMcpRouter(context).then(() => ({}));
-  if (!force && context.globalState.get<boolean>(cliNodeInstallSkippedKey, false)) {
-    return Promise.reject(new NodeRuntimeUnavailableError());
-  }
   return cliPreparation.get(async () => {
     await context.globalState.update(cliAutoPrepareDisabledKey, false);
     return performAgentInterfacePreparation(context, interactive);
@@ -5899,6 +5897,10 @@ async function performAgentInterfacePreparation(
   } catch (error) {
     const detail = redactSensitiveText(error instanceof Error ? error.message : String(error));
     cliSetupError = detail;
+    if (error instanceof NodeRuntimeUnavailableError) {
+      await context.globalState.update(cliNodeInstallSkippedKey, true);
+      bridgeOutput?.appendLine(`[Agent CLI] 未检测到 Node.js，跳过 CLI 转发准备：${detail}`);
+    }
     if (!interactive) throw error;
     const missingNode = error instanceof NodeRuntimeUnavailableError;
     const action = await vscode.window.showErrorMessage(
@@ -6021,6 +6023,10 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
   );
   aiForwardUpdate = operation;
   try { await operation; }
+  catch (error) {
+    if (!(error instanceof NodeRuntimeUnavailableError)) throw error;
+    bridgeOutput?.appendLine(`[Agent 转发] ${mount.name} 缺少 Node.js，静默跳过 CLI 转发，保留远程连接。`);
+  }
   finally { await refreshAgentCommandTerminalState(); }
 }
 
@@ -6266,7 +6272,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   );
   if (cliEnabled() && !context.globalState.get<boolean>(cliAutoPrepareDisabledKey, false)) {
-    void configureAgentInterface(context, false, false).catch(error => {
+    const firstRun = !context.globalState.get<boolean>(cliFirstRunCheckedKey, false)
+      && !context.globalState.get<boolean>(cliNodeInstallSkippedKey, false);
+    await context.globalState.update(cliFirstRunCheckedKey, true);
+    void configureAgentInterface(context, false, firstRun).catch(error => {
       logAsyncFailure('后台准备 SAFS CLI 失败，打开远程工作区时可重试', error);
     });
   }
@@ -6777,7 +6786,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const mount = config.mounts.find((candidate) => candidate.name === current.mountName);
       if (mount) {
         agentTrace('Activate', `远程工作区 ${mount.name} 自动启用 Agent 转发`);
-        await setAiForwardEnabled(mount, true);
+        try {
+          await setAiForwardEnabled(mount, true);
+        } catch (error) {
+          if (!(error instanceof NodeRuntimeUnavailableError)) throw error;
+          bridgeOutput?.appendLine('[Agent 转发] 本地 Node.js 不可用，保留远程连接，暂不启用 CLI 转发。');
+        }
         enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
       }
     }

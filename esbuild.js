@@ -4,6 +4,21 @@ const path = require('node:path');
 
 const production = process.argv.includes('--production');
 
+// Resources are packaged directly; also handle existing Windows checkouts
+// whose scripts were materialized before the LF Git attribute was added.
+function normalizeShellScripts(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const filename = path.join(directory, entry.name);
+    if (entry.isDirectory()) normalizeShellScripts(filename);
+    else if (entry.name.endsWith('.sh')) {
+      const source = fs.readFileSync(filename, 'utf8');
+      const normalized = source.replace(/\r\n/g, '\n');
+      if (source !== normalized) fs.writeFileSync(filename, normalized);
+    }
+  }
+}
+normalizeShellScripts(path.join(__dirname, 'resources'));
+
 // Remove native artifacts left by builds made with the previous SSH backend.
 fs.rmSync(path.join(__dirname, 'dist', 'native'), { recursive: true, force: true });
 

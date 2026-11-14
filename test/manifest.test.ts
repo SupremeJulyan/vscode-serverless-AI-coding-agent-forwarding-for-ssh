@@ -395,7 +395,9 @@ test('prepares the chosen forwarding interface before enabling and respects expl
   const prepare = enableSetup.indexOf('await configureAgentInterface(vscodeContext)');
   const persist = enableSetup.indexOf('await vscodeContext.globalState.update(aiForwardMountsKey');
   assert.ok(prepare >= 0 && persist > prepare);
-  assert.ok(source.includes('void configureAgentInterface(context, false, false)'));
+  assert.ok(source.includes('void configureAgentInterface(context, false, firstRun)'));
+  assert.ok(source.includes('!context.globalState.get<boolean>(cliFirstRunCheckedKey, false)'));
+  assert.ok(source.includes('await context.globalState.update(cliFirstRunCheckedKey, true)'));
   assert.ok(source.includes('!context.globalState.get<boolean>(cliAutoPrepareDisabledKey, false)'));
   assert.ok(source.includes('await context.globalState.update(cliAutoPrepareDisabledKey, true)'));
   assert.ok(source.includes('await uninstallGlobalCli(context)'));
