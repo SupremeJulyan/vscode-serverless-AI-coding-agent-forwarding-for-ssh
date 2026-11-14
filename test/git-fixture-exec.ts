@@ -24,7 +24,13 @@ export function execGitFixture(command: string, args: string[], options: { cwd?:
   return captured(process.platform === 'win32' && command === '/bin/sh' ? gitBash() : command,
     args, {
       ...options, encoding: 'utf8',
-      // Git objects and working copies in these fixtures use LF on every host.
-      env: { ...process.env, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }
+      // Keep fixture working copies consistent and prevent fetch/push from
+      // leaving detached Git maintenance writing into directories at teardown.
+      env: {
+        ...process.env, GIT_CONFIG_COUNT: '3',
+        GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false',
+        GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0',
+        GIT_CONFIG_KEY_2: 'maintenance.auto', GIT_CONFIG_VALUE_2: 'false'
+      }
     });
 }
