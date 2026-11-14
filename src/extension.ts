@@ -70,7 +70,7 @@ import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewI
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent/agent-discovery';
 import {
   ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory, legacyAgentCwdPath,
-  readLastRemoteDirectory, writeLastRemoteDirectory
+  readLastRemoteDirectory, writeLastRemoteDirectory, agentCwdDirectoryName
 } from './agent/agent-cwd';
 import { connectSftp } from './ssh2/sftp-client';
 import { SftpSession } from './ssh2/session';
@@ -91,7 +91,7 @@ import {
 } from './ssh2/filesystem-provider';
 import {
   isRemotePathInsideRoot, mountAuthorityAlias, parseRemoteUri, remoteFileSystemScheme, remoteUri,
-  RemoteUriLocation, setMountAliasResolver
+  RemoteUriLocation, setMountAliasResolver, sameWorkspaceUriLocation
 } from './ssh2/uri';
 import { setWslBundlePath } from './platform/wsl-bridge';
 import { setRemoteShellIntegrationBundlePath } from './terminal/remote-shell-integration';
@@ -559,8 +559,12 @@ async function removeLegacyCliInstructions(localRoot: string): Promise<void> {
 }
 
 async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
+  const config = await readConfig();
+  const resolved = resolveMount(config, mount);
+  const host = resolved.hostConfig;
+  const endpointKey = JSON.stringify([host.ip.toLowerCase(), host.port ?? 22, host.user, host.private_key_path ?? '']);
   const existing = registry.get(mount.name);
-  if (existing) {
+  if (existing && existing.endpointKey === endpointKey) {
     bridgeOutput?.trace(`[SFTP] 复用挂载 ${mount.name}，remoteRoot=${existing.remoteRoot}`);
     await pool.get(existing.hostName);
     await restoreRemoteWorkspaceDisplayRoot(existing);
@@ -568,9 +572,12 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
     await removeLegacyCliInstructions(existing.workspaceRoot);
     return existing;
   }
+  if (existing) {
+    await pool.invalidate(existing.hostName);
+    registry.delete(mount.name);
+    bridgeOutput?.info(`[工作区] 连接参数已变化，重建挂载 ${mount.name}`);
+  }
   agentTrace('SFTP', `开始连接挂载 ${mount.name}，host=${mount.host}`);
-  const config = await readConfig();
-  const resolved = resolveMount(config, mount);
   requireConfiguredHostLogin(resolved.hostConfig);
   const session = await pool.get(resolved.hostConfig.name);
   refreshSafsEntryLabel();
@@ -593,6 +600,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   const oldRoot = legacyPath('/');
   const oldHome = legacyRoot ? legacyPath(legacyRoot) : undefined;
   const folder: RemoteFolder = {
+    endpointKey,
     mountName: mount.name, hostName: mount.host, remoteRoot, workspaceRoot, defaultRemotePath,
     legacyMappings: (resolved.hostConfig.port ?? 22) === 22 ? [
       { workspaceRoot: oldRoot, remoteRoot: '/' },
@@ -657,6 +665,29 @@ async function restoreRemoteWorkspaceDisplayRoot(folder: RemoteFolder): Promise<
     catch { return false; }
   });
   const host = lastReadConfig?.hosts.find(item => item.name === folder.hostName);
+  // A restored window can still reference a placeholder from the previous
+  // port. Recover its remote directory from verified local metadata before
+  // constructing the new endpoint's workspace URI.
+  if (candidate && host) {
+    const placeholderParent = path.join(os.homedir(), '.safs', 'remote_workspace');
+    const localPath = vscode.Uri.from({ scheme: 'file', path: candidate.uri.path }).fsPath;
+    const relative = path.relative(placeholderParent, localPath);
+    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+      const name = relative.split(path.sep)[0];
+      const localRoot = path.join(placeholderParent, name);
+      try {
+        const record = JSON.parse(await readFile(path.join(localRoot, '.safs-placeholder.json'), 'utf8'));
+        if (record.host === host.ip && record.user === host.user
+          && Number.isInteger(record.port) && record.port > 0 && record.port <= 65535
+          && typeof record.remoteRoot === 'string' && path.posix.isAbsolute(record.remoteRoot)
+          && name === agentCwdDirectoryName(record.host, record.port, record.user, record.remoteRoot)) {
+          const workspaceRoot = vscode.Uri.file(localRoot).path;
+          folder.legacyMappings = [...(folder.legacyMappings ?? []).filter(item => item.workspaceRoot !== workspaceRoot),
+            { workspaceRoot, remoteRoot: record.remoteRoot }];
+        }
+      } catch { /* Missing or invalid metadata must not become a remote path mapping. */ }
+    }
+  }
   const displayName = host
     ? remoteWorkspaceDisplayName(host, lastReadConfig?.host_aliases)
     : folder.mountName.replace(/[\\/]/g, '_');
@@ -4589,7 +4620,9 @@ async function refreshRemoteWorkspaceNames(): Promise<void> {
     const remotePath = remotePathForUri(remoteFolder, location.remotePath);
     setRemoteWorkspaceDisplayRoot(remoteFolder, remotePath);
     const desired = vscode.Uri.parse(folderUri(remoteFolder, remotePath));
-    if (desired.toString() === folder.uri.toString()) continue;
+    // VS Code re-escapes custom URI queries on window restore. Query spelling
+    // changes alone must never trigger openFolder() and another activation.
+    if (sameWorkspaceUriLocation(desired, folder.uri)) continue;
     bridgeOutput?.info(`[工作区] 更新远程工作区显示名：${folder.name} → ${desired.authority}`);
     // Reopen as a folder URI. updateWorkspaceFolders() turns this single-folder
     // workspace into an "Untitled (Workspace)" multi-root container.

@@ -2,6 +2,16 @@ import * as path from 'node:path';
 
 export const remoteFileSystemScheme = 'safs';
 
+/** Query escaping is not workspace identity; VS Code rewrites it on restore. */
+export function sameWorkspaceUriLocation(
+  left: { authority: string; path: string }, right: { authority: string; path: string }
+): boolean {
+  const comparablePath = (value: string) => /^\/[A-Za-z]:\//.test(value)
+    ? value.toLowerCase() : value;
+  return left.authority.toLowerCase() === right.authority.toLowerCase()
+    && comparablePath(left.path) === comparablePath(right.path);
+}
+
 export interface RemoteUriLocation {
   mountName: string;
   remotePath: string;

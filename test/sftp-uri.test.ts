@@ -2,9 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   assertSafeRemoteEntryName, isRemotePathInsideRoot, legacyMountAuthorityAlias, mountAuthorityAlias,
-  normalizeRemotePath, parseRemoteUri, remoteUri, resolvedRemoteRoot, setMountAliasResolver
+  normalizeRemotePath, parseRemoteUri, remoteUri, resolvedRemoteRoot, setMountAliasResolver, sameWorkspaceUriLocation
 } from '../src/ssh2/uri';
 import { mountAliasCandidates } from '../src/config/mount-aliases';
+
+test('workspace restore ignores query re-escaping but detects endpoint placeholder changes', () => {
+  const desired = { authority: 'test-root', path: '/C:/Users/Juyan/.safs/remote_workspace/root@127.0.0.1@2222root', query: 'mount=test(root)&hostLabel=1' };
+  const restored = { ...desired, path: desired.path.replace('/C:', '/c:'), query: 'mount%3Dtest(root)%26hostLabel%3D1' };
+  assert.equal(sameWorkspaceUriLocation(desired, restored), true);
+  assert.equal(sameWorkspaceUriLocation(desired, { ...restored, path: restored.path.replace('@2222root', '@2223root') }), false);
+  assert.equal(sameWorkspaceUriLocation(desired, { ...restored, authority: 'other-root' }), false);
+  assert.equal(sameWorkspaceUriLocation({ authority: 'dev', path: '/Home/user' }, { authority: 'dev', path: '/home/user' }), false);
+});
 
 test('round-trips remote folder names and unusual POSIX paths', () => {
   const uri = remoteUri("项目 A/O'Brien", "/srv/项目 A/O'Brien/[草稿] #1.ts");
