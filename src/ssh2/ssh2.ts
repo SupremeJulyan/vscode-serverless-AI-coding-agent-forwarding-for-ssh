@@ -215,6 +215,8 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   /** 待 shell 通道就绪后补发的输入（live-sync 的 cd 可能早于连接完成）。 */
   private pendingInput = '';
   private shellOpenTimer?: NodeJS.Timeout;
+  private shellOpenAttempts = 0;
+  private shellRetryTimer?: NodeJS.Timeout;
   private forwardedCommand?: {
     capture: TerminalCommandOutputCapture;
     resolve(result: Ssh2CommandResult): void;
@@ -242,9 +244,9 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
     void this.connect();
   }
 
-  private async connect(): Promise<void> {
+  private async connect(independent = false): Promise<void> {
     try {
-      const lease = await acquireSsh2Connection(this.host, this.password, this.log);
+      const lease = await acquireSsh2Connection(this.host, this.password ?? this.host.password, this.log, independent);
       if (this.closed || this.closeRequested) {
         lease.release();
         return;
@@ -253,8 +255,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
       this.client = lease.client;
       this.clientErrorListener = (error) => this.fail(error);
       this.client.once('error', this.clientErrorListener);
-      this.password = undefined;
-      void this.openRemoteShell();
+      void this.openRemoteShell().catch(error => this.fail(error instanceof Error ? error : new Error(String(error))));
     } catch (error) {
       this.fail(error instanceof Error ? error : new Error(String(error)));
     }
@@ -270,7 +271,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
         error instanceof Error ? error.message : String(error)
       }`);
     }
-    if (this.closed) return;
+    if (this.closed || this.closeRequested) return;
     const loginCommand = remoteIntegratedLoginCommand(
       shellPath, this.remoteCwd, scripts, this.integrationSessionId
     );
@@ -284,9 +285,32 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
       if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
       this.shellOpenTimer = undefined;
       if (error) {
+        if (!this.closed && !this.closeRequested && /Channel open failure/i.test(error.message)
+          && this.shellOpenAttempts < 2) {
+          const independent = ++this.shellOpenAttempts === 2;
+          this.log?.(`终端通道打开失败：${error.message}；${independent ? '改用独立 SSH 连接' : '等待后复用连接重试'}（${this.shellOpenAttempts}/2）`);
+          this.shellRetryTimer = setTimeout(() => {
+            this.shellRetryTimer = undefined;
+            if (this.closed || this.closeRequested) return;
+            if (independent) {
+              if (this.clientErrorListener) this.client.removeListener('error', this.clientErrorListener);
+              this.connectionLease?.release();
+              this.connectionLease = undefined;
+              void this.connect(true);
+            } else {
+              void this.openRemoteShell().catch(error => this.fail(error instanceof Error ? error : new Error(String(error))));
+            }
+          }, independent ? 1500 : 700);
+          return;
+        }
         this.fail(error);
         return;
       }
+      if (this.closed || this.closeRequested) {
+        stream.close();
+        return;
+      }
+      this.password = undefined;
       this.stream = stream;
       stream.on('data', (chunk: Buffer) => {
         this.handleOutput(this.outputDecoder.write(chunk));
@@ -454,6 +478,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
 
   close(): void {
     this.closeRequested = true;
+    if (this.shellRetryTimer) clearTimeout(this.shellRetryTimer);
     if (this.shellOpenTimer) clearTimeout(this.shellOpenTimer);
     this.shellOpenTimer = undefined;
     this.password = undefined;
@@ -476,6 +501,8 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
   private finish(code: number | undefined): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.shellRetryTimer) clearTimeout(this.shellRetryTimer);
+    this.shellRetryTimer = undefined;
     this.finishForwardedCommand(
       undefined, new Error('Remote terminal closed before the Agent command completed')
     );
