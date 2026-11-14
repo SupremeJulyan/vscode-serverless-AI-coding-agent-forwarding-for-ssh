@@ -9,6 +9,7 @@ bin/**
 native-cli/**
 release-assets/**
 *.vsix
+.test-results.log
 *.png
 *.gif
 **/*.gif

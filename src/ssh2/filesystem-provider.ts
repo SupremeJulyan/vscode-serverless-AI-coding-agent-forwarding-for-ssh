@@ -9,6 +9,8 @@ import {
 } from './uri';
 
 export interface RemoteFolder {
+  /** Endpoint used to create this mount; configuration edits must rebuild it. */
+  endpointKey?: string;
   mountName: string;
   hostName: string;
   remoteRoot: string;

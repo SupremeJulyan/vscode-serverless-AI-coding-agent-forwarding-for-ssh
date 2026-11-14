@@ -8,6 +8,21 @@ import {
 } from '../src/ssh2/filesystem-provider';
 import { ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory } from '../src/agent/agent-cwd';
 
+test('port changes migrate a restored placeholder through its remote directory', () => {
+  const oldRoot = '/c:/Users/juyan/.safs/remote_workspace/root@127.0.0.1@2223home';
+  const newRoot = '/c:/Users/juyan/.safs/remote_workspace/root@127.0.0.1@2222root';
+  const folder: RemoteFolder = {
+    mountName: 'test(root)', hostName: 'test(root)', remoteRoot: '/', workspaceRoot: newRoot,
+    legacyMappings: [{ workspaceRoot: oldRoot, remoteRoot: '/home/user' }]
+  };
+  const remote = remotePathForUri(folder, oldRoot + '/Project');
+  assert.equal(remote, '/home/user/Project');
+  // The display root is explicitly selected for the new endpoint.
+  folder.displayRoot = newRoot + '/home/user';
+  folder.displayRemoteRoot = '/home/user';
+  assert.equal(workspacePathForRemote(folder, remote), newRoot + '/home/user/Project');
+});
+
 test('Windows placeholder URI casing and leading slash preserve remote paths', () => {
   const folder: RemoteFolder = {
     mountName: 'dev', hostName: 'dev', remoteRoot: '/',
