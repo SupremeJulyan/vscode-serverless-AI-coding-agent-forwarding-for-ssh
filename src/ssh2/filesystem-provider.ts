@@ -24,14 +24,27 @@ export interface RemoteFolder {
   workspaceRoot: string;
 }
 
+function workspaceRelative(root: string, candidate: string): string {
+  const normalize = (value: string) => path.posix.normalize(value.replaceAll('\\', '/'))
+    .replace(/^\/(?=[A-Za-z]:\/)/, '');
+  const normalizedRoot = normalize(root);
+  const normalizedCandidate = normalize(candidate);
+  // VS Code lowercases drive letters in URI paths, while fs paths retain
+  // their original casing. Use Windows semantics only for drive paths.
+  return /^[A-Za-z]:\//.test(normalizedRoot) && /^[A-Za-z]:\//.test(normalizedCandidate)
+    ? path.win32.relative(normalizedRoot, normalizedCandidate).replaceAll('\\', '/')
+    : path.posix.relative(normalizedRoot, normalizedCandidate);
+}
+
 function isWorkspaceNamespacePath(root: string, candidate: string): boolean {
   const normalizedRoot = path.posix.normalize(root.replaceAll('\\', '/'));
   const normalizedCandidate = path.posix.normalize(candidate.replaceAll('\\', '/'));
   const isAbsolute = (value: string): boolean =>
     value.startsWith('/') || /^[A-Za-z]:\//.test(value);
   if (!isAbsolute(normalizedRoot) || !isAbsolute(normalizedCandidate)) return false;
-  const relative = path.posix.relative(normalizedRoot, normalizedCandidate);
-  return relative === '' || (!relative.startsWith('../') && relative !== '..');
+  const relative = workspaceRelative(normalizedRoot, normalizedCandidate);
+  return relative === '' || (!relative.startsWith('../') && relative !== '..'
+    && !path.posix.isAbsolute(relative) && !/^[A-Za-z]:/.test(relative));
 }
 
 function placeholderMappings(folder: RemoteFolder): Array<{ workspaceRoot: string; remoteRoot: string }> {
@@ -57,17 +70,17 @@ export function isWorkspaceUriPath(folder: RemoteFolder, uriPath: string): boole
 export function remotePathForUri(folder: RemoteFolder, uriPath: string): string {
   const mapped = additionalMappings(folder).sort((a, b) => b.workspaceRoot.length - a.workspaceRoot.length)
     .find(item => isWorkspaceNamespacePath(item.workspaceRoot, uriPath));
-  if (mapped) return path.posix.join(mapped.remoteRoot, path.posix.relative(mapped.workspaceRoot, uriPath));
+  if (mapped) return path.posix.join(mapped.remoteRoot, workspaceRelative(mapped.workspaceRoot, uriPath));
   if (folder.legacyMapping
     && folder.legacyMapping.workspaceRoot !== folder.workspaceRoot && isWorkspaceNamespacePath(
     folder.legacyMapping.workspaceRoot, uriPath
   )) {
     return path.posix.join(folder.legacyMapping.remoteRoot,
-      path.posix.relative(folder.legacyMapping.workspaceRoot, uriPath));
+      workspaceRelative(folder.legacyMapping.workspaceRoot, uriPath));
   }
   if (isWorkspaceNamespacePath(folder.workspaceRoot, uriPath)) {
     return path.posix.join(
-      folder.remoteRoot, path.posix.relative(folder.workspaceRoot, uriPath)
+      folder.remoteRoot, workspaceRelative(folder.workspaceRoot, uriPath)
     );
   }
   return uriPath;

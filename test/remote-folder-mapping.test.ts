@@ -8,6 +8,22 @@ import {
 } from '../src/ssh2/filesystem-provider';
 import { ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory } from '../src/agent/agent-cwd';
 
+test('Windows placeholder URI casing and leading slash preserve remote paths', () => {
+  const folder: RemoteFolder = {
+    mountName: 'dev', hostName: 'dev', remoteRoot: '/',
+    workspaceRoot: '/C:/Users/Juyan/.safs/remote_workspace/root',
+    legacyMappings: [{ workspaceRoot: '/C:/Users/Juyan/.safs/remote_workspace/home', remoteRoot: '/home/user' }]
+  };
+  for (const prefix of ['/c:/users/juyan', 'C:/Users/Juyan', 'c:\\Users\\juyan']) {
+    const uri = `${prefix}/.safs/remote_workspace/home/Project/File.ts`;
+    assert.equal(isWorkspaceUriPath(folder, uri), true);
+    assert.equal(remotePathForUri(folder, uri), '/home/user/Project/File.ts');
+  }
+  assert.equal(isWorkspaceUriPath(folder, '/D:/Users/Juyan/.safs/remote_workspace/root/file'), false);
+  assert.equal(isWorkspaceUriPath(folder, '/c:/Users/Juyan/.safs/remote_workspace/root-other/file'), false);
+  assert.equal(remotePathForUri(folder, '/Home/User/File.ts'), '/Home/User/File.ts');
+});
+
 test('root mount maps home and outside-home directories without colliding with restored URIs', async () => {
   const storage = await mkdtemp(path.join(os.tmpdir(), 'safs-root-mapping-'));
   try {

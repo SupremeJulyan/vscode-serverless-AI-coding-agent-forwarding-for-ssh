@@ -115,10 +115,11 @@ async function createConnection(
 export async function acquireSsh2Connection(
   host: HostConfig,
   password: string | undefined = host.password,
-  log?: (message: string) => void
+  log?: (message: string) => void,
+  independent = false
 ): Promise<Ssh2ConnectionLease> {
   const key = ssh2ConnectionKey(host, password);
-  let connection = connections.get(key);
+  let connection = independent ? await createConnection(host, password, log) : connections.get(key);
   if (!connection || connection.dead) {
     let pending = creating.get(key);
     if (!pending) {
