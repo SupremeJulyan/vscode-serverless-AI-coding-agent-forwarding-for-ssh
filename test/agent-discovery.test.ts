@@ -1,11 +1,47 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as path from 'node:path';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, utimes, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import {
-  AgentWorkspacePublisher, agentDiscoveryDirectory, discoverAgentWorkspaces
+  AgentWorkspacePublisher, agentDiscoveryDirectory, discoverAgentWorkspaces, cleanupAgentWorkspaceRecords
 } from '../src/agent/agent-discovery';
+
+test('discovery records use agent_discovery rather than remote workspace placeholders', () => {
+  assert.equal(agentDiscoveryDirectory('/example'), path.join('/example', '.safs', 'agent_discovery'));
+});
+
+test('cleanup removes abandoned records and partial writes, preserving live and fresh files', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-discovery-cleanup-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const now = Date.now();
+  const old = new Date(now - 600_000);
+  const record = (pid: number) => JSON.stringify({
+    processId: pid, processPlatform: process.platform, updatedAt: old.toISOString()
+  });
+  const files = {
+    'dead.json': record(2147483647),
+    'live.json': record(process.pid),
+    'partial.json.tmp': '{',
+    'fresh.json': record(2147483647),
+    'foreign.json': JSON.stringify({ processPlatform: process.platform === 'win32' ? 'linux' : 'win32' }),
+    'recent-heartbeat.json': JSON.stringify({ updatedAt: new Date(now).toISOString() }),
+    'unrelated.txt': 'keep'
+  };
+  for (const [name, content] of Object.entries(files)) {
+    const file = path.join(directory, name);
+    await writeFile(file, content);
+    if (name !== 'fresh.json') await utimes(file, old, old);
+  }
+  cleanupAgentWorkspaceRecords(directory, now);
+  for (const name of ['dead.json', 'partial.json.tmp']) {
+    await assert.rejects(readFile(path.join(directory, name)), { code: 'ENOENT' });
+  }
+  for (const name of ['live.json', 'fresh.json', 'foreign.json', 'recent-heartbeat.json', 'unrelated.txt']) {
+    assert.equal(await readFile(path.join(directory, name), 'utf8'), files[name as keyof typeof files]);
+  }
+  cleanupAgentWorkspaceRecords(directory, now);
+});
 
 test('publishes a private, versioned remote workspace record and removes it', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'safs-discovery-'));
