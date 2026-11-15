@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, pbkdf2, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createDecipheriv, createHmac, pbkdf2, timingSafeEqual } from 'node:crypto';
 
 const prefix = 'enc:v1:';
 const iterations = 600_000;
@@ -18,18 +18,6 @@ async function authenticationKey(password: string, salt: Buffer): Promise<Buffer
 
 export function isEncryptedPassword(value: string): boolean {
   return value.startsWith(prefix);
-}
-
-export async function encryptPassword(value: string, password: string): Promise<string> {
-  const salt = randomBytes(8);
-  const keyAndIv = await derive(Buffer.from(password), salt, 48);
-  const cipher = createCipheriv('aes-256-cbc', keyAndIv.subarray(0, 32), keyAndIv.subarray(32));
-  const ciphertext = Buffer.concat([
-    Buffer.from('Salted__'), salt, cipher.update(Buffer.from(value)), cipher.final()
-  ]);
-  const tag = createHmac('sha256', await authenticationKey(password, salt)).update(ciphertext).digest();
-  return prefix + Buffer.concat([ciphertext, tag]).toString('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 export async function decryptPassword(value: string, password: string): Promise<string> {

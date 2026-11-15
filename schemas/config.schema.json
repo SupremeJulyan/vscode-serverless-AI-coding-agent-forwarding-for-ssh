@@ -7,11 +7,6 @@
     "hosts"
   ],
   "properties": {
-    "encrypt_passwords": {
-      "type": "boolean",
-      "default": true,
-      "description": "使用 SAFS 主口令加密配置中的密码。"
-    },
     "hosts": {
       "type": "array",
       "description": "可连接的 SSH 主机。",
@@ -29,7 +24,7 @@
                 {
                   "user": "${3:alice}",
                   "port": 22,
-                  "private_key_path": "${4:~/.ssh/id_ed25519}"
+                  "auth": "password"
                 }
               ]
             }
@@ -175,9 +170,13 @@
           "type": "string",
           "description": "SSH 私钥路径，例如 ~/.ssh/id_ed25519。"
         },
-        "password": {
+        "auth": {
           "type": "string",
-          "description": "SSH 密码；使用私钥时无需填写，避免提交到版本库。"
+          "enum": [
+            "password",
+            "publickey"
+          ],
+          "description": "SSH 认证方式：密码或密钥；连接时再输入密码或选择私钥文件。"
         }
       },
       "additionalProperties": false
@@ -211,10 +210,6 @@
           "type": "string",
           "description": "SSH 私钥路径，例如 ~/.ssh/id_ed25519。"
         },
-        "password": {
-          "type": "string",
-          "description": "SSH 密码；使用私钥时无需填写，避免提交到版本库。"
-        },
         "connections": {
           "type": "array",
           "description": "旧挂载迁移保留的连接和远程根目录，通常无需手动填写。",
@@ -236,6 +231,14 @@
             },
             "additionalProperties": false
           }
+        },
+        "auth": {
+          "type": "string",
+          "enum": [
+            "password",
+            "publickey"
+          ],
+          "description": "SSH 认证方式：密码或密钥；连接时再输入密码或选择私钥文件。"
         }
       },
       "additionalProperties": false

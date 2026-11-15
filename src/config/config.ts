@@ -9,6 +9,7 @@ export interface HostConfig {
   user: string;
   port?: number;
   vpn?: boolean;
+  auth?: 'password' | 'publickey';
   private_key_path?: string;
   password?: string;
 }
@@ -21,7 +22,6 @@ export interface MountConfig {
 }
 
 export interface BridgeConfig {
-  encrypt_passwords?: boolean;
   hosts: HostConfig[];
   mounts: MountConfig[];
   host_aliases?: Record<string, string>;
@@ -73,7 +73,6 @@ export interface SshLogin {
 }
 
 const configTemplate = {
-  encrypt_passwords: true,
   hosts: []
 };
 
@@ -180,10 +179,14 @@ export function parseConfig(value: unknown): BridgeConfig {
       : `${baseName}#${generatedCount + 1}`;
     // The host can be created from the Remote Folders '+' action before its
     // login credentials are filled in from the hierarchical view.
+    if (host.auth !== undefined && host.auth !== 'password' && host.auth !== 'publickey') {
+      throw new Error(`hosts[${index}].auth 必须是 password 或 publickey`);
+    }
     const user = typeof host.user === 'string' ? host.user : '';
     return {
       name, ip, user,
       port: host.port, vpn: host.vpn,
+      ...(host.auth ? { auth: host.auth } : {}),
       private_key_path: host.private_key_path, password: host.password
     } as HostConfig;
   });
@@ -220,7 +223,6 @@ export function parseConfig(value: unknown): BridgeConfig {
   }
   const hostAliases = parseHostAliases(object.host_aliases);
   return {
-    encrypt_passwords: object.encrypt_passwords === false ? false : true,
     hosts,
     mounts,
     ...(hostAliases ? { host_aliases: hostAliases } : {})
@@ -242,11 +244,16 @@ function parseHostAliases(value: unknown): Record<string, string> | undefined {
   return Object.keys(aliases).length > 0 ? aliases : undefined;
 }
 
+let configReadPatch: ((file: string) => Promise<void>) | undefined;
+export function setConfigReadPatch(patch: typeof configReadPatch): void { configReadPatch = patch; }
+
 export async function loadConfig(configPath: string): Promise<BridgeConfig> {
+  await configReadPatch?.(expandHome(configPath));
   const content = await fs.readFile(expandHome(configPath), 'utf8');
   const raw = JSON.parse(content) as Record<string, unknown>;
   const config = parseConfig(raw);
-  if (Array.isArray(raw.hosts) && raw.hosts.some(host => !host || typeof host !== 'object' || !('accounts' in host))) {
+  if (!config.hosts.some(host => host.password)
+    && Array.isArray(raw.hosts) && raw.hosts.some(host => !host || typeof host !== 'object' || !('accounts' in host))) {
     const backup = `${expandHome(configPath)}.legacy.bak`;
     await fs.copyFile(expandHome(configPath), backup, 1).catch(error => {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
@@ -272,6 +279,9 @@ export async function ensureConfigFile(configPath: string): Promise<string> {
 }
 
 export async function saveConfig(configPath: string, config: BridgeConfig, preserveLegacyNames = false): Promise<void> {
+  if (config.hosts.some(host => host.password !== undefined)) {
+    throw new Error('配置包含未迁移的旧版 SSH 密码，请先完成迁移；原配置保持不变');
+  }
   const resolvedPath = expandHome(configPath);
   await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
   const temporaryPath = path.join(
@@ -286,7 +296,7 @@ export async function saveConfig(configPath: string, config: BridgeConfig, prese
         group = { name: config.host_aliases?.[host.ip] ?? host.ip, ip: host.ip, accounts: [] };
         groups.set(host.ip, group);
       }
-      const { ip: _ip, name: _name, ...account } = host;
+      const { ip: _ip, name: _name, password: _password, ...account } = host;
       const connections = config.mounts.filter(mount => mount.host === host.name);
       group.accounts.push({
         ...account,
@@ -295,7 +305,7 @@ export async function saveConfig(configPath: string, config: BridgeConfig, prese
           ? {} : { connections: connections.map(({ name, remote_path }) => ({ name, remote_path })) })
       });
     }
-    const saved = { encrypt_passwords: config.encrypt_passwords !== false, hosts: [...groups.values()] };
+    const saved = { hosts: [...groups.values()] };
     // Validate the serialized identifiers before replacing the existing file.
     parseConfig(saved);
     await fs.writeFile(temporaryPath, `${JSON.stringify(saved, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

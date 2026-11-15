@@ -25,10 +25,12 @@ SAFS lets you browse and edit remote files, use remote terminals, and let AI Cod
 
 1. Install and enable SAFS.
 2. Click **SAFS** in the Activity Bar.
-3. Click **+** in the Remote Folders view and enter the host name, address, port, and credentials.
+3. Click **+** in the Remote Folders view and enter the host name, address, port, and account, then choose **Password** or **Key** authentication.
 4. On first connection, verify and accept the server's host-key fingerprint.
 
-Password and private-key login are supported. You can add more accounts to an existing host. SAFS does not read SSH config; enter the actual connection details in the extension.
+Adding a configuration does not ask for a password or key file. When you first open a remote directory or terminal, password authentication shows a password form with a **Remember password** checkbox. Unchecked passwords stay in the current window session only; checked passwords are stored securely by VS Code. Key authentication opens a file picker and saves the selected local private-key path. Configuration files contain no passwords; the private-key path remains in configuration.
+
+Password and key authentication allow at most three attempts, including the first. Retry with a different password or key, or cancel to stop immediately. Right-click an account and select **SAFS: 修改登录凭据** (Edit Login Credentials) to reset its credentials and choose an authentication method; the next connection asks for the password or key. You can add more accounts to an existing host. SAFS does not read SSH config; enter the actual connection details in the extension.
 
 ### 2. Open a remote directory or terminal
 

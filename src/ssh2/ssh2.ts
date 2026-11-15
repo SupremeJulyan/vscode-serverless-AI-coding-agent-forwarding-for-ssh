@@ -251,6 +251,7 @@ export class Ssh2Terminal implements vscode.Pseudoterminal {
         lease.release();
         return;
       }
+      this.password = this.host.password;
       this.connectionLease = lease;
       this.client = lease.client;
       this.clientErrorListener = (error) => this.fail(error);

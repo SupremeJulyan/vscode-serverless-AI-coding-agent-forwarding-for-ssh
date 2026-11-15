@@ -3,7 +3,7 @@
   "displayName": "SAFS：Serverless AI Coding Agent Forwarding for SSH",
   "description": "Serverless AI Coding Agent Forwarding for SSH: remote SFTP workspaces and SSH terminal, forwarding AI coding agents via CLI without installing VS Code/Agent Server on the remote host.",
   "icon": "images/icon.png",
-  "version": "2.1.7",
+  "version": "2.1.8",
   "publisher": "julyan",
   "license": "MIT",
   "repository": {
@@ -62,7 +62,8 @@
     "onCommand:safs.syncToLocal",
     "onCommand:safs.syncToRemote",
     "onCommand:safs.visualSync",
-    "onCommand:safs.deleteHostGroup"
+    "onCommand:safs.deleteHostGroup",
+    "onCommand:safs.editHostCredentials"
   ],
   "contributes": {
     "commands": [
@@ -312,6 +313,10 @@
         "category": "SAFS Git",
         "title": "复制提交 ID",
         "icon": "$(copy)"
+      },
+      {
+        "command": "safs.editHostCredentials",
+        "title": "SAFS：修改登录凭据"
       }
     ],
     "viewsContainers": {
@@ -492,6 +497,11 @@
           "command": "safs.deleteHistoryItem",
           "when": "view == safs.mounts && viewItem =~ /safs\\.history/",
           "group": "inline@3"
+        },
+        {
+          "command": "safs.editHostCredentials",
+          "when": "view == safs.mounts && viewItem =~ /safs\\.connection|safs\\.user/",
+          "group": "safs@2"
         }
       ],
       "explorer/context": [

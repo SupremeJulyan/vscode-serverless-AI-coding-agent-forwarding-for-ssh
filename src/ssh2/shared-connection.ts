@@ -8,6 +8,7 @@ import { keyboardInteractivePasswordReplies } from '../config/authentication';
 import { defaultSshClientIdent, serverHostKeyAlgorithms } from './algorithms';
 import { detectPlatform } from '../platform/platform';
 import { acquireWslVpnRelay } from './vpn-relay';
+import { CredentialRetry, PrivateKeyError, withAuthenticationRetries } from './authentication-retry';
 
 interface SharedConnection {
   client: Client;
@@ -27,6 +28,9 @@ export interface Ssh2ConnectionLease {
 const connections = new Map<string, SharedConnection>();
 const creating = new Map<string, Promise<SharedConnection>>();
 
+let credentialRetry: CredentialRetry | undefined;
+export function setSshCredentialRetry(retry: CredentialRetry | undefined): void { credentialRetry = retry; }
+
 export function ssh2ConnectionKey(host: HostConfig, password?: string): string {
   const credential = createHash('sha256').update(password ?? '').digest('hex');
   return JSON.stringify([
@@ -35,18 +39,23 @@ export function ssh2ConnectionKey(host: HostConfig, password?: string): string {
   ]);
 }
 
+async function readPrivateKey(host: HostConfig): Promise<Buffer | undefined> {
+  if (!host.private_key_path || host.auth === 'password') return undefined;
+  try { return await readFile(expandHome(host.private_key_path)); }
+  catch { throw new PrivateKeyError('无法读取 SSH 私钥文件，请重新选择。'); }
+}
+
 async function configFor(
   host: HostConfig, password?: string, log?: (message: string) => void,
   connectTarget?: { host: string; port: number }
 ): Promise<ConnectConfig> {
+  const privateKey = await readPrivateKey(host);
   return {
     host: connectTarget?.host ?? host.ip,
     port: connectTarget?.port ?? host.port ?? 22,
     username: host.user,
-    ...(password ? { password, tryKeyboard: true } : {}),
-    ...(host.private_key_path
-      ? { privateKey: await readFile(expandHome(host.private_key_path)) }
-      : {}),
+    ...(password && host.auth !== 'publickey' ? { password, tryKeyboard: true } : {}),
+    ...(privateKey ? { privateKey } : {}),
     ident: vscode.workspace.getConfiguration('safs')
       .get<string>('sshClientIdent', defaultSshClientIdent),
     readyTimeout: 30_000,
@@ -102,7 +111,13 @@ async function createConnection(
       invalidate();
       void releaseResources();
     });
-    client.connect(config);
+    try { client.connect(config); }
+    catch (error) {
+      if (config.privateKey && /private.?key|key.*format|encrypted.*key|passphrase/i.test(String(error))) {
+        throw new PrivateKeyError('SSH 私钥格式不支持或需要口令，请重新选择可用私钥。');
+      }
+      throw error;
+    }
     await connection.ready;
     return connection;
   } catch (error) {
@@ -112,6 +127,14 @@ async function createConnection(
   }
 }
 
+async function createAuthenticatedConnection(host: HostConfig, password: string | undefined, log?: (message: string) => void): Promise<SharedConnection> {
+  return withAuthenticationRetries({ ...host, password }, async current => {
+    const connection = await createConnection(current, current.password, log);
+    Object.assign(host, current);
+    return connection;
+  }, credentialRetry);
+}
+
 export async function acquireSsh2Connection(
   host: HostConfig,
   password: string | undefined = host.password,
@@ -119,12 +142,12 @@ export async function acquireSsh2Connection(
   independent = false
 ): Promise<Ssh2ConnectionLease> {
   const key = ssh2ConnectionKey(host, password);
-  let connection = independent ? await createConnection(host, password, log) : connections.get(key);
+  let connection = independent ? await createAuthenticatedConnection(host, password, log) : connections.get(key);
   if (!connection || connection.dead) {
     let pending = creating.get(key);
     if (!pending) {
-      pending = createConnection(host, password, log).then((created) => {
-        if (!created.dead) connections.set(key, created);
+      pending = createAuthenticatedConnection(host, password, log).then((created) => {
+        if (!created.dead) connections.set(created.key, created);
         return created;
       }).finally(() => creating.delete(key));
       creating.set(key, pending);
@@ -144,7 +167,7 @@ export async function acquireSsh2Connection(
       connection!.refs--;
       if (connection!.refs === 0) {
         connection!.dead = true;
-        if (connections.get(key) === connection) connections.delete(key);
+        if (connections.get(connection!.key) === connection) connections.delete(connection!.key);
         connection!.client.end();
         void connection!.releaseResources();
       }

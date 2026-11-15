@@ -11,6 +11,8 @@ export function keyboardInteractivePasswordReplies(
 }
 
 const authenticationFailurePatterns = [
+  /all configured authentication methods failed/i,
+  /too many authentication failures/i,
   /permission denied/i,
   /authentication (?:failed|failure)/i,
   /access is denied/i,
