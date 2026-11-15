@@ -3,7 +3,10 @@ import { Preparation } from './shared/preparation';
 import { adoptedRemoteSaveResult } from './remote/save-result';
 import { saveConfirmation } from './remote/save-confirmation';
 import { operationMetric } from './shared/operation-metric';
-import { untilCancelled, UiOperationGate } from './ui/ui-operation';
+import { untilCancelled, cancellableStep, isUiCancellation, UiOperationGate } from './ui/ui-operation';
+import { handleNotification } from './ui/notification';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { ConfigLiveReload, configChanges } from './config/config-live-reload';
 import { registerConfigDiagnostics } from './config/config-diagnostics';
 import { createRemoteGitBundle } from './git/remote-git-bundle';
 import {
@@ -45,7 +48,7 @@ import {
 import {
   hierarchicalHostName, mountAliasCandidates, mountConnectionLabel, mountNameFor
 } from './config/mount-aliases';
-import { ConfigFocus, isConfigFocus } from './config/config-focus';
+import { ConfigFocus, isConfigFocus, hostConfigOffset } from './config/config-focus';
 import { accountTargetIndex } from './config/host-accounts';
 import { SshPasswordMigration, needsPasswordMigration } from './patches/ssh-passwords';
 import { hostPasswordKey, resolveHostCredential } from './security/host-credentials';
@@ -215,6 +218,7 @@ const managedRemoteTerminals = new Map<vscode.Terminal, {
   mount: MountConfig;
   remoteCwd: string;
   connectionError?: string;
+  cancelled?: boolean;
   startedAt: number;
   /** SSH 终端实例：live-sync 用它安全补发 cd（shell 就绪前入队）。 */
   pty?: SshTerminal;
@@ -428,6 +432,7 @@ async function timedPhase<T>(label: string, action: () => Promise<T>): Promise<T
   }
 }
 
+const credentialCancellation = new AsyncLocalStorage<vscode.CancellationToken>();
 const sessionPasswords = new Map<string, string>();
 const pendingHostCredentials = new Map<string, Promise<HostConfig>>();
 async function resolveStoredHostPassword(
@@ -435,10 +440,20 @@ async function resolveStoredHostPassword(
 ): Promise<HostConfig> {
   const key = hostPasswordKey(host);
   const pending = pendingHostCredentials.get(key);
-  if (pending) return pending;
+  const token = credentialCancellation.getStore();
+  const wait = async (operation: Promise<HostConfig>) => {
+    const result = token ? await untilCancelled(token, () => operation) : await operation;
+    if (!result) throw new vscode.CancellationError();
+    const current = lastReadConfig?.hosts.find(candidate => candidate.name === result.name || hostPasswordKey(candidate) === hostPasswordKey(result));
+    if (!current || configChanges({ hosts: [result], mounts: [] }, { hosts: [current], mounts: [] }).invalidated.length) {
+      throw new Error('SSH 配置已更新，请重新打开远程目录或终端');
+    }
+    return { ...result, name: current.name };
+  };
+  if (pending) return wait(pending);
   const operation = resolveHostCredential(host, context.secrets, {
     sessionPasswords,
-    promptPassword: () => promptSshPassword(`${host.user}@${host.ip}:${host.port ?? 22}`),
+    promptPassword: () => promptSshPassword(`${host.user}@${host.ip}:${host.port ?? 22}`, credentialCancellation.getStore()),
     promptPrivateKey: () => selectPrivateKey(host),
     savePrivateKey: async keyPath => {
       const config = await readConfig();
@@ -449,7 +464,8 @@ async function resolveStoredHostPassword(
     }
   });
   pendingHostCredentials.set(key, operation);
-  try { return await operation; } finally { pendingHostCredentials.delete(key); }
+  try { return await wait(operation); }
+  finally { if (pendingHostCredentials.get(key) === operation) pendingHostCredentials.delete(key); }
 }
 
 async function resolvedHost(context: vscode.ExtensionContext, hostName: string): Promise<HostConfig> {
@@ -793,17 +809,20 @@ async function handleSafsTerminalLink(link: SafsTerminalLink): Promise<void> {
 
   const session = await pool.get(folder.hostName);
   bridgeOutput?.debug(`[终端链接] 查找 ${link.rawPath}；root=${link.searchRoot}`);
-  const { search, cancelled } = await vscode.window.withProgress({
+  const found = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: 'SAFS：正在查找远程文件',
     cancellable: true
   }, async (_progress, token) => {
+    const controller = new AbortController();
+    const subscription = token.onCancellationRequested(() => controller.abort());
+    try { return await untilCancelled(token, async () => {
     const search = await findRemotePathCandidates(
       link.searchRoot,
       link.rawPath,
       async (directory) => {
         try {
-          return await session.readDirectory(directory);
+          return await session.readDirectory(directory, controller.signal);
         } catch (error) {
           const code = (error as { code?: number | string }).code;
           if (code === 3 || code === 'EACCES' || code === 'EPERM') return [];
@@ -813,7 +832,10 @@ async function handleSafsTerminalLink(link: SafsTerminalLink): Promise<void> {
       { cancelled: () => token.isCancellationRequested }
     );
     return { search, cancelled: token.isCancellationRequested };
+    }); } finally { subscription.dispose(); }
   });
+  if (!found) return;
+  const { search, cancelled } = found;
   if (cancelled) return;
   if (search.matches.length === 0) {
     if (search.truncated) {
@@ -867,7 +889,7 @@ async function openDirectoryItem(requested: MountConfig): Promise<void> {
     cancellable: true
   }, async (progress, token) => {
     progress.report({ message: '正在验证远程目录…' });
-    return untilCancelled(token, () => ensureFolder(requested));
+    return credentialCancellation.run(token, () => untilCancelled(token, () => ensureFolder(requested)));
   });
   if (!folder) return;
   const remoteDirectory = folder.defaultRemotePath ?? folder.remoteRoot;
@@ -910,7 +932,7 @@ async function selectRemoteDirectory(
     cancellable: true
   }, async (progress, token) => {
     progress.report({ message: '正在连接并验证远程目录…' });
-    return untilCancelled(token, () => ensureFolder(mount!));
+    return credentialCancellation.run(token, () => untilCancelled(token, () => ensureFolder(mount!)));
   });
   if (!folder) return undefined;
   const session = await pool.get(folder.hostName);
@@ -1089,11 +1111,10 @@ async function cloneGitRepository(): Promise<void> {
   });
 
   await recordDirectoryHistory(vscodeContext, mount.name, remoteRepository);
-  const action = await vscode.window.showInformationMessage(
+  handleNotification(vscode.window.showInformationMessage(
     `SAFS：Git 仓库已克隆到 ${mount.name}:${remoteRepository}`,
     '切换到此目录', '在新窗口打开'
-  );
-  if (!action) return;
+  ), async action => {
   const localRoot = localRootForFolder(folder);
   await ensureAgentCwdSubdirectory(localRoot, folder.remoteRoot, remoteRepository);
   await writeLastRemoteDirectory(localRoot, folder.remoteRoot, remoteRepository);
@@ -1102,6 +1123,7 @@ async function cloneGitRepository(): Promise<void> {
     'vscode.openFolder', vscode.Uri.parse(folderUri(folder, remoteRepository)),
     action === '在新窗口打开'
   );
+  }, error => logAsyncFailure('打开克隆目录失败', error));
 }
 
 async function promptRemoteDirectory(
@@ -1116,6 +1138,7 @@ async function promptRemoteDirectory(
   picker.value = currentPath.endsWith('/') ? currentPath : `${currentPath}/`;
   // No items => no dropdown; completion is driven by the Tab keybinding.
   picker.items = [];
+  picker.buttons = [{ iconPath: new vscode.ThemeIcon('close'), tooltip: '取消' }];
   const state: DirectoryPickerState = { picker, session, remoteRoot, currentPath };
   activeDirectoryPicker = state;
   void vscode.commands.executeCommand('setContext', directoryPickerContextKey, true);
@@ -1123,10 +1146,12 @@ async function promptRemoteDirectory(
     let accepted = false;
     picker.onDidAccept(() => {
       accepted = true;
+      const value = picker.value;
       clearActiveDirectoryPicker(state);
       picker.hide();
-      resolve(picker.value);
+      resolve(value);
     });
+    picker.onDidTriggerButton(() => picker.hide());
     picker.onDidHide(() => {
       clearActiveDirectoryPicker(state);
       picker.dispose();
@@ -1184,6 +1209,7 @@ async function completeRemoteDirectory(): Promise<void> {
       .filter((entry) => entry.type === 'directory' || entry.type === 'symbolic-link')
       .map((entry) => entry.name)
       .sort((left, right) => left.localeCompare(right));
+    if (activeDirectoryPicker !== state || picker.value.trim() !== typed) return;
     if (base) {
       const matches = entries.filter((name) => name.startsWith(base));
       if (matches.length === 1) {
@@ -2790,7 +2816,7 @@ async function logManagedTerminalExit(
 async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promise<void> {
   const reopen = managedRemoteTerminals.get(terminal);
   managedRemoteTerminals.delete(terminal);
-  if (!reopen) return;
+  if (!reopen || reopen.cancelled) return;
   const diagnosticText = await logManagedTerminalExit(terminal, reopen);
   const status = terminal.exitStatus;
   const failureText = `${reopen.connectionError ?? ''}\n${diagnosticText}`;
@@ -2800,13 +2826,9 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
     return;
   }
   if (isRemoteDirectoryPermissionDenied(failureText)) {
-    await vscode.window.showErrorMessage(
-      'SAFS：没有权限访问当前远程目录，确认后将退出远程工作区。',
-      { modal: true }
-    );
-    if (hasRemoteWorkspaceContext()) {
-      await vscode.commands.executeCommand('workbench.action.closeFolder');
-    }
+    handleNotification(vscode.window.showErrorMessage(
+      'SAFS：没有权限访问当前远程目录。', '关闭远程工作区'
+    ), () => vscode.commands.executeCommand('workbench.action.closeFolder'), error => logAsyncFailure('关闭工作区失败', error));
     return;
   }
   // 仅当远端连接被异常中断/崩溃时才处理（重连或提示）：
@@ -2959,7 +2981,7 @@ async function openTerminal(
       error => {
         bridgeOutput?.error(`[终端] ${mount.name} 连接失败：${error.message}`);
         const entry = managedRemoteTerminals.get(terminal);
-        if (entry) entry.connectionError = error.message;
+        if (entry) { entry.connectionError = error.message; entry.cancelled = isUiCancellation(error); }
       },
       message => bridgeOutput?.appendLine(`[SSH] ${message}`),
       reportedCwd => {
@@ -3011,8 +3033,7 @@ function configFocusForElement(element: TreeElement | undefined): ConfigFocus | 
   if (!element || typeof element !== 'object') return undefined;
   if ('type' in element) {
     if (element.type === 'hostGroup') {
-      const host = element.hosts?.[0];
-      return host ? { kind: 'entry', name: host.name } : undefined;
+      return { kind: 'host', name: element.ip };
     }
     if (element.type === 'user') return { kind: 'entry', name: element.hostName };
     return { kind: 'entry', name: element.mountName };
@@ -3049,7 +3070,7 @@ async function openConfig(focus?: ConfigFocus): Promise<void> {
   const editor = await vscode.window.showTextDocument(document);
   if (!focus) return;
   const content = document.getText();
-  const offset = focus.kind === 'password'
+  const offset = focus.kind === 'host' ? hostConfigOffset(content, focus.name) : focus.kind === 'password'
     // 该条目没有 password 字段（私钥/未填）时退回条目本身，别什么都不做。
     ? passwordValueOffset(content, focus.name) ?? configEntryOffset(content, focus.name)
     : configEntryOffset(content, focus.name);
@@ -3078,7 +3099,7 @@ async function input(options: InputOptions): Promise<string | undefined> {
     ...options,
     ignoreFocusOut: true,
     valueSelection: options.value ? [0, options.value.length] : undefined
-  });
+  }, credentialCancellation.getStore());
 }
 
 const required = (label: string) => (value: string): string | undefined =>
@@ -3098,6 +3119,7 @@ async function selectPrivateKey(host: HostConfig): Promise<string | undefined> {
     canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
     defaultUri: vscode.Uri.file(path.join(os.homedir(), '.ssh'))
   });
+  if (credentialCancellation.getStore()?.isCancellationRequested) throw new vscode.CancellationError();
   return files?.[0]?.fsPath;
 }
 
@@ -4364,28 +4386,6 @@ function groupHostsByIp(
   return [...groups.values()];
 }
 
-async function renameHostGroup(group: HostGroupItem): Promise<void> {
-  const config = await loadConfig(configPath());
-  const name = await input({
-    title: '重命名主机',
-    prompt: '主机名',
-    value: config.host_aliases?.[group.ip] ?? group.displayName,
-    validateInput: required('主机名')
-  });
-  if (name === undefined) return;
-  const normalizedName = name.trim();
-  const aliases = { ...(config.host_aliases ?? {}) };
-  if (normalizedName === group.ip) delete aliases[group.ip];
-  else aliases[group.ip] = normalizedName;
-  if (Object.keys(aliases).length > 0) config.host_aliases = aliases;
-  else delete config.host_aliases;
-  await normalizeHierarchicalConfigNames(vscodeContext, config);
-  bridgeOutput?.info(`[配置] 已重命名主机 ${group.ip} -> ${normalizedName}`);
-  void vscode.window.showInformationMessage(
-    `SAFS：主机"${group.ip}"已重命名为"${normalizedName}"。`
-  );
-}
-
 const MAX_HISTORY_ENTRIES = 10;
 
 async function getDirectoryHistory(
@@ -4656,6 +4656,11 @@ async function normalizeHierarchicalConfigNames(
   await saveConfig(configPath(), config);
   lastReadConfig = config;
 
+  await migrateConfigRenameState(context, renamed);
+}
+
+async function migrateConfigRenameState(context: vscode.ExtensionContext, renamed: Map<string, string>): Promise<void> {
+  if (!renamed.size) return;
   const history = await getDirectoryHistory(context);
   let historyChanged = false;
   for (const [oldName, newName] of renamed) {
@@ -4900,7 +4905,7 @@ const aiForwarded = this.context.globalState
       );
       return groupHostsByIp(config.hosts, config.host_aliases);
     } catch {
-      return [];
+      return lastReadConfig ? groupHostsByIp(lastReadConfig.hosts, lastReadConfig.host_aliases) : [];
     }
   }
 
@@ -5879,28 +5884,37 @@ async function performAgentInterfacePreparation(
     }
     if (!interactive) throw error;
     const missingNode = error instanceof NodeRuntimeUnavailableError;
-    const action = await vscode.window.showErrorMessage(
+    bridgeOutput?.error(`[Agent CLI] ${detail}`);
+    handleNotification(vscode.window.showErrorMessage(
       missingNode ? 'SAFS CLI 需要 Node.js 18 或以上版本' : 'SAFS CLI 安装或更新失败',
-      { modal: true, detail: missingNode
-        ? detail
-        : `${detail}\n请检查本地 Node.js 环境与安装目录权限。` },
-      ...(missingNode ? ['安装 Node.js', '跳过'] : [])
-    );
-    if (action === '安装 Node.js') {
-      await vscode.env.openExternal(vscode.Uri.parse('https://nodejs.org/zh-cn'));
-      void vscode.window.showInformationMessage(
-        '安装后，请完全退出所有 VS Code 窗口再打开。'
-      );
-    }
-    if (missingNode && action !== '安装 Node.js') {
-      await context.globalState.update(cliNodeInstallSkippedKey, true);
-    }
+      ...(missingNode ? ['安装 Node.js', '跳过'] : [viewSafsLogAction])
+    ), async action => {
+      if (action === '安装 Node.js') {
+        await vscode.env.openExternal(vscode.Uri.parse('https://nodejs.org/zh-cn'));
+        void vscode.window.showInformationMessage('安装后，请完全退出所有 VS Code 窗口再打开。');
+      } else if (action === viewSafsLogAction) bridgeOutput?.show(true);
+    }, error => logAsyncFailure('安装提示操作失败', error));
     throw error;
   }
   await context.globalState.update(cliNodeInstallSkippedKey, false);
   cliSetupError = undefined;
   bridgeOutput?.appendLine(`[Agent CLI] 已安装用户级 safs 命令；接口=${agentInterface()}。`);
   return { cliExecutable: executable };
+}
+
+async function withCancellablePreparation<T>(
+  options: vscode.ProgressOptions, action: (token: vscode.CancellationToken) => Promise<T>
+): Promise<T | undefined> {
+  const parent = credentialCancellation.getStore();
+  return vscode.window.withProgress({ ...options, cancellable: true }, async (_progress, token) => {
+    const source = new vscode.CancellationTokenSource();
+    const listeners = [token.onCancellationRequested(() => source.cancel())];
+    if (parent) listeners.push(parent.onCancellationRequested(() => source.cancel()));
+    if (token.isCancellationRequested || parent?.isCancellationRequested) source.cancel();
+    try {
+      return await credentialCancellation.run(source.token, () => untilCancelled(source.token, () => action(source.token)));
+    } finally { listeners.forEach(listener => listener.dispose()); source.dispose(); }
+  });
 }
 
 async function updateAiForwardEnabled(
@@ -5912,12 +5926,12 @@ async function updateAiForwardEnabled(
   bridgeOutput?.info(
     `[Agent 转发] ${enabledValue ? '启用' : '关闭'} ${mount.name}`
   );
-  await vscode.window.withProgress({
+  const completed = await withCancellablePreparation({
     location: vscode.ProgressLocation.Notification,
     title: enabledValue
       ? 'SAFS：正在准备 Agent 转发'
       : 'SAFS：正在关闭 Agent 转发'
-  }, async () => {
+  }, async (token) => {
     const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
     if (enabled.has(mount.name) === enabledValue) {
       agentTrace('Preference', `挂载 ${mount.name} Agent 转发状态未变化，忽略重复操作`);
@@ -5929,13 +5943,13 @@ async function updateAiForwardEnabled(
     // leave this mount available for retry. Preparation is shared and cached
     // within this extension host.
     if (enabledValue && cliEnabled()) {
-      cliExecutable = (await configureAgentInterface(vscodeContext)).cliExecutable;
+      cliExecutable = (await cancellableStep(token, () => configureAgentInterface(vscodeContext))).cliExecutable;
     } else if (enabledValue) {
-      await ensureAgentMcpRouter(vscodeContext);
+      await cancellableStep(token, () => ensureAgentMcpRouter(vscodeContext));
     }
     if (enabledValue) enabled.add(mount.name);
     else enabled.delete(mount.name);
-    await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
+    await cancellableStep(token, () => vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]));
     agentTrace(
       'Preference',
       `挂载 ${mount.name} Agent 转发标记已设为${enabledValue ? '启用' : '关闭'}`
@@ -5947,33 +5961,35 @@ async function updateAiForwardEnabled(
     const activeMountName = current?.mountName ?? terminalInfo?.mount.name;
     if (!enabledValue && activeMountName === mount.name) {
       agentTrace('Preference', `当前窗口绑定 ${mount.name}，正在停止 Agent 服务并移除发现记录`);
-      await backendLifecycle.stop();
-      await mcpLifecycle.stop();
+      await cancellableStep(token, () => backendLifecycle.stop());
+      await cancellableStep(token, () => mcpLifecycle.stop());
       backend = undefined;
       mcpServer = undefined;
       backendBoundMountName = undefined;
-      await agentWorkspacePublisher.remove();
+      await cancellableStep(token, () => agentWorkspacePublisher.remove());
     }
     if (enabledValue && cliEnabled()) {
-      await prepareAgentCwd(mount);
+      await cancellableStep(token, () => prepareAgentCwd(mount));
       agentTrace('Preference', '先启动共享 IPC 路由，再启动当前窗口服务');
       startAgentIpcRouterLeadership(vscodeContext);
-      await ensureAgentIpcRouter(vscodeContext);
+      await cancellableStep(token, () => ensureAgentIpcRouter(vscodeContext));
       if (activeMountName === mount.name) {
-        await ensureAgentBackendServer(vscodeContext);
-        await publishAgentWorkspace(vscodeContext);
+        await cancellableStep(token, () => ensureAgentBackendServer(vscodeContext));
+        await cancellableStep(token, () => publishAgentWorkspace(vscodeContext));
       }
     } else if (enabledValue && activeMountName === mount.name) {
-      await prepareAgentCwd(mount);
-      await ensureAgentMcpRouter(vscodeContext);
-      await ensureAgentMcpServer(vscodeContext);
-      await publishMcpWorkspace(vscodeContext);
+      await cancellableStep(token, () => prepareAgentCwd(mount));
+      await cancellableStep(token, () => ensureAgentMcpRouter(vscodeContext));
+      await cancellableStep(token, () => ensureAgentMcpServer(vscodeContext));
+      await cancellableStep(token, () => publishMcpWorkspace(vscodeContext));
     } else if (!enabledValue && enabled.size === 0) {
       agentTrace('Preference', '已无启用挂载，停止固定路由；Agent 配置由用户手动管理');
-      await stopAgentIpcRouterLeadership();
-      await mcpRouter?.stop();
+      await cancellableStep(token, () => stopAgentIpcRouterLeadership());
+      await cancellableStep(token, () => mcpRouter?.stop());
     }
+    return true;
   });
+  if (!completed) return;
   if (!changed) return;
   if (enabledValue) {
     if (!shouldInstallIntegration) {
@@ -6008,30 +6024,32 @@ async function setAiForwardEnabled(mount: MountConfig, enabledValue: boolean): P
 
 async function restartAgentForwarding(mount: MountConfig): Promise<void> {
   if (forwardingRecoveryError?.mountName === mount.name) forwardingRecoveryError = undefined;
-  await vscode.window.withProgress({
+  const completed = await withCancellablePreparation({
     location: vscode.ProgressLocation.Notification,
     title: 'SAFS：正在重启 Agent 转发'
-  }, async () => {
+  }, async (token) => {
     const enabled = new Set(vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []));
-    if (!enabled.has(mount.name)) await setAiForwardEnabled(mount, true);
-    await configureAgentInterface(vscodeContext, true);
+    if (!enabled.has(mount.name)) await cancellableStep(token, () => setAiForwardEnabled(mount, true));
+    await cancellableStep(token, () => configureAgentInterface(vscodeContext, true));
     startAgentIpcRouterLeadership(vscodeContext);
-    await ensureAgentIpcRouter(vscodeContext);
+    await cancellableStep(token, () => ensureAgentIpcRouter(vscodeContext));
 
     const location = currentRemoteLocation();
     const terminal = activeAgentCommandTerminal();
     const terminalInfo = terminal ? managedRemoteTerminals.get(terminal) : undefined;
     const activeMountName = location?.mountName ?? terminalInfo?.mount.name;
     if (activeMountName === mount.name) {
-      await agentWorkspacePublisher.remove();
-      await backendLifecycle.stop();
+      await cancellableStep(token, () => agentWorkspacePublisher.remove());
+      await cancellableStep(token, () => backendLifecycle.stop());
       backend = undefined;
       backendBoundMountName = undefined;
-      await ensureFolder(mount);
-      await ensureAgentBackendServer(vscodeContext);
-      await publishAgentWorkspace(vscodeContext);
+      await cancellableStep(token, () => ensureFolder(mount));
+      await cancellableStep(token, () => ensureAgentBackendServer(vscodeContext));
+      await cancellableStep(token, () => publishAgentWorkspace(vscodeContext));
     }
+    return true;
   });
+  if (!completed) return;
   await refreshAgentCommandTerminalState();
   refreshTree();
 }
@@ -6041,6 +6059,7 @@ async function prepareAgentCwd(mount: MountConfig): Promise<void> {
     const folder = await ensureFolder(mount);
     agentTrace('CWD', `Agent cwd 已可用：${vscode.Uri.parse(folderUri(folder)).fsPath}`);
   } catch (error) {
+    if (isUiCancellation(error) || credentialCancellation.getStore()?.isCancellationRequested) return;
     const detail = error instanceof Error ? error.message : String(error);
     bridgeOutput?.appendLine(`[Agent CWD] 无法为 ${mount.name} 创建本机占位目录：${detail}`);
     void vscode.window.showWarningMessage(
@@ -6058,39 +6077,39 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
     await action();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isUiCancellation(error)) return;
     logAsyncFailure('命令失败', error);
     if (error instanceof ConfigActionRequiredError) {
-      const selected = await vscode.window.showErrorMessage(
+      handleNotification(vscode.window.showErrorMessage(
         error.actions.includes(addHostAccountAction)
           ? 'SAFS：尚未配置远程目录。'
           : 'SAFS：配置无法读取，请打开配置检查。',
         ...error.actions
-      );
-      if (selected === openConfigAction) {
-        // 有主机名时定位到账号记录；密码通过“修改登录凭据”管理。
-        await vscode.commands.executeCommand(
-          `${commandPrefix}.openConfig`,
-          error.hostName ? { kind: 'entry', name: error.hostName } satisfies ConfigFocus : undefined
-        );
-      } else if (selected === addHostAccountAction) {
-        await vscode.commands.executeCommand(`${commandPrefix}.addHostAccount`);
-      }
+      ), async selected => {
+        if (selected === openConfigAction) {
+          // 有主机名时定位到账号记录；密码通过“修改登录凭据”管理。
+          await vscode.commands.executeCommand(
+            `${commandPrefix}.openConfig`,
+            error.hostName ? { kind: 'entry', name: error.hostName } satisfies ConfigFocus : undefined
+          );
+        } else if (selected === addHostAccountAction) {
+          await vscode.commands.executeCommand(`${commandPrefix}.addHostAccount`);
+        }
+      }, error => logAsyncFailure('错误提示操作失败', error));
       return;
     }
     if (error instanceof LocalGitAuthenticationError) {
-      const selected = await vscode.window.showErrorMessage(
+      handleNotification(vscode.window.showErrorMessage(
         error.userMessage, viewSafsLogAction
-      );
-      if (selected === viewSafsLogAction) bridgeOutput?.show(true);
+      ), selected => { if (selected === viewSafsLogAction) bridgeOutput?.show(true); }, error => logAsyncFailure('打开日志失败', error));
       return;
     }
     const missingCommand = missingExecutableName(error);
     if (missingCommand) {
       bridgeOutput?.appendLine(`[缺少依赖] ${message}`);
-      const selected = await vscode.window.showErrorMessage(
+      handleNotification(vscode.window.showErrorMessage(
         'SAFS：缺少必要的 SSH 客户端命令。', viewSafsLogAction
-      );
-      if (selected === viewSafsLogAction) bridgeOutput?.show(true);
+      ), selected => { if (selected === viewSafsLogAction) bridgeOutput?.show(true); }, error => logAsyncFailure('打开日志失败', error));
       return;
     }
     output.appendLine(`[错误] ${message}`);
@@ -6098,11 +6117,9 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
       || (error as NodeJS.ErrnoException | null)?.code === 'EPERM'
       || /permission denied|权限不足|拒绝访问/i.test(message);
     if (permissionDenied && hasRemoteWorkspaceContext()) {
-      await vscode.window.showErrorMessage(
-        'SAFS：没有权限访问该远程目录，确认后将退出当前远程工作区。',
-        { modal: true }
-      );
-      await vscode.commands.executeCommand('workbench.action.closeFolder');
+      handleNotification(vscode.window.showErrorMessage(
+        'SAFS：没有权限访问该远程目录。', '关闭远程工作区'
+      ), () => vscode.commands.executeCommand('workbench.action.closeFolder'), error => logAsyncFailure('关闭工作区失败', error));
       return;
     }
     const summary = /All configured authentication methods failed/i.test(message)
@@ -6112,8 +6129,9 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
         : /packet length|exchange encryption keys|wrong packet|bad packet/i.test(message)
           ? 'SAFS：SSH 握手失败，自动重试仍未恢复。'
           : 'SAFS：操作失败，完整原因已写入日志。';
-    const selected = await vscode.window.showErrorMessage(summary, viewSafsLogAction);
-    if (selected === viewSafsLogAction) bridgeOutput?.show(true);
+    handleNotification(vscode.window.showErrorMessage(summary, viewSafsLogAction),
+      selected => { if (selected === viewSafsLogAction) bridgeOutput?.show(true); },
+      error => logAsyncFailure('打开日志失败', error));
   }
 }
 
@@ -6466,20 +6484,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('status', showStatus);
   command('testLocalProxy', async () => {
-    await vscode.window.withProgress({
+    const results = await withCancellablePreparation({
       location: vscode.ProgressLocation.Notification, title: 'SAFS：正在测试本机代理连接…'
-    }, async () => {
-      const results = await testLoopbackProxy();
-      const detail = results.map((result) => `${result.host}：${result.unavailable
-        ? '无法启动本机测试服务（地址可能不可用）'
-        : `${result.reachable ? '连接成功' : '连接失败'}；${result.proxyUsed === true
-          ? '请求使用了代理' : result.proxyUsed === false ? '请求未使用显式代理'
-            : '无法确认是否使用代理（curl 可能版本过旧）'}`}`).join('\n');
-      await vscode.window.showInformationMessage('SAFS：本机代理测试结果', {
-        modal: true,
-        detail: `${detail}\n\n测试使用当前扩展进程的代理环境变量及 curl，HTTP_PROXY 也参与测试。结果不代表独立 Agent 的环境或系统 TUN 路由；连接失败也可能由防火墙或地址不可用导致。若使用了代理，可设置 NO_PROXY=localhost,127.0.0.1,::1 后重启 Agent。`
-      });
-    });
+    }, token => cancellableStep(token, () => testLoopbackProxy()));
+    if (!results) return;
+    const detail = results.map(result => `${result.host}：${result.unavailable
+      ? '无法启动本机测试服务（地址可能不可用）'
+      : `${result.reachable ? '连接成功' : '连接失败'}；${result.proxyUsed === true
+        ? '请求使用了代理' : result.proxyUsed === false ? '请求未使用显式代理'
+          : '无法确认是否使用代理（curl 可能版本过旧）'}`}`).join('\n');
+    bridgeOutput?.info(`[本机代理测试]\n${detail}`);
+    handleNotification(vscode.window.showInformationMessage('SAFS：本机代理测试完成。', viewSafsLogAction),
+      selected => { if (selected === viewSafsLogAction) bridgeOutput?.show(true); }, error => logAsyncFailure('打开日志失败', error));
   });
   command('openConfig', (argument) => openConfigForArgument(argument));
   command('addRemoteDirectory', async () => {
@@ -6498,10 +6514,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await editHostCredentials(context, element as MountConfig | HostConfig | UserItem | undefined);
     tree.refresh();
   });
-  command('renameHost', async (group) => {
-    await renameHostGroup(group as HostGroupItem);
-    tree.refresh();
-  });
+  command('openHostConfig', (group) => openConfigForArgument(group));
   command('installAgentForwarding', async () => {
     const result: { cliExecutable?: string } = cliEnabled()
       ? await configureAgentInterface(context, true)
@@ -6740,6 +6753,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }));
 
   tree.refresh();
+
+  const liveConfig = new ConfigLiveReload(lastReadConfig, () => loadConfig(configPath()), async (previous, config) => {
+    const { renamed, invalidated } = configChanges(previous, config);
+    lastReadConfig = config;
+    // Render additions, removals and edits immediately, before any connection cleanup.
+    tree.refresh();
+    for (const host of invalidated) {
+      sessionPasswords.delete(hostPasswordKey(host));
+      pool.reset(host.name);
+      for (const [terminal, info] of managedRemoteTerminals) {
+        if (info.mount.host === host.name) { managedRemoteTerminals.delete(terminal); terminal.dispose(); }
+      }
+      for (const task of syncManager?.list() ?? []) {
+        if (task.mountName === host.name) void stopSync(task.mountName, task.remotePath).catch(error => logAsyncFailure('停止旧配置同步任务失败', error));
+      }
+      for (const folder of registry.values().filter(folder => folder.hostName === host.name)) registry.delete(folder.mountName);
+    }
+    await rememberMountRenames(renamed);
+    await applyMountRenames(renamed);
+    await migrateConfigRenameState(context, renamed);
+    for (const [terminal, info] of managedRemoteTerminals) {
+      if (invalidated.some(host => host.name === info.mount.host)) {
+        managedRemoteTerminals.delete(terminal); // Intentional config change must not auto-reopen an old connection.
+        terminal.dispose();
+      } else if (renamed.has(info.mount.name)) {
+        const name = renamed.get(info.mount.name)!;
+        info.mount = config.mounts.find(mount => mount.name === name) ?? { ...info.mount, name, host: name };
+      }
+    }
+    if (invalidated.length || renamed.size) {
+      await backendLifecycle.stop(); await mcpLifecycle.stop();
+      backend = undefined; mcpServer = undefined; backendBoundMountName = undefined;
+      await agentWorkspacePublisher.remove();
+    }
+    refreshSafsEntryLabel();
+    tree.refresh();
+    void refreshRemoteWorkspaceNames().catch(error => logAsyncFailure('同步远程工作区名称失败', error));
+    void refreshAgentCommandTerminalState().catch(error => logAsyncFailure('同步 Agent 配置状态失败', error));
+    for (const workspace of vscode.workspace.workspaceFolders ?? []) {
+      if (workspace.uri.scheme === remoteFileSystemScheme) provider.refresh(workspace.uri);
+    }
+  });
+  const reloadConfig = () => { void liveConfig.refresh().catch(error => logAsyncFailure('同步主机配置失败，保留上一份有效配置', error)); };
+  const configFile = vscode.Uri.file(configPath());
+  const configWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(
+    vscode.Uri.file(path.dirname(configPath())), path.basename(configPath())
+  ));
+  context.subscriptions.push(configWatcher,
+    configWatcher.onDidChange(reloadConfig), configWatcher.onDidCreate(reloadConfig), configWatcher.onDidDelete(reloadConfig),
+    vscode.workspace.onDidSaveTextDocument(document => {
+      const filePath = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+      if (document.uri.scheme === 'file' && filePath(document.uri.fsPath) === filePath(configFile.fsPath)) reloadConfig();
+    }));
 
   // 每次切换到远程文件或同步镜像文件时：若设置开启则同步远程终端；
   // 重开远程窗口后首次文件激活也无条件跟随（配合标签页恢复）。

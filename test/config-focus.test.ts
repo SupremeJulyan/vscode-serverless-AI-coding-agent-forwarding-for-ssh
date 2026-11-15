@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isConfigFocus } from '../src/config/config-focus';
+import { isConfigFocus, hostConfigOffset } from '../src/config/config-focus';
 
 test('accepts well-formed config focus arguments', () => {
   assert.equal(isConfigFocus({ kind: 'entry', name: '192.0.2.10(dev_alice)' }), true);
@@ -24,4 +24,14 @@ test('rejects malformed arguments instead of throwing later', () => {
   assert.equal(isConfigFocus(null), false);
   assert.equal(isConfigFocus('gkn'), false);
   assert.equal(isConfigFocus([]), false);
+});
+
+test('host configuration focuses the host block even when no accounts exist', () => {
+  const content = JSON.stringify({ hosts: [{ name: 'first', ip: '1', accounts: [] }, { name: 'second', ip: '2', accounts: [] }] }, null, 2);
+  assert.equal(isConfigFocus({ kind: 'host', name: '2' }), true);
+  const offset = hostConfigOffset(content, '2');
+  assert.ok(offset !== undefined);
+  assert.ok(content.slice(offset).startsWith('{'));
+  assert.ok(content.slice(offset).indexOf('second') < content.slice(offset).indexOf('2'));
+  assert.equal(hostConfigOffset(content, 'missing'), undefined);
 });

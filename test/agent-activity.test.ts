@@ -213,3 +213,25 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('refreshTerminalTarget').disabled, false);
   assert.equal(get('refreshTerminalTarget').textContent, '刷新终端目录');
 });
+
+test('activity controls unlock before a slow target refresh finishes', async () => {
+  let receive!: (message: any) => Promise<void>;
+  let finish!: (state: any) => void;
+  const messages: any[] = [];
+  const provider = new AgentActivityViewProvider({ onDidChange: () => ({ dispose() {} }) } as any, {
+    terminalTarget: () => new Promise(resolve => { finish = resolve; }),
+    refreshTerminalTarget: async () => {}, switchWorkspace: async () => {},
+    openTerminalDirectory: async () => {}, recoverForwarding: async () => {}
+  });
+  provider.resolveWebviewView({
+    webview: { cspSource: 'test', options: {}, html: '',
+      onDidReceiveMessage(handler: typeof receive) { receive = handler; },
+      postMessage: async (message: any) => { messages.push(message); return true; } },
+    onDidDispose() {}
+  } as any);
+  const action = receive({ type: 'switchWorkspace' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(messages.some(message => message.type === 'actionState' && message.busy === false));
+  finish({ enabled: true, availability: 'ready' });
+  await action; provider.dispose();
+});

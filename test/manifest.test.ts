@@ -395,8 +395,8 @@ test('prepares the chosen forwarding interface before enabling and respects expl
   }
   const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const enableSetup = source.slice(source.indexOf('async function updateAiForwardEnabled('), source.indexOf('async function setAiForwardEnabled('));
-  const prepare = enableSetup.indexOf('await configureAgentInterface(vscodeContext)');
-  const persist = enableSetup.indexOf('await vscodeContext.globalState.update(aiForwardMountsKey');
+  const prepare = enableSetup.indexOf('configureAgentInterface(vscodeContext)');
+  const persist = enableSetup.indexOf('vscodeContext.globalState.update(aiForwardMountsKey');
   assert.ok(prepare >= 0 && persist > prepare);
   assert.ok(source.includes('void configureAgentInterface(context, false, firstRun)'));
   assert.ok(source.includes('!context.globalState.get<boolean>(cliFirstRunCheckedKey, false)'));
@@ -568,7 +568,7 @@ test('history sync buttons read 启动同步 when the directory is not syncing',
   assert.equal(disable?.title, '关闭本地同步');
 });
 
-test('host items carry a delete button and every item can open the config', async () => {
+test('host items offer inline host configuration and omit redundant context actions', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
@@ -592,8 +592,11 @@ test('host items carry a delete button and every item can open the config', asyn
     ),
     true
   );
-  const openConfig = itemMenu.find((item) => item.command === 'safs.openConfig');
-  assert.equal(openConfig?.when, 'view == safs.mounts && viewItem =~ /safs\\./');
+  assert.equal(itemMenu.some(item => item.command === 'safs.openConfig'), false);
+  assert.equal(itemMenu.some(item => item.command === 'safs.editHostCredentials'), false);
+  const openHost = itemMenu.find(item => item.command === 'safs.openHostConfig');
+  assert.equal(openHost?.group, 'inline@5');
+  assert.equal(commands.find(item => item.command === 'safs.openHostConfig')?.title, '打开主机配置');
 });
 
 test('generates config names as host(account) and migrates the old ones', async () => {

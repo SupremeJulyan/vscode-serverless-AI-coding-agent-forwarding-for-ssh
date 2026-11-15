@@ -71,8 +71,8 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
           await this.actions?.[type]();
         } finally {
           this.actionRunning = false;
-          try { await this.updateTerminalTarget(); }
-          finally { await view.webview.postMessage({ type: 'actionState', busy: false }); }
+          await view.webview.postMessage({ type: 'actionState', busy: false });
+          await this.updateTerminalTarget();
         }
       }
     });

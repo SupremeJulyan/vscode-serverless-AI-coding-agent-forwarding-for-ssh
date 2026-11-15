@@ -90,3 +90,26 @@ test('notification progress titles never contain unbounded paths or names', asyn
   }
   assert.deepEqual(violations, []);
 });
+
+test('every native long-running progress window offers cancellation', async () => {
+  const entries = await readdir(sourceRoot, { recursive: true });
+  const violations: string[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith('.ts')) continue;
+    const source = await readFile(path.join(sourceRoot, entry), 'utf8');
+    const syntax = ts.createSourceFile(entry, source, ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'withProgress') {
+        const options = node.arguments[0];
+        const cancellation = ts.isObjectLiteralExpression(options) && options.properties.find(property =>
+          ts.isPropertyAssignment(property) && property.name.getText(syntax) === 'cancellable');
+        if (!cancellation || !ts.isPropertyAssignment(cancellation) || cancellation.initializer.kind !== ts.SyntaxKind.TrueKeyword) {
+          violations.push(`${entry}:${syntax.getLineAndCharacterOfPosition(node.getStart()).line + 1}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(syntax);
+  }
+  assert.deepEqual(violations, []);
+});

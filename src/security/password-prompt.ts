@@ -4,7 +4,8 @@ import * as vscode from 'vscode';
 export interface PasswordAnswer { password: string; remember: boolean }
 
 /** A password input and a real opt-in checkbox in the same form. */
-export function promptSshPassword(label: string): Promise<PasswordAnswer | undefined> {
+export function promptSshPassword(label: string, token?: vscode.CancellationToken): Promise<PasswordAnswer | undefined> {
+  if (token?.isCancellationRequested) return Promise.resolve(undefined);
   const panel = vscode.window.createWebviewPanel('safs.sshPassword', 'SSH 登录', vscode.ViewColumn.Active, {
     enableScripts: true, localResourceRoots: []
   });
@@ -45,6 +46,8 @@ password.focus();
       panel.dispose();
       resolve(answer);
     };
+    if (token) subscriptions.push(token.onCancellationRequested(() => finish()));
+    if (token?.isCancellationRequested) { finish(); return; }
     subscriptions.push(panel.onDidDispose(() => finish()), panel.webview.onDidReceiveMessage(message => {
       if (message?.type === 'cancel') finish();
       if (message?.type === 'submit' && typeof message.password === 'string' && message.password.length > 0 && typeof message.remember === 'boolean') {
