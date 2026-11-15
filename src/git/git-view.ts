@@ -15,7 +15,7 @@ interface Inspector {
   pushed: Set<string>; pulled: Set<string>;
 }
 
-/** The Tabby Git interface, hosted as one VS Code Source Control webview. */
+/** Remote Git interface hosted in the VS Code Source Control sidebar. */
 export class RemoteGitView implements vscode.WebviewViewProvider, vscode.Disposable {
   private view?: vscode.WebviewView;
   private readonly subscriptions: vscode.Disposable[] = [];
