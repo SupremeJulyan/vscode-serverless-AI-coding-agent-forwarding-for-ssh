@@ -11,12 +11,6 @@ export interface HostConfig {
   vpn?: boolean;
   private_key_path?: string;
   password?: string;
-  auth?: 'auto' | 'password' | 'publickey' | 'agent' | 'keyboard-interactive';
-  agent_socket?: string;
-  proxy_command?: string;
-  jump_host?: string;
-  socks_proxy?: string;
-  http_proxy?: string;
 }
 
 export interface MountConfig {
@@ -190,13 +184,7 @@ export function parseConfig(value: unknown): BridgeConfig {
     return {
       name, ip, user,
       port: host.port, vpn: host.vpn,
-      private_key_path: host.private_key_path, password: host.password,
-      ...Object.fromEntries(['auth', 'agent_socket', 'proxy_command', 'jump_host', 'socks_proxy', 'http_proxy']
-        .filter(key => host[key] !== undefined).map(key => {
-          const value = requireString(host[key], `hosts[${index}].${key}`);
-          if (key === 'auth' && !['auto', 'password', 'publickey', 'agent', 'keyboard-interactive'].includes(value)) throw new Error('Invalid SSH authentication method');
-          return [key, value];
-        }))
+      private_key_path: host.private_key_path, password: host.password
     } as HostConfig;
   });
 
