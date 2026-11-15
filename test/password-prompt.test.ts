@@ -49,3 +49,14 @@ test('closing or cancelling the password form resolves without credentials', asy
     assert.equal(await answer, undefined);
   }
 });
+
+test('cancelling connection progress closes the password form and resolves its wait', async () => {
+  const ui = mockPanel(); const listeners = new Set<() => void>();
+  const token = { isCancellationRequested: false, onCancellationRequested(callback: () => void) {
+    listeners.add(callback); return { dispose() { listeners.delete(callback); } };
+  } };
+  const answer = promptSshPassword('host', token);
+  token.isCancellationRequested = true;
+  for (const listener of listeners) listener();
+  assert.equal(await answer, undefined); assert.equal(ui.disposed(), true); assert.equal(listeners.size, 0);
+});

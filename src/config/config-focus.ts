@@ -1,9 +1,10 @@
+import { parseTree, findNodeAtLocation, getNodeValue } from 'jsonc-parser';
 /**
  * 「打开配置」要定位的位置：配置里的某个条目（主机/挂载共用一个名字），
  * 或账号的密码字段（密码错误提示里点「打开配置」时直接落到那一行）。
  */
 export interface ConfigFocus {
-  kind: 'entry' | 'password';
+  kind: 'entry' | 'password' | 'host';
   name: string;
 }
 
@@ -17,6 +18,16 @@ export interface ConfigFocus {
 export function isConfigFocus(value: unknown): value is ConfigFocus {
   if (!value || typeof value !== 'object') return false;
   const focus = value as { kind?: unknown; name?: unknown };
-  return (focus.kind === 'entry' || focus.kind === 'password')
+  return (focus.kind === 'entry' || focus.kind === 'password' || focus.kind === 'host')
     && typeof focus.name === 'string' && focus.name !== '';
+}
+
+/** Locate the host block itself, including an empty accounts array. */
+export function hostConfigOffset(content: string, ip: string): number | undefined {
+  const root = parseTree(content);
+  if (!root) return undefined;
+  for (const host of findNodeAtLocation(root, ['hosts'])?.children ?? []) {
+    if (getNodeValue(host)?.ip === ip) return host.offset;
+  }
+  return undefined;
 }

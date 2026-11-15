@@ -30,7 +30,7 @@ SAFS lets you browse and edit remote files, use remote terminals, and let AI Cod
 
 Adding a configuration does not ask for a password or key file. When you first open a remote directory or terminal, password authentication shows a password form with a **Remember password** checkbox. Unchecked passwords stay in the current window session only; checked passwords are stored securely by VS Code. Key authentication opens a file picker and saves the selected local private-key path. Configuration files contain no passwords; the private-key path remains in configuration.
 
-Password and key authentication allow at most three attempts, including the first. Retry with a different password or key, or cancel to stop immediately. Right-click an account and select **SAFS: 修改登录凭据** (Edit Login Credentials) to reset its credentials and choose an authentication method; the next connection asks for the password or key. You can add more accounts to an existing host. SAFS does not read SSH config; enter the actual connection details in the extension.
+Password and key authentication allow at most three attempts, including the first. Retry with a different password or key, or cancel to stop immediately. Click the gear beside a host to open its configuration. Saving updates the host list automatically; changed connection settings invalidate the old connection. To reset a password, run **SAFS: 修改登录凭据** (Edit Login Credentials) from the Command Palette; the next connection asks for credentials. You can add more accounts to an existing host. SAFS does not read SSH config; enter the actual connection details in the extension.
 
 ### 2. Open a remote directory or terminal
 

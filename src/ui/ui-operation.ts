@@ -24,3 +24,23 @@ export class UiOperationGate {
     return operation;
   }
 }
+
+/** Check before and after shared preparation; cancelled callers do not start later steps. */
+export async function cancellableStep<T>(token: CancellationToken, action: () => T | PromiseLike<T>): Promise<T> {
+  const cancelled = () => {
+    if (token.isCancellationRequested) {
+      const error = new Error('操作已取消');
+      error.name = 'CancellationError';
+      throw error;
+    }
+  };
+  cancelled();
+  const result = await action();
+  cancelled();
+  return result;
+}
+
+export function isUiCancellation(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'CancellationError' || error.name === 'Canceled'
+    || /^已取消(?:旧版)? SSH |^操作已取消$/.test(error.message));
+}

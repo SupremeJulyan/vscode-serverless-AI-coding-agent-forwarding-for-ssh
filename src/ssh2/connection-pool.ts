@@ -1,6 +1,7 @@
 import { SftpConnectionState, SftpFileStat, SftpSession, SftpWriteOptions } from './session';
 
 interface PoolEntry {
+  revoked?: boolean;
   session?: SftpSession;
   connecting?: Promise<SftpSession>;
   state: SftpConnectionState;
@@ -249,6 +250,10 @@ export class SftpConnectionPool {
     this.stateChanged(hostName);
     entry.connecting = this.connector(hostName, signal).then(
       (session) => {
+        if (entry!.revoked) {
+          void session.close().catch(() => undefined);
+          throw new Error('SSH 配置已更新，请重新打开远程目录或终端');
+        }
         entry!.session = session;
         entry!.connecting = undefined;
         entry!.state = 'connected';
@@ -266,6 +271,16 @@ export class SftpConnectionPool {
       }
     );
     return entry.connecting;
+  }
+
+  /** Config changes revoke even a pending handshake without waiting for it. */
+  reset(hostName: string): void {
+    const entry = this.entries.get(hostName);
+    if (!entry) return;
+    entry.revoked = true;
+    this.entries.delete(hostName);
+    this.stateChanged(hostName);
+    void entry.session?.close().catch(() => undefined);
   }
 
   async disconnect(hostName: string): Promise<void> {

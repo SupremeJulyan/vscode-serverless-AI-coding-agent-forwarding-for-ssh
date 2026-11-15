@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { GitChange, GitRunner, isGitConflict, RemoteGit } from './remote-git';
 import { describeGitOperationError } from './git-error';
+import { untilCancelled } from '../ui/ui-operation';
 import { validatePushUrl } from './local-git-push';
 import { createBranch, GitBranch, listBranches, switchBranch } from './remote-git-branch';
 
@@ -267,18 +268,30 @@ export class RemoteGitScm implements vscode.Disposable {
         const repository = await this.select(source);
         if (!repository) return;
         await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification,
-          title: action === 'fetch' ? 'Git 提取' : action === 'pull' ? 'Git 拉取' : 'Git 推送' },
-          () => this.enqueue(repository, async () => {
+          title: action === 'fetch' ? 'Git 提取' : action === 'pull' ? 'Git 拉取' : 'Git 推送', cancellable: true },
+          async (_progress, token) => {
+            const controller = new AbortController();
+            const abort = () => controller.abort();
+            const cancelled = token.onCancellationRequested(abort);
+            signal?.addEventListener('abort', abort, { once: true });
+            if (signal?.aborted || token.isCancellationRequested) controller.abort();
             try {
-              // 推送、拉取、提取全部经本地 Git 中转（远端不需要出网或凭据）。
-              if (action === 'push') await this.localPush(repository.uri, repository.git, signal, report);
-              else if (action === 'pull') await this.localPull(repository.uri, repository.git, signal, report);
-              else await this.localFetch(repository.uri, repository.git, signal, report);
-              this.historyEmitter.fire();
+              await untilCancelled(token, () => this.enqueue(repository, async () => {
+                if (controller.signal.aborted) return;
+                try {
+                  if (action === 'push') await this.localPush(repository.uri, repository.git, controller.signal, report);
+                  else if (action === 'pull') await this.localPull(repository.uri, repository.git, controller.signal, report);
+                  else await this.localFetch(repository.uri, repository.git, controller.signal, report);
+                  if (!controller.signal.aborted) this.historyEmitter.fire();
+                } finally {
+                  if (!controller.signal.aborted) await this.update(repository).catch(error => this.log(String(error)));
+                }
+              }));
             } finally {
-              await this.update(repository).catch(error => this.log(String(error)));
+              cancelled.dispose();
+              signal?.removeEventListener('abort', abort);
             }
-          }));
+          });
       });
     }
     command('commit', async (source?: GitSource, submittedMessage?: string) => {

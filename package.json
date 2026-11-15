@@ -51,7 +51,7 @@
     "onCommand:safs.cloneGitRepository",
     "onCommand:safs.addHostAccount",
     "onCommand:safs.addHostCredentials",
-    "onCommand:safs.renameHost",
+    "onCommand:safs.openHostConfig",
     "onCommand:safs.installAgentForwarding",
     "onCommand:safs.uninstallAgentForwarding",
     "onCommand:safs.openHistoryItem",
@@ -131,9 +131,9 @@
         "icon": "$(add)"
       },
       {
-        "command": "safs.renameHost",
-        "title": "重命名",
-        "icon": "$(edit)"
+        "command": "safs.openHostConfig",
+        "title": "打开主机配置",
+        "icon": "$(gear)"
       },
       {
         "command": "safs.testLocalProxy",
@@ -439,7 +439,7 @@
           "group": "inline@1"
         },
         {
-          "command": "safs.renameHost",
+          "command": "safs.openHostConfig",
           "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
           "group": "inline@5"
         },
@@ -447,11 +447,6 @@
           "command": "safs.deleteHostGroup",
           "when": "view == safs.mounts && safs.hierarchicalView && viewItem =~ /safs\\.host/",
           "group": "inline@6"
-        },
-        {
-          "command": "safs.openConfig",
-          "when": "view == safs.mounts && viewItem =~ /safs\\./",
-          "group": "safs@1"
         },
         {
           "command": "safs.restartAgentForwardItem",
@@ -497,11 +492,6 @@
           "command": "safs.deleteHistoryItem",
           "when": "view == safs.mounts && viewItem =~ /safs\\.history/",
           "group": "inline@3"
-        },
-        {
-          "command": "safs.editHostCredentials",
-          "when": "view == safs.mounts && viewItem =~ /safs\\.connection|safs\\.user/",
-          "group": "safs@2"
         }
       ],
       "explorer/context": [

@@ -535,7 +535,7 @@ export function hostVerifierFor(
       const action = hostKeyChangedAction();
       if (action === 'reject') {
         void vscode.window.showErrorMessage(
-          `主机"${host.name}"的 SSH 主机密钥未受信任，已拒绝连接。`, { modal: true }
+          `主机"${host.name}"的 SSH 主机密钥未受信任，已拒绝连接。`
         );
         callback(false);
         return;

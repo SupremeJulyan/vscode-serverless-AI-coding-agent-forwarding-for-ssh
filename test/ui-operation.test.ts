@@ -55,3 +55,25 @@ test('duplicate UI requests share one result and failures allow a direct retry',
   await assert.rejects(gate.run('directory', async () => { throw new Error('failed'); }), /failed/);
   assert.equal(await gate.run('directory', async () => 'retried'), 'retried');
 });
+
+test('cancelled shared preparation releases its gate and never starts later steps', async () => {
+  const { cancellableStep } = await import('../src/ui/ui-operation');
+  const state = cancellation(); const gate = new UiOperationGate();
+  let finish!: () => void; let committed = false;
+  const preparation = new Promise<void>(resolve => { finish = resolve; });
+  const flow = gate.run('prepare', () => untilCancelled(state.token, async () => {
+    await cancellableStep(state.token, () => preparation);
+    committed = true;
+  }));
+  await Promise.resolve(); await Promise.resolve(); state.cancel();
+  assert.equal(await flow, undefined);
+  assert.equal(await gate.run('prepare', async () => 'retry'), 'retry');
+  finish(); await new Promise(resolve => setImmediate(resolve)); assert.equal(committed, false);
+});
+
+test('cancellation checkpoints never start an already-cancelled action', async () => {
+  const { cancellableStep, isUiCancellation } = await import('../src/ui/ui-operation');
+  const state = cancellation(); state.cancel(); let called = false;
+  await assert.rejects(cancellableStep(state.token, async () => { called = true; }), isUiCancellation);
+  assert.equal(called, false);
+});

@@ -293,3 +293,18 @@ test('does not replay a mutation whose remote outcome is uncertain', async () =>
   assert.equal(connections, 2);
   await pool.close();
 });
+
+test('changing configuration releases a pending connection slot and rejects its late old session', async () => {
+  let complete!: (session: SftpSession) => void; let calls = 0; let oldClosed = false;
+  const pool = new SftpConnectionPool(async name => {
+    if (++calls === 1) return new Promise(resolve => { complete = resolve; });
+    return fakeSession(name, () => {});
+  });
+  const old = pool.get('dev');
+  const rejected = assert.rejects(old, /配置已更新/);
+  pool.reset('dev');
+  await pool.get('dev'); assert.equal(calls, 2);
+  complete(fakeSession('dev', () => { oldClosed = true; }));
+  await rejected; assert.equal(oldClosed, true); assert.equal(pool.state('dev'), 'connected');
+  await pool.close();
+});
