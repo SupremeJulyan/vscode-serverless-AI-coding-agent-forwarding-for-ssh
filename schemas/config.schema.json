@@ -178,37 +178,6 @@
         "password": {
           "type": "string",
           "description": "SSH 密码；使用私钥时无需填写，避免提交到版本库。"
-        },
-        "auth": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "password",
-            "publickey",
-            "agent",
-            "keyboard-interactive"
-          ],
-          "description": "SSH 认证方式；默认自动选择。手动配置仅在显式选择 agent 或配置 agent_socket 时使用 SSH agent。"
-        },
-        "agent_socket": {
-          "type": "string",
-          "description": "显式 SSH agent Unix socket 或 Windows named pipe。"
-        },
-        "proxy_command": {
-          "type": "string",
-          "description": "代理可执行文件及参数；shell 运算符须封装在脚本中。"
-        },
-        "jump_host": {
-          "type": "string",
-          "description": "SAFS 中配置的跳板机连接名（可用 user@host:port，多跳以逗号分隔）。"
-        },
-        "socks_proxy": {
-          "type": "string",
-          "description": "SOCKS 代理 host:port。"
-        },
-        "http_proxy": {
-          "type": "string",
-          "description": "HTTP CONNECT 代理 host:port。"
         }
       },
       "additionalProperties": false
@@ -267,37 +236,6 @@
             },
             "additionalProperties": false
           }
-        },
-        "auth": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "password",
-            "publickey",
-            "agent",
-            "keyboard-interactive"
-          ],
-          "description": "SSH 认证方式；默认自动选择。手动配置仅在显式选择 agent 或配置 agent_socket 时使用 SSH agent。"
-        },
-        "agent_socket": {
-          "type": "string",
-          "description": "显式 SSH agent Unix socket 或 Windows named pipe。"
-        },
-        "proxy_command": {
-          "type": "string",
-          "description": "代理可执行文件及参数；shell 运算符须封装在脚本中。"
-        },
-        "jump_host": {
-          "type": "string",
-          "description": "SAFS 中配置的跳板机连接名（可用 user@host:port，多跳以逗号分隔）。"
-        },
-        "socks_proxy": {
-          "type": "string",
-          "description": "SOCKS 代理 host:port。"
-        },
-        "http_proxy": {
-          "type": "string",
-          "description": "HTTP CONNECT 代理 host:port。"
         }
       },
       "additionalProperties": false

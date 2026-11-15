@@ -32,7 +32,6 @@ src/
 | 连接配置模型与保存 | [config/config.ts](src/config/config.ts) |
 | SSH2 命令与终端 | [ssh2/ssh2.ts](src/ssh2/ssh2.ts)、[ssh2/terminal.ts](src/ssh2/terminal.ts) |
 | 终端与文件浏览器 SSH 连接复用 | [ssh2/shared-connection.ts](src/ssh2/shared-connection.ts) |
-| SSH sudo 交互 | [ssh2/sudo.ts](src/ssh2/sudo.ts) |
 | SFTP 文件操作 | [ssh2/sftp-client.ts](src/ssh2/sftp-client.ts) |
 | 资源管理器文件系统 | [ssh2/filesystem-provider.ts](src/ssh2/filesystem-provider.ts) |
 | Agent 请求转发与窗口后端 | [agent/agent-http-router.ts](src/agent/agent-http-router.ts)、[agent/agent-backend.ts](src/agent/agent-backend.ts) |
