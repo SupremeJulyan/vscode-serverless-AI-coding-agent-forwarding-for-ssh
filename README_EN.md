@@ -4,156 +4,76 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-SAFS lets you browse and edit remote files in VS Code over SFTP and use a remote terminal over SSH, without installing VS Code Server on the server. After Agent Forwarding is enabled, AI Coding Agents such as Copilot, Codex, and Claude Code can also read and write files, search code, and run commands in the current remote workspace.
+SAFS lets you browse and edit remote files, use remote terminals, and let AI Coding Agents work on remote projects in VS Code. The server needs neither VS Code Server nor an Agent installed.
 
 ![SAFS demo](images/safs-demo.gif)
 
-## When to use SAFS
+## Features
 
-- VS Code Server cannot or should not be installed on the server.
-- You are working with an intranet, VPN, jump host, or environment where port forwarding is prohibited.
-- You want an Agent to work on remote code without installing an Agent on the server.
-- You need to sync a remote directory locally so you can keep using Git, language servers, build tools, and debuggers.
+- **Remote editing**: browse, search, open, save, create, rename, and delete remote files and directories.
+- **Remote terminals**: run commands in remote directories and open files from terminal paths.
+- **Agent forwarding**: let Agents such as Copilot, Codex, and Claude Code use SAFS CLI to read, search, and edit remote files, transfer files, and run commands.
+- **Agent activity**: view operation history and execution status, with type and status filters.
+- **File transfers**: upload and download files and directories with progress and cancellation; resume large transfers.
+- **Two-way sync**: download a remote directory or upload a local directory and keep both copies synchronized.
+- **Remote Git**: view changes, diffs, history, and branches; stage, unstage, discard, commit, fetch, fast-forward pull, and push; initialize and clone repositories.
+- **Connection management**: manage multiple hosts and accounts, and reopen remote directories or terminals from history.
 
 ## Quick start
 
 ### 1. Add a host account
 
-1. Install and enable the SAFS extension.
-2. Click the **SAFS** icon in the Activity Bar.
-3. Click **+** in the Remote Folders view and enter the host name, address, port, and account credentials in one flow.
-4. Click **+** beside an existing host to add another account.
-5. On the first connection, verify and accept the server's host-key fingerprint.
+1. Install and enable SAFS.
+2. Click **SAFS** in the Activity Bar.
+3. Click **+** in the Remote Folders view and enter the host name, address, port, and credentials.
+4. On first connection, verify and accept the server's host-key fingerprint.
 
-SSH terminals, commands and SFTP all use `ssh2`; SAFS never launches the system `ssh` command as a connection fallback. It uses only the host address, port and account saved in SAFS configuration. It does not import or read `~/.ssh/config`, or automatically use an SSH agent. Explicitly configure `auth: "agent"` or `agent_socket` to use an agent. An address that happens to match an SSH config alias is still connected as the address you entered, without applying SSH config rules. If a server has no usable SFTP subsystem, file operations use SAFS's SCP adapter over the same `ssh2` connection.
+Password and private-key login are supported. You can add more accounts to an existing host. SAFS does not read SSH config; enter the actual connection details in the extension.
 
-Account options include `auth` (auto/password/publickey/agent/keyboard-interactive), `agent_socket`, `proxy_command`, `jump_host`, `socks_proxy` and `http_proxy`. Jump hosts should reference accounts configured in SAFS; separate multiple hops with commas. When a sudo prompt matches the login user, press Enter to paste the saved password, or type something else to cancel. Disable with `safs.autoSudoPassword`. Terminal sudo does not elevate SFTP.
+### 2. Open a remote directory or terminal
 
-### 2. Open and edit a remote directory
+Click **Open Remote Folder** beside a connection and select a directory. You can then browse and edit remote files in VS Code.
 
-Click **Open Remote Folder** beside a connection in the SAFS view, or run `SAFS: Open Remote Folder`. After you select a directory, SAFS opens it in a new window as a `safs://` virtual workspace.
+Click **Open Remote Terminal** to run remote commands. The terminal opens in the active file's directory, or at the workspace root when no file is active. Ctrl+click a terminal file path to open it; use Cmd+click on macOS.
 
-You can then browse, open, save, create, rename, and delete files just as you would in a local project. SAFS remembers recently opened directories for each connection under its host name; expand the connection to reopen one from its history.
+### 3. Use Agent forwarding
 
-The remote terminal opens in the directory of the active file by default, or at the workspace root when there is no active file. Ctrl+click a file path in the terminal to open it directly; use Cmd+click on macOS.
+Opening a SAFS remote workspace or terminal automatically prepares Agent forwarding. The default CLI mode requires local **Node.js 18+**. Follow the prompts to install SAFS CLI and its Skill.
 
-The first time you open the configured remote home from a parent connection node, SAFS shows the two platform-specific shortcuts for opening a remote folder and terminal. It does not repeat this hint later.
+After installing Node.js, fully quit all VS Code windows and reopen VS Code. Run `safs --version` to check installation, then enter `/safs-cli` in your Agent and follow the instructions to select a remote workspace.
 
-### 3. Let an Agent operate the remote workspace
+Use **Agent Activity** to inspect operations and the current target. When multiple SAFS windows are open, check that your Agent selects the intended workspace. Use **Restart Agent Forwarding** when recovery is needed.
 
-**CLI mode** is the default and requires local **Node.js 18+**. The extension installs the global `safs` command and Skill. If Node.js is missing, the dialog offers an [installation link](https://nodejs.org/zh-cn).
-
-After installing Node.js, fully quit all VS Code windows and reopen VS Code so it picks up the updated PATH; reloading the window is insufficient. Run `safs --version` to check installation, then enter `/safs-cli` in your Agent and select a remote workspace.
-
-The CLI communicates over Unix sockets or Windows named pipes, without listening on local TCP ports. The extension creates `.awm/workspace.json` in each Agent local working directory. The CLI reads the marker in cwd only, without searching parent directories. Expired IDs refresh only after unique active-placeholder matching. Missing markers or failed/ambiguous matches require `--id ID`. Explicit IDs take priority without modifying the marker; Agents must run `safs` in their current local working directory without `cd` or cwd/workdir overrides; for other workspaces, stay in cwd and specify an ID on each command.
-
-Once enabled, the Agent can operate within the current remote workspace:
-
-- list, read, search, create, and precisely edit remote files;
-- move and delete files, change permissions, and upload or download files;
-- run commands in the current remote directory and retrieve long output in chunks;
-- identify the remote file currently open in VS Code;
-- explicitly choose a target workspace when multiple SAFS windows are open.
-
-#### View Agent activity
-
-Open **Agent Activity** in the SAFS Activity Bar to see CLI operations that are
-actually executed by the current remote window. The status animation shows running,
-successful, and failed operations. The timeline keeps the newest operation first and can be
-filtered by operation type and status. Consecutive reads, directory listings, and searches
-are grouped automatically.
-
-The panel shows only the active **Workspace Mode** or **Terminal Mode**.
-Opening a remote directory uses Workspace Mode; opening an SAFS remote terminal without a remote
-directory uses Terminal Mode. SAFS reads the terminal's actual directory and publishes it as the
-Agent `workspaceRoot`. Commands inherit the terminal's current user privileges and exported
-environment; the bound terminal and directory are shown below the status.
-Use **Switch Workspace** to select and open a remote directory in the current window; cancelling
-the picker leaves the current mode unchanged.
-
-To stop forwarding, click **Disable Agent Forwarding**. If CLI was installed manually through a prompt or URL, run `SAFS: Uninstall Agent Forwarding for My Agent`.
-
-## File transfer and local sync
+## File transfers and sync
 
 Right-click a file or directory in the Explorer:
 
-- **SAFS: Visual Download** downloads a remote file or directory locally, with recursive transfer, progress, and cancellation.
-- **SAFS: Visual Upload** uploads a local file or directory to a selected connection without requiring an open remote workspace.
-- **SAFS: Sync to Local** (on a remote directory) is "visual download, then two-way sync": pick the local parent folder, download the whole tree into `<chosen folder>/<remote directory name>` as the initial baseline, and keep syncing incrementally in both directions. The synced directory is recorded in the SAFS view's history list, where the inline button starts the sync when idle and stops it while syncing.
-- **SAFS: Visual Sync** (on a local folder) is "visual upload, then two-way sync": pick the remote mount and directory, upload the whole local folder into `<chosen directory>/<local directory name>`, and start two-way sync from the freshly uploaded remote state (nothing is downloaded back a second time, but remote-only content is still pulled down). After synchronization succeeds, the local directory opens automatically in a new window. The remote directory is also added to history with its sync button showing that synchronization is enabled; you can stop it at any time.
+- **SAFS: Visual Download** downloads remote files or directories locally.
+- **SAFS: Visual Upload** uploads local files or directories.
+- **SAFS: Sync to Local** downloads a remote directory and starts two-way sync.
+- **SAFS: Visual Sync** uploads a local directory and starts two-way sync.
 
-### Resuming large transfers
+Synced directories appear in SAFS history. Use the entry's button to start or stop synchronization.
 
-When an upload or download of a large file (1 MiB or more) is interrupted, transferring the same file again **continues from where it stopped** instead of starting over. The progress notification shows the bytes already present and marks the transfer as resumed.
+After a large transfer is interrupted, transferring the same file again can resume it. Transfers restart in full if the source changes or the connection does not support resuming.
 
-- No `rsync` and nothing installed on the remote host: SFTP read and write packets carry a byte offset, and SAFS uses it for positioned I/O. Only the `scp` fallback channel (used when a gateway has no SFTP subsystem) has to restart from zero.
-- Interrupted transfers keep their partial file next to the target (remote `.<name>.safs-part-<hash>` for uploads, local `<name>.safs-part-<hash>` for downloads) and rename it into place on success.
-- **A changed source is never resumed**: the partial's name encodes the source file's size and mtime, and SAFS compares SHA-256 hashes of the source prefix and partial immediately before resuming. Any metadata or content mismatch deletes the partial and automatically restarts the complete transfer, so bytes from two versions are never concatenated into a file that merely looks fine.
-- Partials below 1 MiB are not kept, and partials older than 7 days are cleaned up during the next transfer.
+## Remote Git
 
-## Remote Git source control
+Open a remote directory, then use **SAFS Git** in VS Code's **Source Control** sidebar.
 
-Open a remote directory with SAFS, then expand **SAFS Git** in VS Code's **Source Control** sidebar. Its webview follows the Tabby plugin's repository header, path, branch/sync status, History/Branches tabs, commit badges, relay controls, commit editor and change groups. Expand commits for file diffs, right-click a commit to copy its ID, and stage/unstage/discard individual or grouped changes. Inline forms initialize or clone repositories. Discovery includes nested repositories and worktrees. Cloning transfers a Git bundle and checks out on the SSH host to preserve symbolic links and executable modes. Fetch, fast-forward pull and push use local networking and credentials; scans and relay operations support cancellation. Workspace synchronization and Agent forwarding are not required.
+View repository status, diffs, history, and branches; stage, unstage, or discard individual or grouped changes; commit, fetch, fast-forward pull, and push. Initialize or clone a repository when needed.
 
-## Common settings
+Saving a file or returning focus to the window refreshes known repositories. Use manual refresh to discover repositories or update full status. Remote Git does not require local sync or Agent forwarding.
 
-Search for `SAFS` in VS Code Settings:
+## Settings
 
-| Setting | Default | Purpose |
-|---|---:|---|
-| `safs.terminalFollowsActiveFile` | `false` | Automatically `cd` an open remote terminal when the active file changes |
-| `safs.terminalAutoReconnect` | `true` | Reconnect a remote terminal after an unexpected exit, with bounded backoff retries for transient network errors |
-| `safs.agentBackendToolProfile` | `full` | Change to `core` to reduce the Agent context used by tool definitions |
-| `safs.agentBackendTimeoutMs` | `120000` | Timeout for Agent commands, searches, and transfers; `0` disables it |
-| `safs.sftp.watchInterval` | `5` | Polling interval for remote file changes, in seconds |
-| `safs.hostKeyChangedAction` | `prompt` | Prompt, reject, or accept when a host key changes |
-| `safs.highRiskCommandAction` | `deny` | Reject or allow Agent commands that match high-risk rules |
-
-See the SAFS page in VS Code Settings for additional advanced options.
-
-## How it works
-
-SAFS establishes SSH/SFTP connections inside the local VS Code extension process and maps a remote directory to a `safs://` virtual file system. Browsing and editing use SFTP, while terminals and Agent commands run over SSH. The server therefore needs neither VS Code Server nor an Agent.
-
-SAFS provides CLI interfaces so Agents can safely and efficiently access the extension's file operations and remote command capabilities. Both interfaces use the extension's managed connections, workspace boundaries, and safety checks. Structured file operations, batch requests, and paginated output reduce repeated connections and unnecessary data transfer.
-
-With Agent Forwarding enabled, every remote window starts an CLI service accessible only from the local machine. Multiple windows share a stable local routing endpoint. Each routed operation carries an explicit `workspaceId`, so the router can select the exact window and never fall back to focus or a matching remote path.
-
-Structured writes are restricted to the current remote workspace. An SSH command matching a high-risk rule is denied by default and recorded in a redacted audit log. SSH commands are not a sandbox, however: an allowed command still has all permissions of the login account. Use a non-root, least-privilege account and disable passwordless privilege escalation.
+Search for `SAFS` in VS Code Settings to configure terminal directory following, automatic terminal reconnection, operation timeouts, remote file checking intervals, and handling of host keys and high-risk commands.
 
 ## Limitations
 
-- Local command-line tools and extensions that only support `file://` cannot access `safs://` directly; use two-way sync when needed.
-- SFTP has no native file-change notification, so SAFS polls for remote changes.
-- The SAFS CLI used for Agent Forwarding requires the local VS Code instance to remain running with forwarding enabled for the relevant mount.
-- SFTP is preferred; when unavailable, SAFS uses its SCP adapter over the same `ssh2` connection and does not invoke system SSH/SFTP commands.
-- CLI tools can constrain structured file operations, but they cannot intercept other local tools invoked directly by the Agent.
+- Local command-line tools and some extensions cannot use the remote workspace directly. Sync locally when local language services, builds, or debugging are needed.
+- Agent forwarding requires local VS Code to remain running with the relevant remote workspace or terminal open.
+- Remote file changes may appear after an automatic check or manual refresh.
+- Agent commands run with the remote login account's permissions. Check the target account and directory.
 
-## SAFS vs. a passwordless SSH alias
-
-Another common way to operate a remote host without an Agent service is to configure a host alias and key in `~/.ssh/config`, then let the Agent run `ssh dev 'command'` directly. Neither approach installs an Agent remotely, but they serve different priorities.
-
-| Category | SAFS | Passwordless SSH alias |
-|---|---|---|
-| Setup | Add a connection and enable forwarding in one extension | Configure keys, `authorized_keys`, an alias, and teach the Agent how to use them |
-| Browsing and editing | Remote file tree, editor integration, directory history, and active-file awareness | No file tree; relies on `ssh`, `scp`, `rsync`, or shell commands |
-| Agent tools | Structured tools for reading, searching, precise edits, transfers, and commands | Mostly free-form shell: flexible, but more dependent on correct Agent parsing and edits |
-| Workspace targeting | Binds to the current SAFS window and directory; explicit switching across windows | The alias identifies only a host; every command must maintain its own working directory |
-| Write boundaries | Structured writes stay within the workspace, with separate high-risk command rules | Has all permissions of the SSH account by default, with no additional workspace boundary |
-| Security controls | Host-key confirmation, local CLI token, high-risk command blocking, and redacted logs | Full OpenSSH capabilities; security depends on key, account, and server permission design |
-| File transfer | Built-in visual upload, download, and two-way sync | Mature, portable `scp`/`rsync` workflows suit scripts and bulk transfers |
-| Compatibility | Supports passwords, keys, interactive auth, jumps and proxies; requires SFTP | Works wherever OpenSSH connects; special networks and interactive auth require custom setup |
-| Dependencies | Requires VS Code and SAFS to stay running; the Agent needs SAFS CLI support | Requires only an SSH client and key, with fewer editor or Agent requirements |
-| Best suited for | Interactive development with safer Agent access to the current project | Existing SSH operations, CI scripts, and tool-independent automation |
-
-Recommendations:
-
-- Choose **SAFS** when you need a file tree, editor integration, sync, and an Agent explicitly bound to the current workspace.
-- A **passwordless SSH alias** is simpler when you already have a mature SSH key and permission setup and only need to run commands or existing scripts.
-- They can be combined: use SAFS for daily editing and Agent file operations, and SSH/rsync for reviewed operations scripts or bulk transfers.
-
-Native prebuilds cover Windows/macOS x64 and arm64, plus Linux glibc x64, arm64 and arm. WSL uses the Linux binding.
-
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for upstream attribution and licenses.
-
-[Source architecture and module layout](ARCHITECTURE.md)
+[Source architecture and module layout](ARCHITECTURE.md) · [Third-party licenses](THIRD_PARTY_NOTICES.md)
