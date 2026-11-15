@@ -12,9 +12,10 @@ src/
 ├── cli/          CLI 帮助、安装、连接配置与 Skill 集成
 ├── config/       主机配置、账号、别名与校验
 ├── git/          远程 Git、SCM、历史记录与本地中转推拉
+├── patches/      旧版配置密码与 Agent 会话路径迁移
 ├── platform/     平台检测、进程执行、代理诊断与 WSL 文件支持
 ├── remote/       远程读写、批量读取、搜索、结果分页与目录操作
-├── security/     主机密钥、密码加密、命令策略与日志脱敏
+├── security/     主机密钥、登录凭据、命令策略与日志脱敏
 ├── shared/       批处理、队列、性能记录与 shell 引号工具
 ├── ssh2/         SSH 连接共享、终端、SFTP、SCP 与文件系统提供器
 ├── sync/         双向同步、差异扫描、回声抑制与跨窗口协调
@@ -29,6 +30,7 @@ src/
 | --- | --- |
 | 扩展激活、命令注册、工作区装配 | [extension.ts](src/extension.ts) |
 | CLI 参数与请求发送 | [safs-cli.ts](src/safs-cli.ts) |
+| ≤2.1.7 密码迁移与主口令清理 | [patches/ssh-passwords.ts](src/patches/ssh-passwords.ts)、[patches/legacy-password.ts](src/patches/legacy-password.ts) |
 | 连接配置模型与保存 | [config/config.ts](src/config/config.ts) |
 | SSH2 命令与终端 | [ssh2/ssh2.ts](src/ssh2/ssh2.ts)、[ssh2/terminal.ts](src/ssh2/terminal.ts) |
 | 终端与文件浏览器 SSH 连接复用 | [ssh2/shared-connection.ts](src/ssh2/shared-connection.ts) |

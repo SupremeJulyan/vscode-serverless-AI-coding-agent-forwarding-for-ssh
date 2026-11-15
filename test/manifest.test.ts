@@ -127,7 +127,7 @@ test('remote directory commands can select a connection from a local or empty wi
   ));
 });
 
-test('new configuration collects host, port and credentials in one flow', async () => {
+test('new configuration collects host and authentication method without credentials', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
@@ -138,9 +138,12 @@ test('new configuration collects host, port and credentials in one flow', async 
   const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const start = source.indexOf('async function addRemoteDirectoryConfig(');
   const body = source.slice(start, source.indexOf('\nasync function addHostCredentials', start));
-  for (const prompt of ["prompt: '主机名'", "prompt: 'IP 地址或主机名'", "prompt: '端口'", "prompt: '账号'", "prompt: '密码（留空则使用私钥）'"]) {
+  for (const prompt of ["prompt: '主机名'", "prompt: 'IP 地址或主机名'", "prompt: '端口'", "prompt: '账号'"]) {
     assert.ok(body.includes(prompt), prompt);
   }
+  assert.ok(body.includes('selectAuthentication(title)'));
+  assert.ok(!body.includes('password: true'));
+  assert.ok(!body.includes('selectPrivateKey('));
 });
 
 test('declares every command referenced by a menu contribution', async () => {

@@ -30,6 +30,8 @@ test('saves a configuration that can be loaded as JSON', async () => {
 
   await saveConfig(configPath, config);
   const saved = JSON.parse(await readFile(configPath, 'utf8'));
+  assert.equal(saved.encrypt_passwords, undefined);
+  assert.equal(saved.hosts[0].accounts[0].password, undefined);
   assert.equal(saved.hosts[0].ip, '10.0.0.2');
   assert.equal(saved.hosts[0].accounts[0].user, 'alice');
   assert.equal(saved.hosts[0].accounts[0].directories, undefined);
@@ -95,13 +97,13 @@ test('normalizes legacy remote terminal modes to open', () => {
   assert.equal(config.mounts[0].remote_terminal, 'open');
 });
 
-test('defaults encrypt_passwords to true when the legacy field is absent', () => {
+test('ignores the retired encrypt_passwords flag', () => {
   const config = parseConfig({
     hosts: [{ name: 'dev', ip: 'host', user: 'alice' }],
     mounts: [{ name: 'project', host: 'dev', remote_path: '/srv/project' }]
   });
-  assert.equal(config.encrypt_passwords, true);
-  assert.equal(parseConfig({ encrypt_passwords: false, hosts: [], mounts: [] }).encrypt_passwords, false);
+  assert.equal('encrypt_passwords' in config, false);
+  assert.equal('encrypt_passwords' in parseConfig({ encrypt_passwords: false, hosts: [], mounts: [] }), false);
 });
 
 test('allows a host to be created before its login credentials are added', () => {
@@ -145,8 +147,8 @@ test('creates a minimal config template without overwriting an existing config',
   assert.equal(await ensureConfigFile(configPath), configPath);
   const created = JSON.parse(await readFile(configPath, 'utf8'));
   assert.deepEqual(created.hosts, []);
-  assert.equal(created.encrypt_passwords, true);
-  assert.deepEqual(Object.keys(created).sort(), ['encrypt_passwords', 'hosts']);
+  assert.equal(created.encrypt_passwords, undefined);
+  assert.deepEqual(Object.keys(created).sort(), ['hosts']);
   const parsed = parseConfig(created);
   assert.deepEqual(parsed.hosts, []);
   assert.deepEqual(parsed.mounts, []);
@@ -156,13 +158,12 @@ test('creates a minimal config template without overwriting an existing config',
   assert.equal(await readFile(configPath, 'utf8'), '{"hosts":["keep-me"]}\n');
 });
 
-test('hierarchical config groups accounts and preserves credentials, paths and connection identifiers', async () => {
+test('hierarchical config preserves authentication, key paths and connection identifiers', async () => {
   const config = parseConfig({ hosts: [{ name: '构建机', ip: '10.0.0.1', accounts: [
-    { name: 'legacy-alice', user: 'alice', password: 'encrypted-value', directories: ['/srv/a', '/srv/b'] },
+    { name: 'legacy-alice', user: 'alice', auth: 'password', directories: ['/srv/a', '/srv/b'] },
     { name: 'legacy-bob', user: 'bob', port: 2222, private_key_path: '~/.ssh/key', directories: ['/srv/c'] }
   ] }] });
   assert.deepEqual(config.host_aliases, { '10.0.0.1': '构建机' });
-  assert.equal(config.hosts[0].password, 'encrypted-value');
   assert.equal('directories' in config.hosts[0], false);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-hierarchical-'));
   const configPath = path.join(directory, 'config.json');
@@ -175,7 +176,9 @@ test('hierarchical config groups accounts and preserves credentials, paths and c
   const reloaded = parseConfig(saved);
   assert.equal(reloaded.hosts[0].name, '构建机(alice)');
   assert.equal(reloaded.hosts[1].name, '构建机(bob)');
-  assert.equal(reloaded.hosts[0].password, config.hosts[0].password);
+  assert.equal(reloaded.hosts[0].password, undefined);
+  assert.equal(saved.hosts[0].accounts[0].password, undefined);
+  assert.equal(reloaded.hosts[1].private_key_path, '~/.ssh/key');
   assert.equal(reloaded.hosts[1].port, 2222);
 });
 
@@ -183,7 +186,7 @@ test('loading legacy config migrates it automatically and keeps a backup', async
   const { loadConfig } = await import('../src/config/config');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-migrate-'));
   const configPath = path.join(directory, 'config.json');
-  const legacy = JSON.stringify({ hosts: [{ name: 'old', ip: '10.0.0.1', user: 'alice', password: 'secret' }],
+  const legacy = JSON.stringify({ hosts: [{ name: 'old', ip: '10.0.0.1', user: 'alice' }],
     mounts: [{ name: 'repo', host: 'old', remote_path: '/srv/repo' }] });
   await writeFile(configPath, legacy);
   const config = await loadConfig(configPath);
@@ -254,4 +257,32 @@ test('deleting one account leaves sibling accounts without a placeholder', () =>
   }] });
   removeAccountConfig(config, config.mounts[0].name);
   assert.deepEqual(config.hosts.map(host => host.user), ['bob']);
+});
+
+test('saving an unmigrated password is rejected without touching the original configuration', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-secret-failure-'));
+  const file = path.join(directory, 'config.json');
+  const original = JSON.stringify({ hosts: [{ ip: 'example.com', user: 'alice', password: 'legacy-secret' }] });
+  await writeFile(file, original);
+  await assert.rejects(saveConfig(file, parseConfig(JSON.parse(original))), /未迁移/);
+  assert.equal(await readFile(file, 'utf8'), original);
+});
+
+test('authentication choice survives saving without a password and key paths remain configurable', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'safs-auth-choice-'));
+  const file = path.join(directory, 'config.json');
+  const config = parseConfig({ hosts: [{ name: 'dev', ip: 'example.com', accounts: [
+    { user: 'alice', auth: 'password' }, { user: 'bob', auth: 'publickey', private_key_path: '/keys/bob' }
+  ] }] });
+  await saveConfig(file, config);
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(saved.hosts[0].accounts[0].auth, 'password');
+  assert.equal(saved.hosts[0].accounts[1].auth, 'publickey');
+  assert.equal(saved.hosts[0].accounts[1].private_key_path, '/keys/bob');
+  for (const account of saved.hosts[0].accounts) assert.equal('password' in account, false);
+  const schema = JSON.parse(await readFile(new URL('../schemas/config.schema.json', import.meta.url), 'utf8'));
+  for (const definition of ['account', 'legacyHost']) {
+    assert.equal('password' in schema.definitions[definition].properties, false);
+    assert.equal('private_key_path' in schema.definitions[definition].properties, true);
+  }
 });

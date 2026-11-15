@@ -40,14 +40,17 @@ import { createReadStream } from 'node:fs';
 import * as vscode from 'vscode';
 import {
   BridgeConfig, deriveMounts, ensureConfigFile, expandHome, HostConfig, loadConfig, MountConfig,
-  parseSshLogin, removeAccountConfig, removeMountConfig, resolveMount, saveConfig
+  parseSshLogin, removeAccountConfig, removeMountConfig, resolveMount, saveConfig, setConfigReadPatch
 } from './config/config';
 import {
   hierarchicalHostName, mountAliasCandidates, mountConnectionLabel, mountNameFor
 } from './config/mount-aliases';
 import { ConfigFocus, isConfigFocus } from './config/config-focus';
 import { accountTargetIndex } from './config/host-accounts';
-import { decryptPassword, encryptPassword, isEncryptedPassword } from './security/password';
+import { SshPasswordMigration, needsPasswordMigration } from './patches/ssh-passwords';
+import { hostPasswordKey, resolveHostCredential } from './security/host-credentials';
+import { promptSshPassword } from './security/password-prompt';
+import { setSshCredentialRetry } from './ssh2/shared-connection';
 import { agentHttpRouterPort, createPlatformAdapter, platformExtensionStateKey } from './platform/platform';
 import { executeCaptured, missingExecutableName } from './platform/process';
 import { SshTerminal } from './ssh2/terminal';
@@ -132,7 +135,6 @@ const platformAdapter = createPlatformAdapter();
 const platformStateKey = (name: string): string =>
   platformExtensionStateKey(name, platformAdapter.kind);
 const terminalIdentityEnv = 'SERVERLESS_REMOTE_TERMINAL_ID';
-const masterPasswordSecret = 'safs.masterPassword';
 const agentBackendTokenSecret = platformStateKey('agentBackendToken');
 const agentMcpTokenSecret = platformStateKey('agentMcpToken');
 const aiForwardMountsKey = platformStateKey('aiForwardMounts');
@@ -426,77 +428,35 @@ async function timedPhase<T>(label: string, action: () => Promise<T>): Promise<T
   }
 }
 
-async function promptMasterPassword(
-  context: vscode.ExtensionContext, confirm: boolean, force = false, persist = true
-): Promise<string> {
-  const stored = await context.secrets.get(masterPasswordSecret);
-  if (stored && !force) return stored;
-  const password = await input({
-    title: '配置密码加密',
-    prompt: confirm ? '设置配置加密主口令' : '输入配置加密主口令',
-    placeHolder: '此口令用于加密 SSH 密码，请妥善保存',
-    password: true,
-    validateInput: required('加密主口令')
-  });
-  if (password === undefined) throw new Error('已取消密码加密');
-  if (confirm) {
-    const repeated = await input({
-      title: '配置密码加密', prompt: '再次输入配置加密主口令', password: true,
-      validateInput: required('加密主口令')
-    });
-    if (repeated === undefined) throw new Error('已取消密码加密');
-    if (repeated !== password) throw new Error('两次输入的加密主口令不一致');
-  }
-  if (persist) await context.secrets.store(masterPasswordSecret, password);
-  return password;
-}
-
-async function decryptHostPassword(context: vscode.ExtensionContext, encrypted: string): Promise<string> {
-  const stored = await context.secrets.get(masterPasswordSecret);
-  if (stored) {
-    try {
-      return await decryptPassword(encrypted, stored);
-    } catch {
-      // 单个主机的密文可能已损坏，也可能是主口令已更换。不要删除全局 secret：
-      // 其它主机可能仍能用旧口令解密；这里仅对本次解密重新提示。
-    }
-  }
-  const password = await promptMasterPassword(context, false, true, false);
-  const decrypted = await decryptPassword(encrypted, password);
-  // 新口令成功解密后才更新全局 secret；失败则保持旧 secret 不动。
-  await context.secrets.store(masterPasswordSecret, password);
-  return decrypted;
-}
-
+const sessionPasswords = new Map<string, string>();
+const pendingHostCredentials = new Map<string, Promise<HostConfig>>();
 async function resolveStoredHostPassword(
-  context: vscode.ExtensionContext, config: BridgeConfig, host: HostConfig
+  context: vscode.ExtensionContext, host: HostConfig
 ): Promise<HostConfig> {
-  if (!host.password) return host;
-  if (isEncryptedPassword(host.password)) {
-    return { ...host, password: await decryptHostPassword(context, host.password) };
-  }
-  const plainPassword = host.password;
-  const masterPassword = await promptMasterPassword(context, true);
-  const encrypted = await encryptPassword(plainPassword, masterPassword);
-  const index = config.hosts.findIndex((item) => item.name === host.name);
-  if (index >= 0) config.hosts[index] = { ...host, password: encrypted };
-  config.encrypt_passwords = true;
-  await saveConfig(configPath(), config);
-  return { ...host, password: plainPassword };
+  const key = hostPasswordKey(host);
+  const pending = pendingHostCredentials.get(key);
+  if (pending) return pending;
+  const operation = resolveHostCredential(host, context.secrets, {
+    sessionPasswords,
+    promptPassword: () => promptSshPassword(`${host.user}@${host.ip}:${host.port ?? 22}`),
+    promptPrivateKey: () => selectPrivateKey(host),
+    savePrivateKey: async keyPath => {
+      const config = await readConfig();
+      const current = config.hosts.find(candidate => hostPasswordKey(candidate) === key);
+      if (!current) throw new Error('SSH 账号配置已删除');
+      current.private_key_path = keyPath;
+      await saveConfig(configPath(), config);
+    }
+  });
+  pendingHostCredentials.set(key, operation);
+  try { return await operation; } finally { pendingHostCredentials.delete(key); }
 }
 
-async function resolvedHost(
-  context: vscode.ExtensionContext, hostName: string
-): Promise<HostConfig> {
+async function resolvedHost(context: vscode.ExtensionContext, hostName: string): Promise<HostConfig> {
   const config = await readConfig();
-  const host = config.hosts.find((candidate) => candidate.name === hostName);
+  const host = config.hosts.find(candidate => candidate.name === hostName);
   if (!host) throw new Error(`SSH 主机不存在：${hostName}`);
-  if (!host.password) return { ...host };
-  if (!isEncryptedPassword(host.password)) return { ...host };
-  return {
-    ...host,
-    password: await decryptHostPassword(context, host.password)
-  };
+  return resolveStoredHostPassword(context, host);
 }
 
 async function selectMount(placeHolder: string): Promise<MountConfig | undefined> {
@@ -562,7 +522,7 @@ async function ensureFolder(mount: MountConfig): Promise<RemoteFolder> {
   const config = await readConfig();
   const resolved = resolveMount(config, mount);
   const host = resolved.hostConfig;
-  const endpointKey = JSON.stringify([host.ip.toLowerCase(), host.port ?? 22, host.user, host.private_key_path ?? '']);
+  const endpointKey = JSON.stringify([host.ip.toLowerCase(), host.port ?? 22, host.user, host.auth ?? '', host.private_key_path ?? '']);
   const existing = registry.get(mount.name);
   if (existing && existing.endpointKey === endpointKey) {
     bridgeOutput?.trace(`[SFTP] 复用挂载 ${mount.name}，remoteRoot=${existing.remoteRoot}`);
@@ -2833,9 +2793,13 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
   if (!reopen) return;
   const diagnosticText = await logManagedTerminalExit(terminal, reopen);
   const status = terminal.exitStatus;
-  if (isRemoteDirectoryPermissionDenied(
-    `${reopen.connectionError ?? ''}\n${diagnosticText}`
-  )) {
+  const failureText = `${reopen.connectionError ?? ''}\n${diagnosticText}`;
+  if (/已取消 SSH (?:认证|密码输入|私钥选择)/.test(failureText)) return;
+  if (isSshAuthenticationFailure(failureText)) {
+    void vscode.window.showErrorMessage('SAFS：认证失败，请检查凭据后手动重连。');
+    return;
+  }
+  if (isRemoteDirectoryPermissionDenied(failureText)) {
     await vscode.window.showErrorMessage(
       'SAFS：没有权限访问当前远程目录，确认后将退出远程工作区。',
       { modal: true }
@@ -2865,13 +2829,6 @@ async function suggestReopeningClosedTerminal(terminal: vscode.Terminal): Promis
   const remoteCwd = location && location.mountName === reopen.mount.name
     ? location.remotePath
     : reopen.remoteCwd;
-  if (isSshAuthenticationFailure(diagnosticText)) {
-    const selected = await vscode.window.showErrorMessage(
-      'SAFS：远程终端认证失败，请检查 SSH 配置、账号或密钥。', viewSafsLogAction
-    );
-    if (selected === viewSafsLogAction) bridgeOutput?.show(true);
-    return;
-  }
   if (autoReconnect) {
     const key = `${reopen.mount.name}\0${remoteCwd}`;
     const lifetimeMs = Math.max(0, Date.now() - reopen.startedAt);
@@ -2990,10 +2947,10 @@ async function openTerminal(
   try {
     const resolved = resolveMount(config, mount);
     requireConfiguredHostLogin(resolved.hostConfig);
-    if (resolved.hostConfig.password) {
+    {
       resolved.hostConfig = await timedPhase(
         `${mount.name} 终端凭据准备`,
-        () => resolveStoredHostPassword(context, config, resolved.hostConfig)
+        () => resolveStoredHostPassword(context, resolved.hostConfig)
       );
     }
     let terminal!: vscode.Terminal;
@@ -3127,7 +3084,24 @@ async function input(options: InputOptions): Promise<string | undefined> {
 const required = (label: string) => (value: string): string | undefined =>
   value.trim() ? undefined : `${label}不能为空`;
 
-async function addHostAccount(context: vscode.ExtensionContext): Promise<void> {
+async function selectAuthentication(title: string): Promise<HostConfig['auth']> {
+  const selected = await vscode.window.showQuickPick([
+    { label: '密码', description: '连接时输入密码，可选择记住', auth: 'password' as const },
+    { label: '密钥', description: '连接时选择本地私钥文件', auth: 'publickey' as const }
+  ], { title, placeHolder: '选择 SSH 认证方式', ignoreFocusOut: true });
+  return selected?.auth;
+}
+
+async function selectPrivateKey(host: HostConfig): Promise<string | undefined> {
+  const files = await vscode.window.showOpenDialog({
+    title: `选择 SSH 私钥：${host.user}@${host.ip}`, openLabel: '使用此私钥',
+    canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+    defaultUri: vscode.Uri.file(path.join(os.homedir(), '.ssh'))
+  });
+  return files?.[0]?.fsPath;
+}
+
+async function addHostAccount(): Promise<void> {
   const title = 'Add Host Account';
   await ensureConfigFile(configPath());
   const config = await loadConfig(configPath());
@@ -3150,27 +3124,9 @@ async function addHostAccount(context: vscode.ExtensionContext): Promise<void> {
   if (loginText === undefined) return;
   const login = parseSshLogin(loginText);
   if (!login) throw new Error('SSH 登录地址格式无效');
-  const password = await input({
-    title,
-    prompt: 'SSH 密码（留空则改用私钥）',
-    placeHolder: '输入密码，或留空后按 Enter',
-    password: true
-  });
-  if (password === undefined) return;
-  const encryptedPassword = password
-    ? await encryptPassword(password, await promptMasterPassword(context, true))
-    : undefined;
-  let privateKeyPath: string | undefined;
-  if (!password) {
-    privateKeyPath = await input({
-      title,
-      prompt: 'SSH 私钥路径',
-      value: '~/.ssh/id_ed25519',
-      placeHolder: '例如 ~/.ssh/id_ed25519',
-      validateInput: required('私钥路径')
-    });
-    if (privateKeyPath === undefined) return;
-  }
+  const auth = await selectAuthentication(title);
+  if (!auth) return;
+
   let vpn = false;
   if (platformAdapter.kind === 'wsl') {
     const selectedVpn = await vscode.window.showQuickPick([
@@ -3204,23 +3160,20 @@ async function addHostAccount(context: vscode.ExtensionContext): Promise<void> {
     name: normalizedName,
     ip: login.host,
     user: login.user,
-    port: 22
+    port: 22, auth
   };
   if (platformAdapter.kind === 'wsl') host.vpn = vpn;
-  if (privateKeyPath) host.private_key_path = privateKeyPath.trim();
-  if (encryptedPassword) host.password = encryptedPassword;
   if (existingIndex >= 0) config.hosts[existingIndex] = host;
   else config.hosts.push(host);
 
   config.mounts = deriveMounts(config.hosts);
-  config.encrypt_passwords = true;
   await saveConfig(configPath(), config);
   bridgeOutput?.info(`[配置] 已保存 SFTP 配置 ${normalizedName}`);
   void vscode.window.showInformationMessage('SAFS：SFTP 配置已保存。');
 }
 
 /** 新增一条完整配置；主机节点旁的 + 仍只负责为已有主机追加账号。 */
-async function addRemoteDirectoryConfig(context: vscode.ExtensionContext): Promise<void> {
+async function addRemoteDirectoryConfig(): Promise<void> {
   const title = '新增配置';
   await ensureConfigFile(configPath());
   const config = await loadConfig(configPath());
@@ -3252,24 +3205,8 @@ async function addRemoteDirectoryConfig(context: vscode.ExtensionContext): Promi
     title, prompt: '账号', value: os.userInfo().username, validateInput: required('账号')
   });
   if (user === undefined) return;
-  const password = await input({
-    title, prompt: '密码（留空则使用私钥）',
-    placeHolder: '输入密码，或留空后按 Enter', password: true
-  });
-  if (password === undefined) return;
-  let encryptedPassword: string | undefined;
-  let privateKeyPath: string | undefined;
-  if (password) {
-    encryptedPassword = await encryptPassword(
-      password, await promptMasterPassword(context, true)
-    );
-  } else {
-    privateKeyPath = await input({
-      title, prompt: 'SSH 私钥路径', value: '~/.ssh/id_ed25519',
-      placeHolder: '例如 ~/.ssh/id_ed25519', validateInput: required('私钥路径')
-    });
-    if (privateKeyPath === undefined) return;
-  }
+  const auth = await selectAuthentication(title);
+  if (!auth) return;
 
   const normalizedName = name.trim();
   const normalizedIp = ip.trim();
@@ -3282,14 +3219,11 @@ async function addRemoteDirectoryConfig(context: vscode.ExtensionContext): Promi
   if (Object.keys(aliases).length > 0) config.host_aliases = aliases;
   else delete config.host_aliases;
   const host: HostConfig = {
-    name: normalizedIp, ip: normalizedIp, port: Number(portText.trim()), user: normalizedUser,
-    ...(encryptedPassword ? { password: encryptedPassword } : {}),
-    ...(privateKeyPath ? { private_key_path: privateKeyPath.trim() } : {})
+    name: normalizedIp, ip: normalizedIp, port: Number(portText.trim()), user: normalizedUser, auth
   };
   host.name = mountNameFor(host, config.host_aliases);
   config.hosts.push(host);
   config.mounts = deriveMounts(config.hosts);
-  config.encrypt_passwords = true;
   await saveConfig(configPath(), config);
   // 同步内存里的当前配置：别名解析要据此让真实存在的名字优先。
   lastReadConfig = config;
@@ -3335,13 +3269,8 @@ async function addHostCredentials(
         ? '该主机下已存在此账号，请编辑已有账号或使用其他账号。' : undefined)
   });
   if (user === undefined) return;
-  const password = await input({
-    title,
-    prompt: '密码（留空则使用私钥）',
-    placeHolder: '输入密码，或留空后按 Enter',
-    password: true
-  });
-  if (password === undefined) return;
+  const auth = await selectAuthentication(title);
+  if (!auth) return;
 
   const normalizedUser = user.trim();
   // Adding a duplicate account must never overwrite an existing login.
@@ -3363,27 +3292,14 @@ async function addHostCredentials(
   const updated: HostConfig = {
     ...targetHost,
     name: generatedName,
-    user: normalizedUser
+    user: normalizedUser, auth
   };
-  if (password) {
-    updated.password = await encryptPassword(
-      password, await promptMasterPassword(context, true)
-    );
-    delete updated.private_key_path;
-    config.encrypt_passwords = true;
-  } else {
-    const privateKeyPath = await input({
-      title,
-      prompt: 'SSH 私钥路径',
-      value: targetHost.private_key_path || '~/.ssh/id_ed25519',
-      placeHolder: '例如 ~/.ssh/id_ed25519',
-      validateInput: required('私钥路径')
-    });
-    if (privateKeyPath === undefined) return;
-    delete updated.password;
-    updated.private_key_path = privateKeyPath.trim();
+  delete updated.password;
+  delete updated.private_key_path;
+  if (index >= 0) {
+    await context.secrets.delete(hostPasswordKey(updated));
+    sessionPasswords.delete(hostPasswordKey(updated));
   }
-
   const previousName = index >= 0 ? config.hosts[index]?.name : undefined;
   if (index < 0) {
     index = config.hosts.length;
@@ -3910,10 +3826,7 @@ async function executeRemoteCommand(
   requireConfiguredHostLogin(resolved.hostConfig);
   const outputMarker = `__SAFS_COMMAND_OUTPUT_${randomBytes(16).toString('hex')}__`;
   {
-    if (resolved.hostConfig.password) {
-      const config = await readConfig();
-      resolved.hostConfig = await resolveStoredHostPassword(context, config, resolved.hostConfig);
-    }
+    resolved.hostConfig = await resolveStoredHostPassword(context, resolved.hostConfig);
     const controller = new AbortController();
     const cancellation = token?.onCancellationRequested(() => controller.abort());
     // 命令级超时：Agent 挂起时中止远端执行，避免命令在后台无限运行。
@@ -5105,6 +5018,27 @@ async function preloadRemoteWorkspaces(force = false): Promise<void> {
   }
 }
 
+async function editHostCredentials(context: vscode.ExtensionContext, element?: MountConfig | HostConfig | UserItem): Promise<void> {
+  const config = await readConfig();
+  const requested = element ? mountForTreeElement(element).host : undefined;
+  const name = requested ?? (await vscode.window.showQuickPick(
+    config.hosts.filter(host => host.user).map(host => ({ label: host.name, description: `${host.user}@${host.ip}:${host.port ?? 22}` })),
+    { title: '修改登录凭据', placeHolder: '选择账号' }
+  ))?.label;
+  const host = config.hosts.find(candidate => candidate.name === name);
+  if (!host) return;
+  const auth = await selectAuthentication(`修改登录凭据：${host.name}`);
+  if (!auth) return;
+  host.auth = auth;
+  delete host.private_key_path;
+  await context.secrets.delete(hostPasswordKey(host));
+  sessionPasswords.delete(hostPasswordKey(host));
+  delete host.password;
+  await saveConfig(configPath(), config);
+  lastReadConfig = config;
+  void vscode.window.showInformationMessage('SAFS：认证方式已更新，下次连接时输入密码或选择私钥。');
+}
+
 // ---- Status ----
 
 async function showStatus(): Promise<void> {
@@ -5159,8 +5093,13 @@ async function deleteConfig(mount: MountConfig): Promise<void> {
   ) !== confirmButton) return;
   if (connected) await disconnect(mount);
   const config = await readConfig();
+  const removedHost = config.hosts.find(host => host.name === mount.host);
   removeAccountConfig(config, mount.name);
   await saveConfig(configPath(), config);
+  if (removedHost && !config.hosts.some(host => hostPasswordKey(host) === hostPasswordKey(removedHost))) {
+    await vscodeContext.secrets.delete(hostPasswordKey(removedHost));
+    sessionPasswords.delete(hostPasswordKey(removedHost));
+  }
   const enabled = new Set(
     vscodeContext.globalState.get<string[]>(aiForwardMountsKey, [])
   );
@@ -5198,6 +5137,10 @@ async function deleteHostGroup(group: HostGroupItem): Promise<void> {
   const cleared = hostNames.filter((name) => enabled.delete(name));
   if (cleared.length > 0) {
     await vscodeContext.globalState.update(aiForwardMountsKey, [...enabled]);
+  }
+  for (const host of group.hosts) {
+    await vscodeContext.secrets.delete(hostPasswordKey(host));
+    sessionPasswords.delete(hostPasswordKey(host));
   }
   await forgetMountState(hostNames);
 }
@@ -6124,10 +6067,10 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
         ...error.actions
       );
       if (selected === openConfigAction) {
-        // 有主机名时直接落到该账号的密码行；没有就让「打开配置」按当前选中项定位。
+        // 有主机名时定位到账号记录；密码通过“修改登录凭据”管理。
         await vscode.commands.executeCommand(
           `${commandPrefix}.openConfig`,
-          error.hostName ? { kind: 'password', name: error.hostName } satisfies ConfigFocus : undefined
+          error.hostName ? { kind: 'entry', name: error.hostName } satisfies ConfigFocus : undefined
         );
       } else if (selected === addHostAccountAction) {
         await vscode.commands.executeCommand(`${commandPrefix}.addHostAccount`);
@@ -6177,11 +6120,29 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   vscodeContext = context;
+  const passwordMigration = new SshPasswordMigration({
+    storage: context.secrets,
+    promptMasterPassword: (account, attempt) => input({
+      title: '迁移 ≤2.1.7 SSH 密码',
+      prompt: `输入旧版主口令：${account}（${attempt}/3）；迁移完成后将删除主口令`,
+      password: true, validateInput: required('旧版主口令')
+    })
+  });
+  setConfigReadPatch(file => passwordMigration.run(file));
+  context.subscriptions.push({ dispose: () => setConfigReadPatch(undefined) });
   selectedAgentInterface = normalizeAgentInterface(settings().get<unknown>('agentInterface', 'cli'));
   registerConfigDiagnostics(context, configPath);
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
   const previousVersion = context.globalState.get<string>('patches.previousVersion');
+  if (needsPasswordMigration(previousVersion) || !context.globalState.get<boolean>('patches.sshPasswords217')) {
+    try {
+      await passwordMigration.run(configPath());
+      await context.globalState.update('patches.sshPasswords217', true);
+    } catch (error) {
+      bridgeOutput.error(`旧版 SSH 密码迁移未完成，保留原配置并在下次读取时重试：${error}`);
+    }
+  }
   if (!context.globalState.get<boolean>('patches.sessionCwd215') && needsSessionMigration(previousVersion)) {
     try {
       await migrateSessionCwds(context.globalStorageUri.fsPath);
@@ -6281,6 +6242,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   agentTrace('Activate', `扩展激活，workspace=${
     vscode.workspace.workspaceFolders?.map((folder) => folder.uri.toString()).join(', ') || '<none>'
   }`);
+
+  setSshCredentialRetry(async (host, _error, attempt, retry) => {
+    const key = hostPasswordKey(host);
+    await context.secrets.delete(key);
+    sessionPasswords.delete(key);
+    if (!retry) return undefined;
+    void vscode.window.showWarningMessage(`SAFS：认证失败（${attempt}/3），请重新${host.auth === 'publickey' || host.private_key_path ? '选择私钥' : '输入密码'}。`);
+    const fresh = { ...host };
+    delete fresh.password;
+    delete fresh.private_key_path;
+    fresh.auth = host.auth ?? (host.private_key_path ? 'publickey' : 'password');
+    return resolveStoredHostPassword(context, fresh);
+  });
+  context.subscriptions.push({ dispose: () => { setSshCredentialRetry(undefined); sessionPasswords.clear(); } });
 
   // Retain WSL VPN routing helpers; SSH sessions are native on every platform.
   setWslBundlePath(vscode.Uri.joinPath(context.extensionUri, 'resources', 'wsl').fsPath);
@@ -6508,15 +6483,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   command('openConfig', (argument) => openConfigForArgument(argument));
   command('addRemoteDirectory', async () => {
-    await addRemoteDirectoryConfig(context);
+    await addRemoteDirectoryConfig();
     tree.refresh();
   });
   command('addHostAccount', async () => {
-    await addHostAccount(context);
+    await addHostAccount();
     tree.refresh();
   });
   command('addHostCredentials', async (host) => {
     await addHostCredentials(context, host as HostConfig | HostGroupItem);
+    tree.refresh();
+  });
+  command('editHostCredentials', async (element) => {
+    await editHostCredentials(context, element as MountConfig | HostConfig | UserItem | undefined);
     tree.refresh();
   });
   command('renameHost', async (group) => {

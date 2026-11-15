@@ -1,6 +1,7 @@
 const Module = require('node:module');
 
 const vscodeMock = {
+  ViewColumn: { Active: -1 },
   EventEmitter: class {
     constructor() {
       this.listeners = new Set();
