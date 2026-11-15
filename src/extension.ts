@@ -4817,14 +4817,12 @@ const aiForwarded = this.context.globalState
   private getHistoryTreeItem(item: HistoryItem): vscode.TreeItem {
     const treeItem = new vscode.TreeItem(item.path);
     const syncTask = historySyncTask(item);
-    // 同步过的条目记住本地副本：图标与提示都标出这是镜像而不是普通书签。
-    const localDir = syncTask?.localDir
-      ?? syncedDirectoryFor(this.context, item.mountName, item.path)?.localDir;
+    const savedLocalDir = syncedDirectoryFor(this.context, item.mountName, item.path)?.localDir;
     treeItem.contextValue = `safs.history.${syncTask ? 'syncEnabled' : 'syncDisabled'}`;
-    treeItem.iconPath = new vscode.ThemeIcon(localDir ? 'sync' : 'folder');
-    treeItem.tooltip = localDir
-      ? `${item.path}\n本地副本：${localDir}\n点击打开本地副本。`
-      : item.path;
+    treeItem.iconPath = new vscode.ThemeIcon(syncTask ? 'sync' : 'folder');
+    treeItem.tooltip = syncTask
+      ? `${item.path}\n本地副本：${syncTask.localDir}\n同步已开启，点击打开本地副本。`
+      : savedLocalDir ? `${item.path}\n同步已关闭，点击打开远程目录。\n保留的本地副本：${savedLocalDir}` : item.path;
     treeItem.command = {
       command: 'safs.openHistoryItem',
       title: '打开历史目录',
@@ -6560,25 +6558,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   command('openHistoryItem', async (item: HistoryItem) => {
     const syncTask = historySyncTask(item);
     if (syncTask) {
-      if (!await syncCoordinator?.isReady(item.mountName, item.path, syncTask.localDir)) {
-        bridgeOutput?.info(
-          `[同步] 本地目录尚未准备完成；mount=${item.mountName}；path=${item.path}`
-        );
-        void vscode.window.showInformationMessage(
-          'SAFS：目录仍在同步，请稍后再打开。'
-        );
+      const ready = await syncCoordinator?.isReady(item.mountName, item.path, syncTask.localDir);
+      // Stopping sync while the readiness check runs must also prevent opening
+      // the mirror. A remembered pairing alone never determines the open target.
+      const stopped = await syncCoordinator?.isStopRequested(item.mountName, item.path);
+      const current = stopped ? undefined : historySyncTask(item);
+      if (current?.localDir === syncTask.localDir) {
+        if (!ready) {
+          bridgeOutput?.info(`[同步] 本地目录尚未准备完成；mount=${item.mountName}；path=${item.path}`);
+          void vscode.window.showInformationMessage('SAFS：目录仍在同步，请稍后再打开。');
+          return;
+        }
+        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(syncTask.localDir), true);
         return;
       }
-      await vscode.commands.executeCommand(
-        'vscode.openFolder', vscode.Uri.file(syncTask.localDir), true
-      );
-      return;
-    }
-    // 同步过的目录优先打开本地副本：历史条目记住的就是本地镜像。
-    const synced = syncedDirectoryFor(vscodeContext, item.mountName, item.path);
-    if (synced && await openLocalMirror(synced.localDir)) {
-      await recordDirectoryHistory(vscodeContext, item.mountName, item.path);
-      return;
     }
     const config = await readConfig();
     const mount = config.mounts.find((m) => m.name === item.mountName);
