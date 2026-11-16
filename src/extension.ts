@@ -206,6 +206,8 @@ let statusBarGitTooltip = '';
 let agentCommandTerminal: vscode.Terminal | undefined;
 /** Live workspace root reported by the selected terminal in terminal-only mode. */
 let agentCommandTerminalCwd: string | undefined;
+/** Workspace-scoped opt-in to terminal-direct Agent execution. */
+let agentTerminalDirectMode = false;
 /** Serialize terminal-target refreshes emitted by shell and workspace events. */
 let agentCommandTerminalRefresh: Promise<void> = Promise.resolve();
 const busyAgentCommandTerminals = new WeakSet<vscode.Terminal>();
@@ -2236,7 +2238,8 @@ async function ensureRemoteTerminalDirectory(
 
 function activeAgentCommandTerminal(): vscode.Terminal | undefined {
   const terminal = agentCommandTerminal;
-  return !hasRemoteWorkspaceContext() && terminal && agentCommandTerminalCwd
+  return (!hasRemoteWorkspaceContext() || agentTerminalDirectMode)
+    && terminal && agentCommandTerminalCwd
     && managedRemoteTerminals.has(terminal) ? terminal : undefined;
 }
 
@@ -2244,15 +2247,27 @@ function activeAgentCommandTerminal(): vscode.Terminal | undefined {
 
 function agentCommandTerminalState(): {
   enabled: boolean; mode?: 'workspace' | 'terminal'; label?: string;
+  workspaceContext: boolean; workspaceMode: 'workspace' | 'terminalDirect';
 } {
-  if (hasRemoteWorkspaceContext()) return { enabled: false, mode: 'workspace' };
+  const workspaceContext = hasRemoteWorkspaceContext();
+  const workspaceMode = !workspaceContext || agentTerminalDirectMode
+    ? 'terminalDirect' : 'workspace';
+  if (workspaceContext && !agentTerminalDirectMode) {
+    return { enabled: false, mode: 'workspace', workspaceContext, workspaceMode };
+  }
   const terminal = agentCommandTerminal;
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  if (!terminal || !info || !agentCommandTerminalCwd) return { enabled: false };
+  if (!terminal || !info || !agentCommandTerminalCwd) {
+    return workspaceContext
+      ? { enabled: false, mode: 'workspace', workspaceContext, workspaceMode }
+      : { enabled: false, workspaceContext, workspaceMode };
+  }
   return {
     enabled: true,
     mode: 'terminal',
-    label: `${terminal.name} · ${agentCommandTerminalCwd}`
+    label: `${terminal.name} · ${agentCommandTerminalCwd}`,
+    workspaceContext,
+    workspaceMode
   };
 }
 
@@ -2268,12 +2283,12 @@ function activityForwardingPreview(): AgentTerminalTargetState {
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const terminal = activeAgentCommandTerminal();
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  const mountName = location?.mountName ?? info?.mount.name;
+  const mountName = info?.mount.name ?? location?.mountName;
   if (!mountName) return { ...state, availability: 'disabled', detail: '请打开远程目录或启用终端转发' };
   const mount = lastReadConfig?.mounts.find((candidate) => candidate.name === mountName);
   const host = mount && lastReadConfig ? resolveMount(lastReadConfig, mount).hostConfig : undefined;
   const label = [host ? lastReadConfig?.host_aliases?.[host.ip] ?? host.ip : mountName,
-    host?.user, location?.remotePath ?? agentCommandTerminalCwd].filter(Boolean).join(' → ');
+    host?.user, terminal ? agentCommandTerminalCwd : location?.remotePath].filter(Boolean).join(' → ');
   return { ...state, label, availability: 'checking', detail: '正在检查转发状态' };
 }
 
@@ -2282,7 +2297,7 @@ async function activityForwardingState(): Promise<AgentTerminalTargetState> {
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const terminal = activeAgentCommandTerminal();
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  const mountName = location?.mountName ?? info?.mount.name;
+  const mountName = info?.mount.name ?? location?.mountName;
   if (!mountName) return { ...terminalState, availability: 'disabled', detail: '请打开 SAFS 远程目录或终端' };
   const state: AgentTerminalTargetState = { ...terminalState };
   try {
@@ -2291,7 +2306,7 @@ async function activityForwardingState(): Promise<AgentTerminalTargetState> {
     if (!mount) throw new Error('远程连接配置不存在');
     const host = resolveMount(config, mount).hostConfig;
     state.label = [config.host_aliases?.[host.ip] ?? host.ip, host.user,
-      location?.remotePath ?? agentCommandTerminalCwd].filter(Boolean).join(' → ');
+      terminal ? agentCommandTerminalCwd : location?.remotePath].filter(Boolean).join(' → ');
     const enabled = vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []).includes(mountName);
     if (forwardingRecoveryRunning || (cliEnabled() && (ipcRouterStart || ipcRouterCreation))) {
       return { ...state, availability: 'checking', detail: '正在准备 Agent 转发' };
@@ -2299,7 +2314,7 @@ async function activityForwardingState(): Promise<AgentTerminalTargetState> {
     if (!enabled) return { ...state, availability: 'disabled' };
     if (!cliEnabled()) {
       if (!mcpRouter || !await mcpRouter.healthy()) throw new Error('MCP HTTP 路由服务尚未就绪');
-      if (!hasRemoteWorkspaceContext() || !mcpServer?.running) throw new Error('MCP 窗口服务尚未就绪');
+      if ((!hasRemoteWorkspaceContext() && !terminal) || !mcpServer?.running) throw new Error('MCP 窗口服务尚未就绪');
       return { ...state, availability: 'ready', detail: 'MCP HTTP 转发服务正常' };
     }
     if (forwardingRecoveryError?.mountName === mountName) throw new Error(forwardingRecoveryError.message);
@@ -2339,7 +2354,7 @@ async function recoverActivityForwarding(): Promise<void> {
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const terminal = activeAgentCommandTerminal();
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  const mountName = location?.mountName ?? info?.mount.name;
+  const mountName = info?.mount.name ?? location?.mountName;
   if (!mountName) return;
   forwardingRecoveryRunning = true;
   forwardingRecoveryError = undefined;
@@ -2374,19 +2389,13 @@ async function recoverActivityForwarding(): Promise<void> {
   }
 }
 
-async function refreshAgentCommandTerminal(): Promise<void> {
-  const terminal = agentCommandTerminal;
-  const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  if (!terminal || !info || hasRemoteWorkspaceContext()) return;
-  await enableAgentCommandTerminal(terminal, info, true);
-}
-
 async function openAgentTerminalDirectory(): Promise<void> {
   const terminal = activeAgentCommandTerminal();
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
   if (!terminal || !info) return;
-  const cwd = liveAgentCommandTerminalCwd(terminal, info);
-  if (!cwd) throw new Error('无法获取转发终端所在的远程目录');
+  const cwd = await probeAgentCommandTerminalCwd(terminal, info, true);
+  info.remoteCwd = cwd;
+  await applyAgentCommandTerminalCwd(terminal, cwd, true);
   const folder = await ensureFolder(info.mount);
   const session = await pool.get(folder.hostName);
   const resolved = await session.realpath(cwd);
@@ -2439,6 +2448,7 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     const name = agentCommandTerminal.name;
     agentCommandTerminal = undefined;
     agentCommandTerminalCwd = undefined;
+    agentTerminalDirectMode = false;
     agentActivityStore?.interruptRunning('终端模式已关闭，Agent 任务已中断');
     await refreshAgentCommandTerminalState();
     await publishAgentWorkspace(vscodeContext);
@@ -2453,7 +2463,7 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     return;
   }
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
-  if (location) {
+  if (location && !agentTerminalDirectMode) {
     await refreshAgentCommandTerminalState();
     return;
   }
@@ -2465,7 +2475,7 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
   }
   const refreshingSelectedTerminal = agentCommandTerminalState().enabled
     && agentCommandTerminal === terminal;
-  if (!refreshingSelectedTerminal) {
+  if (!refreshingSelectedTerminal && !agentTerminalDirectMode) {
     const confirmed = await vscode.window.showWarningMessage(
       `Agent 命令将显示在“${terminal.name}”中，并继承该终端当前的用户权限和环境。` +
         '开启后 CLI 只放行 safs exec；所有 SAFS 文件、搜索和传输操作都会关闭。',
@@ -2475,6 +2485,22 @@ async function setAgentCommandTerminalMode(enabled: boolean): Promise<void> {
     if (confirmed !== '切换到终端模式') return;
   }
   await enableAgentCommandTerminal(terminal, info, refreshingSelectedTerminal);
+}
+
+async function setWorkspaceAgentMode(mode: 'workspace' | 'terminalDirect'): Promise<void> {
+  if (mode === 'workspace') {
+    agentTerminalDirectMode = false;
+    await setAgentCommandTerminalMode(false);
+    await refreshAgentCommandTerminalState();
+    return;
+  }
+  const previous = agentTerminalDirectMode;
+  agentTerminalDirectMode = true;
+  await setAgentCommandTerminalMode(true);
+  if (!agentCommandTerminalState().enabled) {
+    agentTerminalDirectMode = previous;
+    await refreshAgentCommandTerminalState();
+  }
 }
 
 async function enableAgentCommandTerminal(
@@ -2928,7 +2954,8 @@ async function openTerminal(
     ?? config.mounts.find((candidate) => candidate.name === location?.mountName)
     ?? await selectMount('选择要打开终端的远程连接');
   if (!mount) return undefined;
-  if (!vscodeContext.globalState.get<string[]>(aiForwardMountsKey, []).includes(mount.name)) {
+  const ensureTerminalForwarding = async () => {
+    if (context.globalState.get<string[]>(aiForwardMountsKey, []).includes(mount.name)) return;
     try {
       await setAiForwardEnabled(mount, true);
     } catch (error) {
@@ -2936,7 +2963,7 @@ async function openTerminal(
       if (!(error instanceof NodeRuntimeUnavailableError)) throw error;
       bridgeOutput?.appendLine('[终端] 本地 Node.js 不可用，继续打开 SSH 终端，暂不启用 Agent 转发。');
     }
-  }
+  };
   const folder = await ensureFolder(mount);
   // Use the server-resolved root. Configured roots such as "." are relative
   // to the SSH login directory and cannot be compared directly with the
@@ -2981,6 +3008,7 @@ async function openTerminal(
       if (existingInfo) {
         await prepareOpenedTerminalForAgent(existingTerminal, existingInfo);
       }
+      await ensureTerminalForwarding();
       return { terminal: existingTerminal, created: false };
     }
   }
@@ -3017,6 +3045,7 @@ async function openTerminal(
     managedRemoteTerminals.set(terminal, { mount, remoteCwd, pty, startedAt: Date.now() });
     terminal.show();
     await prepareOpenedTerminalForAgent(terminal, managedRemoteTerminals.get(terminal)!);
+    await ensureTerminalForwarding();
     return { terminal, created: true };
   } finally {
     openingTerminalIds.delete(terminalId);
@@ -5207,7 +5236,7 @@ async function publishMcpWorkspace(context: vscode.ExtensionContext): Promise<vo
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const terminal = activeAgentCommandTerminal();
   const info = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  const mountName = location?.mountName ?? info?.mount.name;
+  const mountName = info?.mount.name ?? location?.mountName;
   const enabled = context.globalState.get<string[]>(aiForwardMountsKey, []);
   if (!mountName || !enabled.includes(mountName)) return;
   await ensureAgentMcpRouter(context);
@@ -5217,7 +5246,7 @@ async function publishMcpWorkspace(context: vscode.ExtensionContext): Promise<vo
   const folder = await ensureFolder(mount);
   const root = activeAgentCommandTerminal() && agentCommandTerminalCwd ? agentCommandTerminalCwd : currentWorkspacePath(folder);
   await agentWorkspacePublisher.publish({
-    focused: vscode.window.state.focused, execution: 'remote', workspaceUri: folderUri(folder, currentWorkspacePath(folder)),
+    focused: vscode.window.state.focused, execution: 'remote', workspaceUri: folderUri(folder, root),
     mountName, workspaceRoot: root, host: mount.host,
     hostName: config.host_aliases?.[resolveMount(config, mount).hostConfig.ip] ?? resolveMount(config, mount).hostConfig.ip,
     user: resolveMount(config, mount).hostConfig.user, mcpUrl: mcpServer.url,
@@ -5275,7 +5304,7 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const terminal = activeAgentCommandTerminal();
   const terminalInfo = terminal ? managedRemoteTerminals.get(terminal) : undefined;
-  const mountName = location?.mountName ?? terminalInfo?.mount.name;
+  const mountName = terminalInfo?.mount.name ?? location?.mountName;
   if (!mountName) throw new Error('当前窗口没有 SAFS 远程目标');
   if (mcpServer && mcpLifecycle.mountName === mountName) return mcpServer;
   const callbacks: any = {
@@ -5283,11 +5312,13 @@ async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<A
     listFolders: async () => (await forwardedFolders(context)).filter((x) => x.name === mountName),
     currentWorkspace: async () => {
       const current = currentRemoteLocation();
-      const currentMount = current?.mountName ?? (agentCommandTerminal ? managedRemoteTerminals.get(agentCommandTerminal)?.mount.name : undefined);
+      const currentMount = activeAgentCommandTerminal()
+        ? managedRemoteTerminals.get(agentCommandTerminal!)?.mount.name
+        : current?.mountName ?? (agentCommandTerminal ? managedRemoteTerminals.get(agentCommandTerminal)?.mount.name : undefined);
       if (currentMount !== mountName) return null;
       const cfg = await readConfig(); const m = cfg.mounts.find((x) => x.name === mountName); if (!m) return null;
       const folder = await ensureFolder(m); const root = activeAgentCommandTerminal() && agentCommandTerminalCwd ? agentCommandTerminalCwd : currentWorkspacePath(folder);
-      return { name: mountName, workspaceUri: folderUri(folder, currentWorkspacePath(folder)), workspaceRoot: root, host: m.host };
+      return { name: mountName, workspaceUri: folderUri(folder, root), workspaceRoot: root, host: m.host };
     },
     currentFile: (input: any) => activeRemoteFile(input.mountName),
     list: (input: any) => remoteList({ ...input, mountName: forwardedWindowMountName(context, mountName, input.mountName) }),
@@ -5406,7 +5437,7 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const selectedTerminal = activeAgentCommandTerminal();
   const terminalInfo = selectedTerminal ? managedRemoteTerminals.get(selectedTerminal) : undefined;
-  const boundMountName = location?.mountName ?? terminalInfo?.mount.name;
+  const boundMountName = terminalInfo?.mount.name ?? location?.mountName;
   if (!boundMountName) throw new Error('当前窗口不是 Serverless Remote 工作区');
   if (backendLifecycle.mountName === boundMountName && backend) return backend;
   backend = await backendLifecycle.ensure(boundMountName, async () => {
@@ -5424,7 +5455,9 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
           const terminalInfo = agentCommandTerminal
             ? managedRemoteTerminals.get(agentCommandTerminal)
             : undefined;
-          const mountName = location?.mountName ?? terminalInfo?.mount.name;
+          const mountName = activeAgentCommandTerminal()
+            ? terminalInfo?.mount.name
+            : location?.mountName ?? terminalInfo?.mount.name;
           if (!mountName) return null;
           const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
           if (!enabled.has(mountName)) return null;
@@ -5438,7 +5471,7 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
             : editorWorkspacePath;
           return {
             name: mount.name,
-            workspaceUri: folderUri(folder, editorWorkspacePath),
+            workspaceUri: folderUri(folder, workspacePath),
             workspaceRoot: workspacePath,
             host: mount.host
           };
@@ -5531,7 +5564,8 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
             const terminalInfo = agentCommandTerminal
               ? managedRemoteTerminals.get(agentCommandTerminal)
               : undefined;
-            const terminalOnly = !location && terminalInfo?.mount.name === boundMountName;
+            const terminalOnly = activeAgentCommandTerminal() !== undefined
+              && terminalInfo?.mount.name === boundMountName;
             if ((!terminalOnly && (!location || location.mountName !== boundMountName))
               || !folder) return undefined;
             return agentActivityStore.start({
@@ -5579,7 +5613,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   const terminalInfo = agentCommandTerminal
     ? managedRemoteTerminals.get(agentCommandTerminal)
     : undefined;
-  const mountName = location?.mountName ?? terminalInfo?.mount.name;
+  const mountName = terminalInfo?.mount.name ?? location?.mountName;
   const enabled = new Set(context.globalState.get<string[]>(aiForwardMountsKey, []));
   if (mountName && enabled.has(mountName) && backendBoundMountName !== mountName) {
     await ensureAgentBackendServer(context);
@@ -5613,6 +5647,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
     const previous = agentCommandTerminal.name;
     agentCommandTerminal = undefined;
     agentCommandTerminalCwd = undefined;
+    agentTerminalDirectMode = false;
     await refreshAgentCommandTerminalState();
     bridgeOutput?.info(
       `[Agent 终端转发] 工作区已切换，停止使用不匹配的终端：${previous}`
@@ -5622,7 +5657,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   const terminalCommandOnly = activeAgentCommandTerminal() !== undefined;
   const workspacePath = terminalCommandOnly ? agentCommandTerminalCwd! : editorWorkspacePath;
   const localRoot = vscode.Uri.from({ scheme: 'file', path: placeholderPathForRemote(folder, editorWorkspacePath) }).fsPath;
-  const workspaceUri = folderUri(folder, editorWorkspacePath);
+  const workspaceUri = folderUri(folder, workspacePath);
   await mkdir(localRoot, { recursive: true });
   await writeWorkspaceId(localRoot, workspaceIdFor({
     instanceId: agentInstanceId, workspaceUri, host: mount.host
@@ -5635,7 +5670,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   await agentWorkspacePublisher.publish({
     focused: vscode.window.state.focused,
     execution: 'remote',
-    workspaceUri: folderUri(folder, editorWorkspacePath),
+    workspaceUri: folderUri(folder, workspacePath),
     mountName: mount.name,
     workspaceRoot: workspacePath,
     localRoot,
@@ -6218,11 +6253,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   agentActivityView = new AgentActivityViewProvider(agentActivityStore, {
     terminalTarget: activityForwardingState,
     initialTerminalTarget: activityForwardingPreview,
-    refreshTerminalTarget: () => guard(refreshAgentCommandTerminal),
     openTerminalDirectory: () => guard(openAgentTerminalDirectory),
     recoverForwarding: recoverActivityForwarding,
+    setWorkspaceMode: (mode) => guard(() => setWorkspaceAgentMode(mode)),
     switchWorkspace: async () => {
-      await vscode.commands.executeCommand<void>(`${commandPrefix}.switchRemoteDirectory`);
+      if (agentTerminalDirectMode) {
+        await guard(openAgentTerminalDirectory);
+      } else {
+        await vscode.commands.executeCommand<void>(`${commandPrefix}.switchRemoteDirectory`);
+      }
     }
   });
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
@@ -6677,6 +6716,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (terminal === agentCommandTerminal) {
       agentCommandTerminal = undefined;
       agentCommandTerminalCwd = undefined;
+      agentTerminalDirectMode = false;
       void refreshAgentCommandTerminalState();
       void publishAgentWorkspace(context);
       bridgeOutput?.info('[Agent 终端转发] 所选终端已关闭，已退出终端专用模式');
@@ -6937,6 +6977,7 @@ export async function deactivate(): Promise<void> {
   agentTrace('Deactivate', '扩展停用，清理发现记录、CLI 和连接池');
   agentCommandTerminal = undefined;
   agentCommandTerminalCwd = undefined;
+  agentTerminalDirectMode = false;
   const discoveryCleanup = agentWorkspacePublisher.stop();
   await agentActivityStore?.flush();
   agentActivityStore?.dispose();

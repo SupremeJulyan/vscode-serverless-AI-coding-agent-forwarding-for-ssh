@@ -2,16 +2,27 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-test('terminal directory opens its live target directly in the current window', async () => {
+test('terminal directory probes pwd and opens that target directly in the current window', async () => {
   const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const start = source.indexOf('async function openAgentTerminalDirectory()');
   const body = source.slice(start, source.indexOf('async function applyAgentCommandTerminalCwd', start));
   assert.ok(body.includes('activeAgentCommandTerminal()'));
-  assert.ok(body.includes('liveAgentCommandTerminalCwd(terminal, info)'));
+  assert.ok(body.includes('probeAgentCommandTerminalCwd(terminal, info, true)'));
   assert.ok(body.includes('ensureFolder(info.mount)'));
   assert.ok(body.includes('isRemotePathInsideRoot(folder.remoteRoot, resolved)'));
   assert.equal(body.includes('selectRemoteDirectory'), false);
   assert.match(body, /'vscode\.openFolder',\s*vscode\.Uri\.parse\(folderUri\(folder, resolved\)\), \{ forceReuseWindow: true \}/);
+});
+
+test('terminal-only forwarding starts after the SSH terminal is selected', async () => {
+  const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function openTerminal(');
+  const end = source.indexOf('// ---- disconnect / status ----', start);
+  const body = source.slice(start, end);
+  const prepare = body.indexOf('await prepareOpenedTerminalForAgent(terminal,');
+  const enableForwarding = body.indexOf('await ensureTerminalForwarding();', prepare);
+  assert.ok(prepare >= 0);
+  assert.ok(enableForwarding > prepare);
 });
 
 test('mount parent opens the login home within the root mount without recording it as history', async () => {
@@ -37,8 +48,8 @@ test('opening a remote directory in a new window preserves the source window ter
 
   const switchInCurrentWindow = source.slice(end, source.indexOf('async function promptRemoteDirectory', end));
   assert.equal(switchInCurrentWindow.includes('setAgentCommandTerminalMode(false)'), false);
-  assert.ok(switchInCurrentWindow.includes("selectRemoteDirectory('选择要切换的远程连接', '切换')"));
-  assert.ok(openInNewWindow.includes("selectRemoteDirectory('选择要打开的远程连接', '打开')"));
+  assert.ok(switchInCurrentWindow.includes("selectRemoteDirectory('选择要切换的远程连接', '切换', selectedUri)"));
+  assert.ok(openInNewWindow.includes("selectRemoteDirectory('选择要打开的远程连接', '打开', selectedUri)"));
   assert.ok(source.includes('`${action}远程目录：${mountConnectionLabel('));
   assert.match(switchInCurrentWindow, /'vscode\.openFolder',\s*vscode\.Uri\.parse\(folderUri\(folder, resolved\)\)/);
   assert.ok(source.includes('if (hasRemoteWorkspaceContext() && agentCommandTerminal)'));

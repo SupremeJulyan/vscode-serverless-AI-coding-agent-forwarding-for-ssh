@@ -120,10 +120,10 @@ test('remote directory commands can select a connection from a local or empty wi
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   assert.ok(extensionSource.includes('mount = await selectMount(mountPlaceHolder)'));
   assert.ok(extensionSource.includes(
-    "selectRemoteDirectory('选择要打开的远程连接', '打开')"
+    "selectRemoteDirectory('选择要打开的远程连接', '打开', selectedUri)"
   ));
   assert.ok(extensionSource.includes(
-    "selectRemoteDirectory('选择要切换的远程连接', '切换')"
+    "selectRemoteDirectory('选择要切换的远程连接', '切换', selectedUri)"
   ));
 });
 
