@@ -6,8 +6,6 @@
 
 SAFS 让你在 VS Code 中浏览、编辑远程文件，使用远程终端，并让 AI Coding Agent 操作远程项目。服务器无需安装 VS Code Server 或 Agent。
 
-![SAFS 操作演示](images/safs-demo.gif)
-
 ## 操作演示
 
 ### 连接主机

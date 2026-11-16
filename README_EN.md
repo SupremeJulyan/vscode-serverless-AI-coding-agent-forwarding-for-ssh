@@ -6,8 +6,6 @@
 
 SAFS lets you browse and edit remote files, use remote terminals, and let AI Coding Agents work on remote projects in VS Code. The server needs neither VS Code Server nor an Agent installed.
 
-![SAFS demo](images/safs-demo.gif)
-
 ## Demos
 
 ### Connect to a host
