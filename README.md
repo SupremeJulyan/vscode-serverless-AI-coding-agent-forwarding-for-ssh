@@ -8,6 +8,20 @@ SAFS 让你在 VS Code 中浏览、编辑远程文件，使用远程终端，并
 
 ![SAFS 操作演示](images/safs-demo.gif)
 
+## 操作演示
+
+### 连接主机
+
+![连接主机演示](images/ssh-demo.gif)
+
+### Agent 转发
+
+![Agent 转发演示](images/agent-forward.gif)
+
+### 同步与 Git
+
+![同步与 Git 操作演示](images/sync-git.gif)
+
 ## 功能
 
 - **远程文件编辑**：浏览、搜索、打开、保存、新建、重命名和删除远程文件与目录。
