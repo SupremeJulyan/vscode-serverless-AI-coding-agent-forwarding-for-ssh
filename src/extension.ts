@@ -908,16 +908,28 @@ interface SelectedRemoteDirectory {
   previousPath?: string;
 }
 
+async function selectedRemoteDirectoryPath(
+  session: SftpSession, remotePath: string
+): Promise<string> {
+  const stat = await session.stat(remotePath);
+  return stat.type === 'directory'
+    ? path.posix.normalize(remotePath)
+    : path.posix.dirname(remotePath);
+}
+
 /**
  * Resolve a directory inside the current SAFS mount, or let local/empty windows
  * choose a configured connection first.
  */
 async function selectRemoteDirectory(
   mountPlaceHolder: string,
-  action: '打开' | '切换'
+  action: '打开' | '切换',
+  selectedUri?: vscode.Uri
 ): Promise<SelectedRemoteDirectory | undefined> {
   const config = await readConfig();
-  const location = currentRemoteLocation();
+  const location = selectedUri
+    ? parseRemoteUri(selectedUri.toString())
+    : currentRemoteLocation();
   let mount: MountConfig | undefined;
   if (location) {
     mount = config.mounts.find((candidate) => candidate.name === location.mountName);
@@ -936,17 +948,25 @@ async function selectRemoteDirectory(
   });
   if (!folder) return undefined;
   const session = await pool.get(folder.hostName);
+  const selectedPath = selectedUri
+    ? remotePathForUri(folder, location!.remotePath)
+    : location?.remotePath;
   const currentPath = location?.mountName === mount.name
-    ? location.remotePath
+    ? selectedPath!
     : folder.defaultRemotePath ?? folder.remoteRoot;
-  const requested = await promptRemoteDirectory(
-    session, folder.remoteRoot, currentPath,
-    `${action}远程目录：${mountConnectionLabel(resolveMount(config, mount).hostConfig, config.host_aliases)}`
-  );
-  if (requested === undefined) return undefined;
-  const candidate = requested.trim().startsWith('/')
-    ? path.posix.normalize(requested.trim())
-    : path.posix.resolve(currentPath, requested.trim());
+  const candidate = selectedUri
+    ? await selectedRemoteDirectoryPath(session, selectedPath!)
+    : await (async () => {
+      const requested = await promptRemoteDirectory(
+        session, folder.remoteRoot, currentPath,
+        `${action}远程目录：${mountConnectionLabel(resolveMount(config, mount).hostConfig, config.host_aliases)}`
+      );
+      if (requested === undefined) return undefined;
+      return requested.trim().startsWith('/')
+        ? path.posix.normalize(requested.trim())
+        : path.posix.resolve(currentPath, requested.trim());
+    })();
+  if (candidate === undefined) return undefined;
   if (!isRemotePathInsideRoot(folder.remoteRoot, candidate)) {
     throw new Error(`远程目录必须位于挂载根目录 ${folder.remoteRoot} 内`);
   }
@@ -957,11 +977,11 @@ async function selectRemoteDirectory(
   if ((await session.stat(resolved)).type !== 'directory') {
     throw new Error(`远程路径不是目录：${resolved}`);
   }
-  return { mount, folder, resolved, previousPath: location?.remotePath };
+  return { mount, folder, resolved, previousPath: selectedPath };
 }
 
-async function openRemoteDirectory(): Promise<void> {
-  const selected = await selectRemoteDirectory('选择要打开的远程连接', '打开');
+async function openRemoteDirectory(selectedUri?: vscode.Uri): Promise<void> {
+  const selected = await selectRemoteDirectory('选择要打开的远程连接', '打开', selectedUri);
   if (!selected) return;
   const { mount, folder, resolved } = selected;
   const forwarding = vscodeContext.globalState
@@ -982,8 +1002,8 @@ async function openRemoteDirectory(): Promise<void> {
   );
 }
 
-async function switchRemoteDirectory(): Promise<void> {
-  const selected = await selectRemoteDirectory('选择要切换的远程连接', '切换');
+async function switchRemoteDirectory(selectedUri?: vscode.Uri): Promise<void> {
+  const selected = await selectRemoteDirectory('选择要切换的远程连接', '切换', selectedUri);
   if (!selected) return;
   const { mount, folder, resolved, previousPath } = selected;
   const localRoot = localRootForFolder(folder);
@@ -6448,8 +6468,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     ));
   };
-  command('openFolder', async () => {
-    await openRemoteDirectory();
+  command('openFolder', async (uri) => {
+    await openRemoteDirectory(uri as vscode.Uri | undefined);
     tree.refresh();
   });
   command('openFolderItem', async (mount) => {
@@ -6458,7 +6478,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ));
     tree.refresh();
   });
-  command('switchRemoteDirectory', switchRemoteDirectory);
+  command('switchRemoteDirectory', (uri) => switchRemoteDirectory(uri as vscode.Uri | undefined));
   command('searchRemoteDirectory', (uri) => searchRemoteDirectory(uri as vscode.Uri | undefined));
   command('cloneGitRepository', cloneGitRepository);
   command('completeRemoteDirectory', completeRemoteDirectory);
@@ -6467,7 +6487,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   command('visualSync', (uri) => syncToRemote(uri as vscode.Uri | undefined));
   command('visualDownload', (uri) => visualDownload(uri as vscode.Uri | undefined));
   command('visualUpload', (...args) => visualUpload(args as vscode.Uri[]));
-  command('openTerminal', () => openTerminal(context, undefined, undefined, undefined, true));
+  command('openTerminal', async (uri) => {
+    if (uri && typeof uri === 'object' && 'scheme' in uri && (uri as vscode.Uri).scheme === remoteFileSystemScheme) {
+      const location = parseRemoteUri((uri as vscode.Uri).toString());
+      const config = await readConfig();
+      const mount = config.mounts.find((candidate) => candidate.name === location.mountName);
+      if (!mount) throw new Error(`远程目录配置不存在：${location.mountName}`);
+      const folder = await ensureFolder(mount);
+      const session = await pool.get(folder.hostName);
+      const remotePath = remotePathForUri(folder, location.remotePath);
+      const remoteCwd = await selectedRemoteDirectoryPath(session, remotePath);
+      await openTerminal(context, mount, remoteCwd, config, true);
+      return;
+    }
+    await openTerminal(context, undefined, undefined, undefined, true);
+  });
   command('openTerminalItem', (mount) =>
     openTerminal(context, mountForTreeElement(
       mount as MountConfig | HostConfig | HostGroupItem | UserItem
