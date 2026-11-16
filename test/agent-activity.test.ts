@@ -21,7 +21,7 @@ test('a slow target check cannot overwrite a newer panel state', async () => {
     onDidChange: () => ({ dispose() {} })
   } as any, {
     terminalTarget: () => new Promise((resolve) => pending.push(resolve)),
-    refreshTerminalTarget: async () => {}, switchWorkspace: async () => {},
+    switchWorkspace: async () => {},
     openTerminalDirectory: async () => {}, recoverForwarding: async () => {}
   });
   provider.resolveWebviewView({
@@ -125,16 +125,19 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   assert.match(html, /全部类型/);
   assert.match(html, /type: 'clear'/);
   assert.match(html, />工作区模式<\/span>/);
-  assert.match(html, />终端模式<\/span>/);
-  assert.match(html, />刷新终端目录<\/button>/);
+  assert.equal(html.includes('terminalModeLabel'), false);
+  assert.match(html, /id="workspaceModeSelect"[^>]*hidden/);
+  assert.match(html, /<option value="terminalDirect">终端模式<\/option>/);
+  assert.equal(html.includes('id="refreshTerminalTarget"'), false);
+  assert.equal(html.includes('刷新终端目录'), false);
   assert.match(html, /id="switchWorkspace"[^>]*>切换工作区<\/button>/);
   assert.match(html, /type: 'switchWorkspace'/);
   assert.match(html, /id="openTerminalDirectory"[^>]*hidden>打开远程目录<\/button>/);
-  assert.ok(html.includes("switchWorkspace.hidden = mode === 'terminal'"));
+  assert.ok(html.includes("switchWorkspace.hidden = mode === 'terminal' && event.data.workspaceContext !== true"));
   assert.ok(html.includes("openTerminalDirectory.hidden = mode !== 'terminal'"));
   assert.match(html, /type: 'openTerminalDirectory'/);
   assert.equal(html.includes("type: 'setTerminalTarget'"), false);
-  assert.match(html, /type: 'refreshTerminalTarget'/);
+  assert.equal(html.includes("type: 'refreshTerminalTarget'"), false);
   assert.equal(html.includes('aria-pressed'), false);
   assert.equal(html.includes('使用或刷新当前聚焦的 SAFS 终端'), false);
   assert.equal(html.includes("if (!terminalModeEnabled) vscode.postMessage"), false);
@@ -172,6 +175,7 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('statusDetail').textContent, '');
   assert.equal(get('timeline').children[0].textContent, '暂无 Agent 远程操作。提示：在 Agent 中输入 /safs-cli');
   assert.equal(get('agentModeDetail').textContent, target);
+  assert.equal(get('workspaceModeSelect').hidden, true);
   assert.equal(get('switchWorkspace').hidden, true);
   assert.equal(get('openTerminalDirectory').hidden, false);
   assert.equal(get('modeCapabilities').hidden, false);
@@ -188,13 +192,18 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('switchWorkspace').hidden, false);
   assert.equal(get('openTerminalDirectory').hidden, true);
   assert.equal(get('modeCapabilities').hidden, true);
-  assert.equal(get('refreshTerminalTarget').hidden, true);
   assert.equal(get('recoverForwarding').hidden, true);
   assert.equal(get('forwardingStatus').textContent, '转发就绪');
   send({ mode: 'workspace', availability: 'disabled', recoveryLabel: '启用 Agent 转发' });
   assert.equal(get('recoverForwarding').disabled, false);
   assert.equal(get('recoverForwarding').hidden, false);
   assert.equal(get('recoverForwarding').textContent, '启用 Agent 转发');
+  send({ mode: 'terminal', workspaceContext: true, workspaceMode: 'terminalDirect', label: target });
+  assert.equal(get('workspaceModeSelect').hidden, false);
+  assert.equal(get('workspaceModeSelect').value, 'terminalDirect');
+  assert.equal(get('switchWorkspace').hidden, false);
+  assert.equal(get('switchWorkspace').textContent, '切换工作区');
+  assert.equal(get('openTerminalDirectory').hidden, true);
   get('category').value = 'read';
   get('eventStatus').value = 'error';
   receive({ data: { type: 'state', initial: true, events: [{ id: 'one', category: 'read', status: 'success', source: 'cli', toolName: 'remote_read', startedAt: new Date().toISOString() }] } });
@@ -205,13 +214,10 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('category').value, 'all');
   assert.equal(get('eventStatus').value, 'all');
   assert.equal(get('timeline').children[0].className, 'event success');
-  receive({ data: { type: 'actionState', action: 'refreshTerminalTarget', busy: true } });
-  assert.equal(get('refreshTerminalTarget').disabled, true);
-  assert.equal(get('refreshTerminalTarget').textContent, '正在刷新…');
+  receive({ data: { type: 'actionState', action: 'switchWorkspace', busy: true } });
   assert.equal(get('switchWorkspace').disabled, true);
   receive({ data: { type: 'actionState', busy: false } });
-  assert.equal(get('refreshTerminalTarget').disabled, false);
-  assert.equal(get('refreshTerminalTarget').textContent, '刷新终端目录');
+  assert.equal(get('switchWorkspace').disabled, false);
 });
 
 test('activity controls unlock before a slow target refresh finishes', async () => {
@@ -220,7 +226,7 @@ test('activity controls unlock before a slow target refresh finishes', async () 
   const messages: any[] = [];
   const provider = new AgentActivityViewProvider({ onDidChange: () => ({ dispose() {} }) } as any, {
     terminalTarget: () => new Promise(resolve => { finish = resolve; }),
-    refreshTerminalTarget: async () => {}, switchWorkspace: async () => {},
+    switchWorkspace: async () => {},
     openTerminalDirectory: async () => {}, recoverForwarding: async () => {}
   });
   provider.resolveWebviewView({

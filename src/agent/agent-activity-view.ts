@@ -8,6 +8,8 @@ export interface AgentTerminalTargetState {
   enabled: boolean;
   interface?: 'cli' | 'mcp';
   mode?: 'workspace' | 'terminal';
+  workspaceContext?: boolean;
+  workspaceMode?: 'workspace' | 'terminalDirect';
   label?: string;
   availability?: 'disabled' | 'checking' | 'ready' | 'error';
   detail?: string;
@@ -17,8 +19,8 @@ export interface AgentTerminalTargetState {
 export interface AgentActivityViewActions {
   terminalTarget(): AgentTerminalTargetState | Promise<AgentTerminalTargetState>;
   initialTerminalTarget?(): AgentTerminalTargetState;
-  refreshTerminalTarget(): Promise<void>;
   switchWorkspace(): Promise<void>;
+  setWorkspaceMode?(mode: 'workspace' | 'terminalDirect'): Promise<void>;
   openTerminalDirectory(): Promise<void>;
   recoverForwarding(): Promise<void>;
 }
@@ -62,7 +64,20 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
           '清空'
         );
         if (selected === '清空') await this.store.clear();
-      } else if (type === 'refreshTerminalTarget' || type === 'switchWorkspace'
+      } else if (type === 'setWorkspaceMode') {
+        const mode = (message as { mode?: unknown }).mode;
+        if (mode !== 'workspace' && mode !== 'terminalDirect') return;
+        if (this.actionRunning) return;
+        this.actionRunning = true;
+        try {
+          await view.webview.postMessage({ type: 'actionState', action: type, busy: true });
+          await this.actions?.setWorkspaceMode?.(mode);
+        } finally {
+          this.actionRunning = false;
+          await view.webview.postMessage({ type: 'actionState', busy: false });
+          await this.updateTerminalTarget();
+        }
+      } else if (type === 'switchWorkspace'
           || type === 'openTerminalDirectory' || type === 'recoverForwarding') {
         if (this.actionRunning) return;
         this.actionRunning = true;
@@ -229,9 +244,11 @@ export function activityViewHtml(webview: vscode.Webview): string {
   </section>
   <section id="agentMode" class="agent-mode" hidden>
     <div class="mode-switch" role="group" aria-label="Agent 工具模式">
+      <select id="workspaceModeSelect" aria-label="工作区操作模式" hidden>
+        <option value="workspace">工作区模式</option>
+        <option value="terminalDirect">终端模式</option>
+      </select>
       <span id="workspaceModeLabel" class="mode-label" hidden>工作区模式</span>
-      <span id="terminalModeLabel" class="mode-label" hidden>终端模式</span>
-      <button id="refreshTerminalTarget" type="button" hidden>刷新终端目录</button>
       <button id="switchWorkspace" type="button" title="在当前窗口选择并打开远程目录">切换工作区</button>
       <button id="openTerminalDirectory" type="button" title="在当前窗口打开转发终端所在的远程目录" hidden>打开远程目录</button>
     </div>
@@ -262,8 +279,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const categoryFilter = document.getElementById('category');
     const statusFilter = document.getElementById('eventStatus');
     const workspaceModeLabel = document.getElementById('workspaceModeLabel');
-    const terminalModeLabel = document.getElementById('terminalModeLabel');
-    const refreshTerminalTarget = document.getElementById('refreshTerminalTarget');
+    const workspaceModeSelect = document.getElementById('workspaceModeSelect');
     const switchWorkspace = document.getElementById('switchWorkspace');
     const openTerminalDirectory = document.getElementById('openTerminalDirectory');
     const modeCapabilities = document.getElementById('modeCapabilities');
@@ -277,7 +293,6 @@ export function activityViewHtml(webview: vscode.Webview): string {
     let targetChecking = false;
     let recoveryText = '重试连接';
     function updateActionButtons() {
-      refreshTerminalTarget.disabled = targetActionBusy;
       switchWorkspace.disabled = targetActionBusy;
       openTerminalDirectory.disabled = targetActionBusy;
       recoverForwarding.disabled = targetActionBusy || targetChecking;
@@ -459,8 +474,9 @@ export function activityViewHtml(webview: vscode.Webview): string {
       if (!event.data) return;
       if (event.data.type === 'actionState') {
         targetActionBusy = event.data.busy === true;
-        refreshTerminalTarget.textContent = targetActionBusy && event.data.action === 'refreshTerminalTarget' ? '正在刷新…' : '刷新终端目录';
-        switchWorkspace.textContent = targetActionBusy && event.data.action === 'switchWorkspace' ? '正在切换…' : '切换工作区';
+        switchWorkspace.textContent = targetActionBusy && event.data.action === 'switchWorkspace'
+          ? '正在切换…'
+          : '切换工作区';
         openTerminalDirectory.textContent = targetActionBusy && event.data.action === 'openTerminalDirectory' ? '正在打开…' : '打开远程目录';
         recoverForwarding.textContent = targetActionBusy && event.data.action === 'recoverForwarding' ? '正在处理…' : recoveryText;
         updateActionButtons();
@@ -476,16 +492,16 @@ export function activityViewHtml(webview: vscode.Webview): string {
         const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'
           ? event.data.mode
           : event.data.enabled === true ? 'terminal' : undefined;
-        const enabled = mode === 'terminal';
+        switchWorkspace.textContent = '切换工作区';
+        workspaceModeSelect.value = event.data.workspaceMode === 'terminalDirect'
+          ? 'terminalDirect' : 'workspace';
+        workspaceModeSelect.hidden = event.data.workspaceContext !== true;
         agentMode.hidden = !mode;
-        workspaceModeLabel.hidden = mode !== 'workspace';
-        terminalModeLabel.hidden = mode !== 'terminal';
-        refreshTerminalTarget.hidden = mode !== 'terminal';
-        switchWorkspace.hidden = mode === 'terminal';
-        openTerminalDirectory.hidden = mode !== 'terminal';
+        workspaceModeLabel.hidden = mode !== 'workspace' || event.data.workspaceContext === true;
+        switchWorkspace.hidden = mode === 'terminal' && event.data.workspaceContext !== true;
+        openTerminalDirectory.hidden = mode !== 'terminal' || event.data.workspaceContext === true;
         modeCapabilities.hidden = mode !== 'terminal';
         workspaceModeLabel.classList.toggle('active', mode === 'workspace');
-        terminalModeLabel.classList.toggle('active', enabled);
         agentModeDetail.textContent = event.data.label || '尚未选择远程目标';
         const availability = event.data.availability;
         const statusLabel = { disabled: '未启用', checking: '准备中', ready: '转发就绪', error: '需要恢复' }[availability] || '';
@@ -499,10 +515,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
     });
     categoryFilter.addEventListener('change', render);
     statusFilter.addEventListener('change', render);
-    document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
-    refreshTerminalTarget.addEventListener('click', function() {
-      vscode.postMessage({ type: 'refreshTerminalTarget' });
+    workspaceModeSelect.addEventListener('change', function() {
+      vscode.postMessage({ type: 'setWorkspaceMode', mode: workspaceModeSelect.value });
     });
+    document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
     switchWorkspace.addEventListener('click', function() {
       vscode.postMessage({ type: 'switchWorkspace' });
     });
