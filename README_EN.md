@@ -8,6 +8,20 @@ SAFS lets you browse and edit remote files, use remote terminals, and let AI Cod
 
 ![SAFS demo](images/safs-demo.gif)
 
+## Demos
+
+### Connect to a host
+
+![Connect to a host](images/ssh-demo.gif)
+
+### Agent forwarding
+
+![Agent forwarding](images/agent-forward.gif)
+
+### Sync and Git
+
+![Sync and Git demo](images/sync-git.gif)
+
 ## Features
 
 - **Remote editing**: browse, search, open, save, create, rename, and delete remote files and directories.
