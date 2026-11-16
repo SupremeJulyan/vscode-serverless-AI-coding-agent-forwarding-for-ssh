@@ -254,7 +254,7 @@ function refreshSafsEntryLabel(): void {
   safsStatusBar.name = 'SAFS 状态';
   if (statusBarSyncTask) {
     safsStatusBar.text = '$(sync) SAFS SYNC';
-    safsStatusBar.tooltip = `正在双向同步：${statusBarSyncTask.remotePath} ↔ ${statusBarSyncTask.localDir}`;
+    safsStatusBar.tooltip = `双向同步已开启：${statusBarSyncTask.remotePath} ↔ ${statusBarSyncTask.localDir}`;
   } else if (statusBarGitAvailable) {
     safsStatusBar.text = '$(git-branch) SAFS Git';
     safsStatusBar.tooltip = statusBarGitTooltip;
@@ -1654,7 +1654,7 @@ async function promptRepeatSync(
     : exists ? ['打开副本', '重新同步', '取消'] : ['重新同步', '取消'];
   const choice = await vscode.window.showInformationMessage(
     running
-      ? `SAFS：该目录正在同步中（本地副本：${localDir}）。`
+      ? `SAFS：该目录的双向同步已开启（本地副本：${localDir}）。`
       : `SAFS：该目录已在历史列表中，同步过一次了（本地副本：${localDir}）。`,
     { modal: true },
     ...buttons
@@ -1784,43 +1784,64 @@ async function startRemoteSyncWithProgress(
     let reportedPercent = 0;
     progress.report({ message: '正在扫描远程目录…' });
     try {
-      await manager.add(task, {
-        signal: controller.signal,
-        onProgress: (state) => {
-          if (state.discovering) {
+      try {
+        await manager.add(task, {
+          signal: controller.signal,
+          onProgress: (state) => {
+            if (state.discovering) {
+              progress.report({
+                message: `已完成 ${state.completedFiles}/${state.totalFiles} 个 · ${
+                  formatDownloadBytes(state.transferredBytes)
+                }`
+              });
+              return;
+            }
+            if (state.phase === 'scanning') {
+              progress.report({ message: '正在统计文件数量和大小…' });
+              return;
+            }
+            const percent = state.totalBytes > 0
+              ? Math.min(100, state.transferredBytes / state.totalBytes * 100)
+              : state.totalFiles > 0
+                ? state.completedFiles / state.totalFiles * 100
+                : 100;
+            const increment = Math.max(0, percent - reportedPercent);
+            reportedPercent = Math.max(reportedPercent, percent);
             progress.report({
-              message: `已完成 ${state.completedFiles}/${state.totalFiles} 个 · ${
+              message: `${state.completedFiles}/${state.totalFiles} 个文件 · ${
                 formatDownloadBytes(state.transferredBytes)
-              }`
+              }/${formatDownloadBytes(state.totalBytes)}（${Math.floor(percent)}%）`,
+              increment
             });
-            return;
           }
-          if (state.phase === 'scanning') {
-            progress.report({ message: '正在统计文件数量和大小…' });
-            return;
-          }
-          const percent = state.totalBytes > 0
-            ? Math.min(100, state.transferredBytes / state.totalBytes * 100)
-            : state.totalFiles > 0
-              ? state.completedFiles / state.totalFiles * 100
-              : 100;
-          const increment = Math.max(0, percent - reportedPercent);
-          reportedPercent = Math.max(reportedPercent, percent);
-          progress.report({
-            message: `${state.completedFiles}/${state.totalFiles} 个文件 · ${
-              formatDownloadBytes(state.transferredBytes)
-            }/${formatDownloadBytes(state.totalBytes)}（${Math.floor(percent)}%）`,
-            increment
-          });
+        });
+      } catch (error) {
+        manager.remove(task.mountName, task.remotePath);
+        throw error;
+      }
+      // add() can return while an exponential retry is scheduled. Keep the
+      // progress operation and the enabled tree state pending until the first
+      // baseline succeeds or all initial attempts have failed.
+      while (!manager.isReady(task.mountName, task.remotePath)
+        && manager.has(task.mountName, task.remotePath)) {
+        if (controller.signal.aborted) {
+          manager.remove(task.mountName, task.remotePath);
+          break;
         }
-      });
+        await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      }
       if (controller.signal.aborted) {
+        await syncCoordinator?.requestStop(task.mountName, task.remotePath);
+        manager.remove(task.mountName, task.remotePath);
         bridgeOutput?.appendLine(`[同步取消] ${task.mountName}:${task.remotePath}`);
         void vscode.window.showInformationMessage('SAFS：同步已取消。');
         return false;
       }
-      // add may schedule a retry after failure; that is not a completed sync.
-      if (!manager.isReady(task.mountName, task.remotePath)) return false;
+      if (!manager.isReady(task.mountName, task.remotePath)) {
+        bridgeOutput?.appendLine(`[同步失败] ${task.mountName}:${task.remotePath}；已回退同步开关`);
+        void vscode.window.showWarningMessage('SAFS：初始同步失败，已关闭同步。请检查连接后重试。');
+        return false;
+      }
       const files = (task.fingerprintLines ?? []).filter((line) => line.startsWith('f:'));
       const bytes = files.reduce((sum, line) => {
         const fields = line.split(':');
@@ -4708,6 +4729,37 @@ async function normalizeHierarchicalConfigNames(
   await migrateConfigRenameState(context, renamed);
 }
 
+/** Resolve stale persisted sync names against the config loaded for this window. */
+function resolveRestoredSyncMountName(mountName: string, config: BridgeConfig): string | undefined {
+  const configured = new Set(config.mounts.map((mount) => mount.name));
+  if (configured.has(mountName)) return mountName;
+
+  let alias = mountRenames.get(mountName);
+  const visited = new Set<string>();
+  while (alias && !visited.has(alias)) {
+    if (configured.has(alias)) return alias;
+    visited.add(alias);
+    alias = mountRenames.get(alias);
+  }
+
+  const aliasHosts = config.hosts.filter((host) =>
+    mountAliasCandidates(host, config.host_aliases).includes(mountName)
+  );
+  const aliasMounts = config.mounts.filter((mount) =>
+    aliasHosts.some((host) => host.name === mount.host)
+  );
+  if (aliasMounts.length === 1) return aliasMounts[0].name;
+
+  // Older aliases such as "wsl1(root)" cannot be regenerated after the host
+  // alias changes. Recover only when the account identifies one current mount.
+  const account = /\(([^()]*)\)$/.exec(mountName)?.[1];
+  if (!account) return undefined;
+  const accountMounts = config.mounts.filter((mount) =>
+    config.hosts.some((host) => host.name === mount.host && host.user === account)
+  );
+  return accountMounts.length === 1 ? accountMounts[0].name : undefined;
+}
+
 async function migrateConfigRenameState(context: vscode.ExtensionContext, renamed: Map<string, string>): Promise<void> {
   if (!renamed.size) return;
   const history = await getDirectoryHistory(context);
@@ -6415,7 +6467,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ?? Promise.resolve(false),
     settings().get<number>('sftp.watchInterval', 5) * 1000,
     // 配置改名后任务可能还拿着旧名字：会话解析按当前名字走。
-    (mountName) => mountRenames.get(mountName) ?? mountName
+    (mountName) => mountRenames.get(mountName) ?? mountName,
+    (task) => syncCoordinator?.requestStop(task.mountName, task.remotePath) ?? Promise.resolve()
   );
   // 恢复上次的同步任务（指纹行随任务持久化，重载后继续增量同步）。
   const storedSyncTasks = context.globalState.get<RemoteSyncTask[]>(syncTasksKey, []);
@@ -6428,7 +6481,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     await context.globalState.update(legacySyncTasksKey, undefined);
   }
+
+  // A config rename can be saved even if an earlier state migration was
+  // interrupted. Normalize old persisted task names before the manager retries
+  // their first baseline; otherwise it keeps looking up a mount that no longer
+  // exists and leaves the history switch enabled forever.
+  const currentConfig = lastReadConfig;
+  const restoredSyncTasks: RemoteSyncTask[] = [];
+  const restoredMountRenames = new Map<string, string>();
   for (const task of storedSyncTasks) {
+    const mountName = currentConfig
+      ? resolveRestoredSyncMountName(task.mountName, currentConfig)
+      : task.mountName;
+    if (!mountName) {
+      bridgeOutput?.appendLine(
+        `[同步] 忽略无法匹配当前配置的旧任务：${task.mountName}:${task.remotePath}`
+      );
+      await syncCoordinator?.requestStop(task.mountName, task.remotePath);
+      await syncCoordinator?.clearReady(task.mountName, task.remotePath, task.localDir);
+      continue;
+    }
+    if (mountName !== task.mountName) restoredMountRenames.set(task.mountName, mountName);
+    restoredSyncTasks.push({ ...task, mountName });
+  }
+  if (restoredMountRenames.size > 0) {
+    await rememberMountAliases(restoredMountRenames);
+    await migrateConfigRenameState(context, restoredMountRenames);
+  }
+  const uniqueRestoredTasks = [...new Map(restoredSyncTasks.map((task) =>
+    [`${task.mountName}\0${task.remotePath}`, task]
+  )).values()];
+  if (JSON.stringify(storedSyncTasks) !== JSON.stringify(uniqueRestoredTasks)) {
+    await context.globalState.update(syncTasksKey, uniqueRestoredTasks);
+  }
+  for (const task of uniqueRestoredTasks) {
     void syncManager.add(task).catch((error) =>
       logAsyncFailure(`恢复同步任务失败 ${task.mountName}:${task.remotePath}`, error)
     );
