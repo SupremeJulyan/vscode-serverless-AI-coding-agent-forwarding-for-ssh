@@ -69,6 +69,7 @@ function taskKey(mountName: string, remotePath: string): string {
 
 const baselineRetryBaseMs = 1_000;
 const baselineRetryCapMs = 30_000;
+const initialBaselineMaxAttempts = 5;
 
 export class RemoteSyncManager {
   private readonly tasks = new Map<string, RemoteSyncTask>();
@@ -109,7 +110,8 @@ export class RemoteSyncManager {
     private readonly isStopRequested: (task: RemoteSyncTask) => Promise<boolean> = async () => false,
     private readonly remoteScanIntervalMs = 5_000,
     /** 配置名可能被改名：解析成当前名字，避免任务抱着旧名字存活。 */
-    private readonly resolveMountName: (mountName: string) => string = (name) => name
+    private readonly resolveMountName: (mountName: string) => string = (name) => name,
+    private readonly onInitialFailure: (task: RemoteSyncTask) => Promise<void> = async () => undefined
   ) {}
 
   list(): RemoteSyncTask[] {
@@ -129,6 +131,7 @@ export class RemoteSyncManager {
     const key = taskKey(task.mountName, task.remotePath);
     this.tasks.set(key, task);
     this.readyTasks.delete(key);
+    this.onTaskChanged(false);
     return this.startTask(task, options);
   }
 
@@ -140,7 +143,7 @@ export class RemoteSyncManager {
       if (this.tasks.get(key) === task && !this.pendingAcquireTimers.has(key)) {
         const timer = setTimeout(() => {
           this.pendingAcquireTimers.delete(key);
-          if (this.tasks.get(key) === task) void this.startTask(task);
+          if (this.tasks.get(key) === task) void this.startTask(task, options);
         }, 1_000);
         timer.unref?.();
         this.pendingAcquireTimers.set(key, timer);
@@ -481,11 +484,19 @@ export class RemoteSyncManager {
       return;
     }
     if (!this.tasks.has(key) || this.baselineTimers.has(key)) return;
+    if (options.signal && attempt + 1 >= initialBaselineMaxAttempts) {
+      this.log(`初始同步多次失败，已回退开关状态：${task.remotePath}`);
+      await this.onInitialFailure(task).catch((error) => {
+        this.log(`同步失败状态通知失败：${error instanceof Error ? error.message : String(error)}`);
+      });
+      this.remove(task.mountName, task.remotePath);
+      return;
+    }
     // 指数退避重试：连接中断/瞬时故障时不留下半初始化镜像。
     const delay = Math.min(baselineRetryBaseMs * 2 ** attempt, baselineRetryCapMs);
     const timer = setTimeout(() => {
       this.baselineTimers.delete(key);
-      void this.runBaseline(task, attempt + 1);
+      void this.runBaseline(task, attempt + 1, options);
     }, delay);
     timer.unref?.();
     this.baselineTimers.set(key, timer);
