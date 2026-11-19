@@ -28,16 +28,8 @@ const PART_INFIX = '.safs-part';
 /** 残片名里的令牌长度（hex 字符数）。生成与解析必须共用它，否则判定永远对不上。 */
 const TOKEN_HEX = 16;
 
-/** 当前扩展进程的续传令牌：主进程令牌由共享存储恢复，并发的其它进程使用私有令牌。 */
-let SESSION_TOKEN = randomBytes(TOKEN_HEX / 2).toString('hex');
-
-/** Set the extension-process lease token before registering transfer commands. */
-export function setResumeSessionToken(token: string): void {
-  if (!new RegExp(`^[0-9a-f]{${TOKEN_HEX}}$`).test(token)) {
-    throw new Error('Invalid transfer resume session token.');
-  }
-  SESSION_TOKEN = token;
-}
+/** Standalone callers use a process-local token when no lease is configured. */
+const SESSION_TOKEN = randomBytes(TOKEN_HEX / 2).toString('hex');
 
 /** 源文件签名：size + mtime，任一变化都意味着残片对应的是另一个版本。 */
 export interface ResumeSourceSignature {
@@ -102,20 +94,20 @@ export function partSourceLabel(partName: string): string {
 
 /** 上传残片：远程目标同目录下的隐藏文件。 */
 export function uploadPartName(
-  remoteFile: string, signature: ResumeSourceSignature
+  remoteFile: string, signature: ResumeSourceSignature, token?: string
 ): string {
   const dir = path.posix.dirname(remoteFile);
   const base = path.posix.basename(remoteFile);
-  return path.posix.join(dir, `.${partNameFor(base, signature)}`);
+  return path.posix.join(dir, `.${partNameFor(base, signature, token)}`);
 }
 
 /** 下载残片：本地目标同目录下的兄弟文件。 */
 export function downloadPartPath(
-  localTarget: string, signature: ResumeSourceSignature
+  localTarget: string, signature: ResumeSourceSignature, token?: string
 ): string {
   const dir = path.dirname(localTarget);
   const base = path.basename(localTarget);
-  return path.join(dir, partNameFor(base, signature));
+  return path.join(dir, partNameFor(base, signature, token));
 }
 
 /**

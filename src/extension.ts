@@ -81,8 +81,7 @@ import {
 import { connectSftp } from './ssh2/sftp-client';
 import { SftpSession } from './ssh2/session';
 import { writeStreamToFile, pipeStreams } from './transfer/stream-file';
-import { acquireResumeSessionToken } from './transfer/resume-session';
-import { setResumeSessionToken } from './transfer/resume-plan';
+import { configureResumeSession } from './transfer/resume-session';
 import {
   cleanupDownloadPart, commitDownloadPart, prepareDownloadResume
 } from './transfer/resume-store';
@@ -1937,6 +1936,7 @@ async function downloadRemoteFile(
     remote,
     localTarget: target,
     canRange: true,
+    recoverLegacyPart: forcedLocalPath === undefined,
     log: (message) => bridgeOutput?.appendLine(message)
   });
   if (resume.offset > 0) {
@@ -1948,6 +1948,8 @@ async function downloadRemoteFile(
       bridgeOutput?.appendLine(`[下载] 残片 SHA-256 校验失败，完整重传：${remotePath}`);
       await rm(resume.partPath, { force: true });
       resume = { ...resume, offset: 0, reason: 'source-changed' };
+    } else {
+      bridgeOutput?.info(`[下载] 残片 SHA-256 校验通过，从 ${resume.offset} 字节继续：${target}`);
     }
   }
   return vscode.window.withProgress({
@@ -6259,12 +6261,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerConfigDiagnostics(context, configPath);
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
-  try {
-    const token = await acquireResumeSessionToken(context.globalStorageUri.fsPath);
-    setResumeSessionToken(token);
-  } catch (error) {
-    bridgeOutput.error(`断点续传会话初始化失败，当前进程将使用临时令牌：${String(error)}`);
-  }
+  configureResumeSession(context.globalStorageUri.fsPath, message => bridgeOutput?.warn(message));
   const previousVersion = context.globalState.get<string>('patches.previousVersion');
   if (needsPasswordMigration(previousVersion) || !context.globalState.get<boolean>('patches.sshPasswords217')) {
     try {

@@ -1,103 +1,84 @@
 import { randomBytes } from 'node:crypto';
-import { open, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import * as path from 'node:path';
+import { ipcPath, listenIpc } from '../agent/agent-ipc';
 
-interface ResumeOwner {
-  pid: number;
+interface ResumeSession {
   token: string;
+  persistent: boolean;
 }
 
-const TOKEN_PATTERN = /^[0-9a-f]{16}$/;
-const STALE_EMPTY_CLAIM_MS = 5_000;
+let session: Promise<ResumeSession> | undefined;
+let storageDirectory: string | undefined;
+let log: ((message: string) => void) | undefined;
 
-function newToken(): string {
-  return randomBytes(8).toString('hex');
+export function configureResumeSession(directory: string, logger: (message: string) => void): void {
+  storageDirectory = directory;
+  log = logger;
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-async function readOwner(file: string): Promise<ResumeOwner | undefined> {
-  try {
-    const value = JSON.parse(await readFile(file, 'utf8')) as Partial<ResumeOwner>;
-    if (Number.isInteger(value.pid) && (value.pid ?? 0) > 0
-      && typeof value.token === 'string' && TOKEN_PATTERN.test(value.token)) {
-      return { pid: value.pid!, token: value.token };
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT'
-      && !(error instanceof SyntaxError)) throw error;
-  }
-  return undefined;
-}
-
-async function claim(file: string): Promise<boolean> {
-  try {
-    const handle = await open(file, 'wx', 0o600);
-    try { await handle.writeFile(`${process.pid}\n`); }
-    finally { await handle.close(); }
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-  }
-
-  let stale = false;
-  try {
-    const pid = Number.parseInt(await readFile(file, 'utf8'), 10);
-    if (Number.isInteger(pid) && pid > 0) stale = !isProcessAlive(pid);
-    else stale = Date.now() - (await stat(file)).mtimeMs > STALE_EMPTY_CLAIM_MS;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return claim(file);
-    throw error;
-  }
-  if (!stale) return false;
-
-  await unlink(file).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+/** Idle windows never claim the shared token. Keep the lease alive until the host exits. */
+export function transferResumeSession(): Promise<ResumeSession> | undefined {
+  const directory = storageDirectory;
+  if (!directory) return undefined;
+  return session ??= acquire(directory).catch((error: unknown) => {
+    log?.(`无法获取共享续传令牌，当前进程使用临时令牌：${String(error)}`);
+    return { token: randomBytes(8).toString('hex'), persistent: false };
   });
-  try {
-    const handle = await open(file, 'wx', 0o600);
-    try { await handle.writeFile(`${process.pid}\n`); }
-    finally { await handle.close(); }
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
-    throw error;
-  }
 }
 
-/**
- * The first live extension host owns the persistent resume token. Concurrent
- * hosts get private tokens; after the owner exits, the next host adopts its
- * token and can continue the same partial transfers.
- */
-export async function acquireResumeSessionToken(storageDirectory: string): Promise<string> {
-  await mkdir(storageDirectory, { recursive: true });
-  const ownerFile = path.join(storageDirectory, 'transfer-resume-owner.json');
-  const claimFile = path.join(storageDirectory, 'transfer-resume-owner.claim');
-  if (!await claim(claimFile)) return newToken();
+async function acquire(directory: string): Promise<ResumeSession> {
+  const lease = createServer(socket => socket.destroy());
+  let key = path.resolve(directory);
+  if (process.platform === 'win32') key = key.toLowerCase();
+  try {
+    await listenIpc(lease, ipcPath(`transfer-resume:${key}`));
+  } catch (error) {
+    if (lease.listening) lease.close();
+    if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      return { token: randomBytes(8).toString('hex'), persistent: false };
+    }
+    throw error;
+  }
+  lease.unref();
 
   try {
-    const owner = await readOwner(ownerFile);
-    if (owner && isProcessAlive(owner.pid)) {
-      // Re-activation inside the owning extension host keeps its lease.
-      return owner.pid === process.pid ? owner.token : newToken();
+    await mkdir(directory, { recursive: true });
+    // A fixed token lets us keep using parts from the previous primary host.
+    const ownerFile = path.join(directory, 'transfer-resume-owner.json');
+    let owner: { token?: unknown; pid?: unknown } | undefined;
+    try {
+      owner = JSON.parse(await readFile(ownerFile, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
     }
-
-    const token = owner?.token ?? newToken();
-    await writeFile(ownerFile, `${JSON.stringify({ pid: process.pid, token })}\n`, {
-      encoding: 'utf8', mode: 0o600
-    });
-    return token;
-  } finally {
-    await unlink(claimFile).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    });
+    if (typeof owner?.pid === 'number' && Number.isInteger(owner.pid) && owner.pid > 0
+      && owner.pid !== process.pid) {
+      try {
+        process.kill(owner.pid, 0);
+        // An older version may still be writing with this token.
+        lease.close();
+        return { token: randomBytes(8).toString('hex'), persistent: false };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      }
+    }
+    const validToken = typeof owner?.token === 'string' && /^[0-9a-f]{16}$/.test(owner.token)
+      ? owner.token : undefined;
+    const token = validToken ?? randomBytes(8).toString('hex');
+    if (!validToken || owner?.pid !== undefined) {
+      const temporary = `${ownerFile}.${randomBytes(8).toString('hex')}.tmp`;
+      try {
+        await writeFile(temporary, JSON.stringify({ token }), { flag: 'wx', mode: 0o600 });
+        await rename(temporary, ownerFile);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    }
+    return { token, persistent: true };
+  } catch (error) {
+    lease.close();
+    throw error;
   }
 }

@@ -8,6 +8,7 @@ import {
 } from './resume-plan';
 import { SftpSession } from '../ssh2/session';
 import { sameResumePrefix } from './resume-checksum';
+import { transferResumeSession } from './resume-session';
 import { pipeStreams } from './stream-file';
 
 /** 新文件的远端默认权限：与补可执行位之前的行为一致，读写范围不因这次修复改变。 */
@@ -93,7 +94,8 @@ export async function uploadRemoteTree(options: {
     // 续传判定：残片名里编进了「本会话 + 本地源 size+mtime」。本地文件在两次尝试
     // 之间被改过，签名就变、名字就对不上，绝无可能把两个版本的字节拼在一起。
     const signature: ResumeSourceSignature = { size: entry.size, mtimeMs: entry.mtimeMs };
-    const temporary = uploadPartName(remote, signature);
+    const resumeSession = await transferResumeSession();
+    const temporary = uploadPartName(remote, signature, resumeSession?.token);
     targetDirectories.add(path.posix.dirname(remote));
     let resumeAt = 0;
     {
@@ -105,6 +107,7 @@ export async function uploadRemoteTree(options: {
         name: path.posix.basename(remote),
         partName: path.posix.basename(temporary),
         baseline: signature,
+        token: resumeSession?.token,
         part: part === undefined
           ? undefined
           : { size: part.size, mtimeMs: part.mtime },
