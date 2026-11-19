@@ -6284,7 +6284,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     recoverForwarding: recoverActivityForwarding,
     setWorkspaceMode: (mode) => guard(() => setWorkspaceAgentMode(mode)),
     switchWorkspace: async () => {
-      if (agentTerminalDirectMode) {
+      if (agentCommandTerminalState().mode === 'terminal') {
         await guard(openAgentTerminalDirectory);
       } else {
         await vscode.commands.executeCommand<void>(`${commandPrefix}.switchRemoteDirectory`);
