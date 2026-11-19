@@ -291,7 +291,15 @@ export function activityViewHtml(webview: vscode.Webview): string {
     let idleHint = '当前远程窗口';
     let targetActionBusy = false;
     let targetChecking = false;
+    let terminalModeActive = false;
     let recoveryText = '重试连接';
+    function updateSwitchWorkspaceLabel() {
+      const action = terminalModeActive ? '更新工作区' : '切换工作区';
+      switchWorkspace.title = terminalModeActive
+        ? '使用当前远程终端的工作目录更新工作区'
+        : '在当前窗口选择并打开远程目录';
+      switchWorkspace.textContent = targetActionBusy ? (terminalModeActive ? '正在更新…' : '正在切换…') : action;
+    }
     function updateActionButtons() {
       switchWorkspace.disabled = targetActionBusy;
       openTerminalDirectory.disabled = targetActionBusy;
@@ -474,9 +482,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       if (!event.data) return;
       if (event.data.type === 'actionState') {
         targetActionBusy = event.data.busy === true;
-        switchWorkspace.textContent = targetActionBusy && event.data.action === 'switchWorkspace'
-          ? '正在切换…'
-          : '切换工作区';
+        if (event.data.action === 'switchWorkspace') updateSwitchWorkspaceLabel();
         openTerminalDirectory.textContent = targetActionBusy && event.data.action === 'openTerminalDirectory' ? '正在打开…' : '打开远程目录';
         recoverForwarding.textContent = targetActionBusy && event.data.action === 'recoverForwarding' ? '正在处理…' : recoveryText;
         updateActionButtons();
@@ -492,7 +498,8 @@ export function activityViewHtml(webview: vscode.Webview): string {
         const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'
           ? event.data.mode
           : event.data.enabled === true ? 'terminal' : undefined;
-        switchWorkspace.textContent = '切换工作区';
+        terminalModeActive = mode === 'terminal';
+        updateSwitchWorkspaceLabel();
         workspaceModeSelect.value = event.data.workspaceMode === 'terminalDirect'
           ? 'terminalDirect' : 'workspace';
         workspaceModeSelect.hidden = event.data.workspaceContext !== true;
