@@ -1,4 +1,4 @@
-import { mkdir, rename, rm } from 'node:fs/promises';
+import { rename, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { validateLocalDownloadTarget } from './local-transfer-path';
 import {
@@ -6,7 +6,7 @@ import {
 } from './resume-store';
 import { SftpSession } from '../ssh2/session';
 import { assertSafeRemoteEntryName } from '../ssh2/uri';
-import { writeStreamToFile } from './stream-file';
+import { ensureLocalDirectory, writeStreamToFile } from './stream-file';
 import { sameResumePrefix } from './resume-checksum';
 
 export interface RemoteDirectoryDownloadProgress {
@@ -155,7 +155,7 @@ export async function downloadRemoteDirectoryTree(options: {
     if (externallyAborted || options.signal?.aborted || controller.signal.aborted) {
       throw new Error('目录下载已取消');
     }
-    await mkdir(await localTarget(relativeDirectory), { recursive: true });
+    await ensureLocalDirectory(await localTarget(relativeDirectory));
     const entries = await options.session.readDirectory(remoteDirectory, controller.signal);
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {

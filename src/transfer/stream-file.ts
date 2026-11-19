@@ -1,7 +1,20 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import { pipeline } from 'node:stream/promises';
+
+/** Ensure a directory exists without calling mkdir on existing roots such as D:\\ on Windows. */
+export async function ensureLocalDirectory(directory: string): Promise<void> {
+  try {
+    const directoryStat = await stat(directory);
+    if (!directoryStat.isDirectory()) {
+      throw new Error(`Local path is not a directory: ${directory}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await mkdir(directory, { recursive: true });
+  }
+}
 
 export interface StreamPipeOptions {
   /** 每约 1MB 汇报一次增量字节（用于进度条）。 */
@@ -128,7 +141,8 @@ export async function writeStreamToFile(
   target: string,
   options: WriteStreamOptions = {}
 ): Promise<void> {
-  await mkdir(path.dirname(target), { recursive: true });
+  const parent = path.dirname(target);
+  await ensureLocalDirectory(parent);
   // 续传用 'a' 而不是 'r+'：目标是我们自己在上一轮留下的残片，追加语义既不会
   // 截断已收到的字节，也不需要额外一次 open 存在性探测。
   const destination = createWriteStream(target, { flags: options.resume ? 'a' : 'w' });
