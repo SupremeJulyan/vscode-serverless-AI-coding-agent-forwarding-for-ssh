@@ -68,25 +68,32 @@ export async function prepareDownloadResume(options: {
   remote: ResumeSourceSignature;
   localTarget: string;
   canRange: boolean;
-  recoverLegacyPart?: boolean;
+  /** Use a stable name while holding the per-target interactive download lease. */
+  interactive?: boolean;
   log?: (message: string) => void;
 }): Promise<DownloadResume> {
-  const resumeSession = await transferResumeSession();
-  const partPath = downloadPartPath(options.localTarget, options.remote, resumeSession?.token);
+  const token = options.interactive ? 'visual-download-v1' : (await transferResumeSession())?.token;
+  const partPath = downloadPartPath(options.localTarget, options.remote, token);
   if (!options.canRange) {
     return { partPath, offset: 0, signature: options.remote, reason: 'no-range-support' };
   }
   let part: ResumeSourceSignature | undefined;
   try {
-    const entry = await stat(partPath);
+    const entry = options.interactive ? await lstat(partPath) : await stat(partPath);
+    if (options.interactive && !entry.isFile()) {
+      throw new Error(`下载残片不是普通文件：${partPath}`);
+    }
     if (entry.isFile()) part = { size: entry.size, mtimeMs: entry.mtimeMs };
   } catch (error) {
     if (!isMissing(error)) throw error;
-    if (options.recoverLegacyPart && resumeSession?.persistent) {
+    if (options.interactive) {
       try {
         await snapshotLegacyPart(partPath, options.localTarget, options.remote.size);
         const entry = await lstat(partPath);
-        if (entry.isFile()) part = { size: entry.size, mtimeMs: entry.mtimeMs };
+        if (entry.isFile()) {
+          part = { size: entry.size, mtimeMs: entry.mtimeMs };
+          options.log?.(`已找到旧下载残片，准备校验 ${entry.size} 字节：${partPath}`);
+        }
       } catch (recoveryError) {
         if (!isMissing(recoveryError)) {
           options.log?.(`无法恢复旧下载残片：${String(recoveryError)}`);
@@ -99,7 +106,7 @@ export async function prepareDownloadResume(options: {
     name: path.basename(options.localTarget),
     partName: path.basename(partPath),
     baseline: options.remote,
-    token: resumeSession?.token,
+    token,
     part,
     canRange: options.canRange
   });
