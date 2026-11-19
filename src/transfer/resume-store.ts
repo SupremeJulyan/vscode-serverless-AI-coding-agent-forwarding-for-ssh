@@ -1,10 +1,12 @@
-import { stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { copyFile, lstat, readdir, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import { applyLocalExecutableBits } from './file-mode';
 import {
-  downloadPartPath, planResume, shouldKeepPart,
+  downloadPartPath, isTransferPartName, planResume, shouldKeepPart,
   type ResumeReason, type ResumeSourceSignature
 } from './resume-plan';
+import { transferResumeSession } from './resume-session';
 
 /**
  * 下载侧的续传准备与收尾。
@@ -35,14 +37,42 @@ function isMissing(error: unknown): boolean {
   return MISSING.has((error as { code?: number | string }).code as number | string);
 }
 
+/** Snapshot an old private-token part without modifying its original. The caller
+ * must still verify the snapshot against the remote prefix before appending. */
+async function snapshotLegacyPart(partPath: string, target: string, sourceSize: number): Promise<void> {
+  const directory = path.dirname(partPath);
+  const prefix = `${path.basename(target)}.safs-part-`;
+  const files = await readdir(directory, { withFileTypes: true }).catch(error => {
+    if (!isMissing(error)) throw error;
+    return [];
+  });
+  let candidate: { path: string; size: number } | undefined;
+  for (const file of files) {
+    if (!file.isFile() || !file.name.startsWith(prefix) || file.name.length !== prefix.length + 16
+      || !isTransferPartName(file.name)) continue;
+    const filePath = path.join(directory, file.name);
+    const entry = await lstat(filePath).catch(error => {
+      if (!isMissing(error)) throw error;
+      return undefined;
+    });
+    if (entry?.isFile() && shouldKeepPart(entry.size) && entry.size < sourceSize
+      && (!candidate || candidate.size < entry.size)) {
+      candidate = { path: filePath, size: entry.size };
+    }
+  }
+  if (candidate) await copyFile(candidate.path, partPath, constants.COPYFILE_EXCL);
+}
+
 export async function prepareDownloadResume(options: {
   remoteName: string;
   remote: ResumeSourceSignature;
   localTarget: string;
   canRange: boolean;
+  recoverLegacyPart?: boolean;
   log?: (message: string) => void;
 }): Promise<DownloadResume> {
-  const partPath = downloadPartPath(options.localTarget, options.remote);
+  const resumeSession = await transferResumeSession();
+  const partPath = downloadPartPath(options.localTarget, options.remote, resumeSession?.token);
   if (!options.canRange) {
     return { partPath, offset: 0, signature: options.remote, reason: 'no-range-support' };
   }
@@ -52,12 +82,24 @@ export async function prepareDownloadResume(options: {
     if (entry.isFile()) part = { size: entry.size, mtimeMs: entry.mtimeMs };
   } catch (error) {
     if (!isMissing(error)) throw error;
+    if (options.recoverLegacyPart && resumeSession?.persistent) {
+      try {
+        await snapshotLegacyPart(partPath, options.localTarget, options.remote.size);
+        const entry = await lstat(partPath);
+        if (entry.isFile()) part = { size: entry.size, mtimeMs: entry.mtimeMs };
+      } catch (recoveryError) {
+        if (!isMissing(recoveryError)) {
+          options.log?.(`无法恢复旧下载残片：${String(recoveryError)}`);
+        }
+      }
+    }
   }
   const decision = planResume({
     // 残片由本地目标名生成，另存为时也必须用同一个名字校验。
     name: path.basename(options.localTarget),
     partName: path.basename(partPath),
     baseline: options.remote,
+    token: resumeSession?.token,
     part,
     canRange: options.canRange
   });
