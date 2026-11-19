@@ -482,7 +482,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       if (!event.data) return;
       if (event.data.type === 'actionState') {
         targetActionBusy = event.data.busy === true;
-        if (event.data.action === 'switchWorkspace') updateSwitchWorkspaceLabel();
+        if (event.data.action === 'switchWorkspace' || !targetActionBusy) updateSwitchWorkspaceLabel();
         openTerminalDirectory.textContent = targetActionBusy && event.data.action === 'openTerminalDirectory' ? '正在打开…' : '打开远程目录';
         recoverForwarding.textContent = targetActionBusy && event.data.action === 'recoverForwarding' ? '正在处理…' : recoveryText;
         updateActionButtons();
