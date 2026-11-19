@@ -81,7 +81,7 @@ import {
 import { connectSftp } from './ssh2/sftp-client';
 import { SftpSession } from './ssh2/session';
 import { writeStreamToFile, pipeStreams } from './transfer/stream-file';
-import { configureResumeSession } from './transfer/resume-session';
+import { configureResumeSession, withLocalDownloadLease } from './transfer/resume-session';
 import {
   cleanupDownloadPart, commitDownloadPart, prepareDownloadResume
 } from './transfer/resume-store';
@@ -1921,7 +1921,6 @@ async function downloadRemoteFile(
   remote: { size: number; mtimeMs: number; permissions?: number },
   forcedLocalPath?: string, transferTimeoutMs?: number
 ): Promise<boolean> {
-  const totalBytes = remote.size;
   const baseName = path.posix.basename(remotePath);
   const target = forcedLocalPath ?? (await vscode.window.showSaveDialog({
     title: 'SAFS：下载到',
@@ -1929,6 +1928,21 @@ async function downloadRemoteFile(
     saveLabel: '下载'
   }))?.fsPath;
   if (!target) return false;
+  if (forcedLocalPath !== undefined) {
+    return transferRemoteFileToLocal(session, remotePath, remote, target, transferTimeoutMs, false);
+  }
+  return withLocalDownloadLease(target, canonicalTarget =>
+    transferRemoteFileToLocal(session, remotePath, remote, canonicalTarget, transferTimeoutMs, true)
+  );
+}
+
+async function transferRemoteFileToLocal(
+  session: SftpSession, remotePath: string,
+  remote: { size: number; mtimeMs: number; permissions?: number },
+  target: string, transferTimeoutMs: number | undefined, interactive: boolean
+): Promise<boolean> {
+  const totalBytes = remote.size;
+  const baseName = path.posix.basename(remotePath);
   // 续传准备：残片名由「远端 size+mtime」推导，远端一变名字就变、旧残片自动失效；
   // Resume using the native file stream.
   let resume = await prepareDownloadResume({
@@ -1936,7 +1950,7 @@ async function downloadRemoteFile(
     remote,
     localTarget: target,
     canRange: true,
-    recoverLegacyPart: forcedLocalPath === undefined,
+    interactive,
     log: (message) => bridgeOutput?.appendLine(message)
   });
   if (resume.offset > 0) {
