@@ -81,6 +81,8 @@ import {
 import { connectSftp } from './ssh2/sftp-client';
 import { SftpSession } from './ssh2/session';
 import { writeStreamToFile, pipeStreams } from './transfer/stream-file';
+import { acquireResumeSessionToken } from './transfer/resume-session';
+import { setResumeSessionToken } from './transfer/resume-plan';
 import {
   cleanupDownloadPart, commitDownloadPart, prepareDownloadResume
 } from './transfer/resume-store';
@@ -6257,6 +6259,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerConfigDiagnostics(context, configPath);
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
+  try {
+    const token = await acquireResumeSessionToken(context.globalStorageUri.fsPath);
+    setResumeSessionToken(token);
+  } catch (error) {
+    bridgeOutput.error(`断点续传会话初始化失败，当前进程将使用临时令牌：${String(error)}`);
+  }
   const previousVersion = context.globalState.get<string>('patches.previousVersion');
   if (needsPasswordMigration(previousVersion) || !context.globalState.get<boolean>('patches.sshPasswords217')) {
     try {

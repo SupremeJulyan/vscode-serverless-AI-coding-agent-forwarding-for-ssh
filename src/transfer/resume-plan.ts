@@ -28,8 +28,16 @@ const PART_INFIX = '.safs-part';
 /** 残片名里的令牌长度（hex 字符数）。生成与解析必须共用它，否则判定永远对不上。 */
 const TOKEN_HEX = 16;
 
-/** 进程级会话令牌：同一进程内的多次尝试复用残片，跨进程（扩展重载）不复用。 */
-const SESSION_TOKEN = randomBytes(TOKEN_HEX / 2).toString('hex');
+/** 当前扩展进程的续传令牌：主进程令牌由共享存储恢复，并发的其它进程使用私有令牌。 */
+let SESSION_TOKEN = randomBytes(TOKEN_HEX / 2).toString('hex');
+
+/** Set the extension-process lease token before registering transfer commands. */
+export function setResumeSessionToken(token: string): void {
+  if (!new RegExp(`^[0-9a-f]{${TOKEN_HEX}}$`).test(token)) {
+    throw new Error('Invalid transfer resume session token.');
+  }
+  SESSION_TOKEN = token;
+}
 
 /** 源文件签名：size + mtime，任一变化都意味着残片对应的是另一个版本。 */
 export interface ResumeSourceSignature {
