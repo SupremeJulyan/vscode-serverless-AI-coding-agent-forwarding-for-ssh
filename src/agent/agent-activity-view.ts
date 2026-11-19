@@ -291,14 +291,9 @@ export function activityViewHtml(webview: vscode.Webview): string {
     let idleHint = '当前远程窗口';
     let targetActionBusy = false;
     let targetChecking = false;
-    let terminalModeActive = false;
     let recoveryText = '重试连接';
     function updateSwitchWorkspaceLabel() {
-      const action = terminalModeActive ? '更新工作区' : '切换工作区';
-      switchWorkspace.title = terminalModeActive
-        ? '使用当前远程终端的工作目录更新工作区'
-        : '在当前窗口选择并打开远程目录';
-      switchWorkspace.textContent = targetActionBusy ? (terminalModeActive ? '正在更新…' : '正在切换…') : action;
+      switchWorkspace.textContent = targetActionBusy ? '正在切换…' : '切换工作区';
     }
     function updateActionButtons() {
       switchWorkspace.disabled = targetActionBusy;
@@ -498,7 +493,6 @@ export function activityViewHtml(webview: vscode.Webview): string {
         const mode = event.data.mode === 'workspace' || event.data.mode === 'terminal'
           ? event.data.mode
           : event.data.enabled === true ? 'terminal' : undefined;
-        terminalModeActive = mode === 'terminal';
         updateSwitchWorkspaceLabel();
         workspaceModeSelect.value = event.data.workspaceMode === 'terminalDirect'
           ? 'terminalDirect' : 'workspace';
