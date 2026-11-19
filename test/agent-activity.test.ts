@@ -202,7 +202,8 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('workspaceModeSelect').hidden, false);
   assert.equal(get('workspaceModeSelect').value, 'terminalDirect');
   assert.equal(get('switchWorkspace').hidden, false);
-  assert.equal(get('switchWorkspace').textContent, '切换工作区');
+  assert.equal(get('switchWorkspace').textContent, '更新工作区');
+  assert.equal(get('switchWorkspace').title, '使用当前远程终端的工作目录更新工作区');
   assert.equal(get('openTerminalDirectory').hidden, true);
   get('category').value = 'read';
   get('eventStatus').value = 'error';
@@ -216,8 +217,10 @@ test('target panel updates mode, capabilities, readiness and recovery actions', 
   assert.equal(get('timeline').children[0].className, 'event success');
   receive({ data: { type: 'actionState', action: 'switchWorkspace', busy: true } });
   assert.equal(get('switchWorkspace').disabled, true);
+  assert.equal(get('switchWorkspace').textContent, '正在更新…');
   receive({ data: { type: 'actionState', busy: false } });
   assert.equal(get('switchWorkspace').disabled, false);
+  assert.equal(get('switchWorkspace').textContent, '更新工作区');
 });
 
 test('activity controls unlock before a slow target refresh finishes', async () => {
