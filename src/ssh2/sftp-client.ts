@@ -179,15 +179,11 @@ export class Ssh2SftpSession implements SftpSession {
   }
 
   readFileStream(
-    remotePath: string, signal?: AbortSignal, start = 0
+    remotePath: string, signal?: AbortSignal
   ): Promise<NodeJS.ReadableStream> {
     return new Promise<NodeJS.ReadableStream>((resolve, reject) => {
       if (signal?.aborted) {
         reject(abortError());
-        return;
-      }
-      if (!Number.isSafeInteger(start) || start < 0) {
-        reject(new Error(`无效的读取起始偏移: ${start}`));
         return;
       }
       const flags = 0x01;
@@ -196,7 +192,7 @@ export class Ssh2SftpSession implements SftpSession {
           reject(openError);
           return;
         }
-        let position = start;
+        let position = 0;
         let stopped = false;
         const stream = Readable.from((async function* (sftp: SFTPWrapper) {
           try {
@@ -297,17 +293,7 @@ export class Ssh2SftpSession implements SftpSession {
     options: SftpWriteOptions,
     signal?: AbortSignal
   ): Promise<NodeJS.WritableStream> {
-    const startOffset = options.startOffset ?? 0;
-    if (!Number.isSafeInteger(startOffset) || startOffset < 0) {
-      return Promise.reject(new Error(`无效的续传起始偏移: ${startOffset}`));
-    }
-    // 续传（startOffset > 0）：残片已存在，用 'r+' 定位写，绝不截断已有前缀——
-    // 'r+' 在文件不存在时失败，正好挡住「以为在续传其实残片没了」的情况。
-    const flag = startOffset > 0
-      ? 'r+'
-      : (options.create ? (options.overwrite ? 'w' : 'wx') : 'r+');
-    // 注：写位置由每条 WRITE 报文自带的 offset 决定，与 open 标志无关。'a' 语义
-    // （服务端忽略 offset、永远追加）会把续传起点又推回文件末尾，所以这里不用 'a'。
+    const flag = options.create ? (options.overwrite ? 'w' : 'wx') : 'r+';
     const sftp = this.sftp;
     return new Promise<NodeJS.WritableStream>((resolve, reject) => {
       if (signal?.aborted) {
@@ -323,7 +309,7 @@ export class Ssh2SftpSession implements SftpSession {
           reject(openError);
           return;
         }
-        let position = startOffset;
+        let position = 0;
         let handleOpen = true;
         let pendingTimer: NodeJS.Timeout | undefined;
         const writable = new Writable({

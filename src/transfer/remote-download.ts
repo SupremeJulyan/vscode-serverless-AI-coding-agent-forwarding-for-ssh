@@ -1,13 +1,11 @@
 import { rename, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { validateLocalDownloadTarget } from './local-transfer-path';
-import {
-  cleanupDownloadPart, commitDownloadPart, prepareDownloadResume, type DownloadResume
-} from './resume-store';
+import { commitDownloadPart } from './download-commit';
 import { SftpSession } from '../ssh2/session';
 import { assertSafeRemoteEntryName } from '../ssh2/uri';
 import { ensureLocalDirectory, writeStreamToFile } from './stream-file';
-import { sameResumePrefix } from './resume-checksum';
+import { localTransferTempPath } from './temp-path';
 
 export interface RemoteDirectoryDownloadProgress {
   phase: 'scanning' | 'downloading';
@@ -37,7 +35,7 @@ export async function downloadRemoteDirectoryTree(options: {
   signal?: AbortSignal;
   secureLocalRoot?: string;
   onProgress?: (progress: RemoteDirectoryDownloadProgress) => void;
-  /** 追加日志（续传起点、远端已变化等）；失败不影响传输。 */
+  /** 追加诊断日志；失败不影响传输。 */
   log?: (message: string) => void;
 }): Promise<RemoteDirectoryDownloadResult> {
   const concurrency = Number.isFinite(options.concurrency)
@@ -92,60 +90,30 @@ export async function downloadRemoteDirectoryTree(options: {
     let task!: Promise<void>;
     task = (async () => {
       const target = await localTarget(relative);
-      // 续传判定：远端在这两次尝试之间被改过，残片名就对不上，自动全量重来。
       const info = await options.session.stat(remoteFile, controller.signal);
-      let resume: DownloadResume = await prepareDownloadResume({
-        remoteName: remoteFile,
-        remote: { size: info.size, mtimeMs: info.mtime },
-        localTarget: target,
-        canRange: true,
-        log: options.log
-      });
-      if (resume.offset > 0) {
-        const matches = await sameResumePrefix({
-          session: options.session, localPath: resume.partPath, remotePath: remoteFile,
-          length: resume.offset, signal: controller.signal
-        });
-        if (!matches) {
-          options.log?.(`下载残片 SHA-256 校验失败，删除残片并完整重传：${remoteFile}`);
-          await rm(resume.partPath, { force: true });
-          resume = { ...resume, offset: 0, reason: 'source-changed' };
-        } else {
-          options.log?.(`下载续传 ${target}：SHA-256 校验通过，从 ${resume.offset} 字节继续`);
-        }
-      }
-      const source = await options.session.readFileStream(
-        remoteFile, controller.signal, resume.offset > 0 ? resume.offset : undefined
-      );
+      const partPath = localTransferTempPath(target);
       try {
-        await writeStreamToFile(source, resume.partPath, {
+        const source = await options.session.readFileStream(remoteFile, controller.signal);
+        await writeStreamToFile(source, partPath, {
           signal: controller.signal,
-          preservePartialOnError: true,
           onDelta: (delta) => {
             transferredBytes += delta;
-            resume.transferred = (resume.transferred ?? 0) + delta;
             report('downloading', relative);
-          },
-          ...(resume.offset > 0 ? { resume: { offset: resume.offset } } : {})
+          }
         });
-      } catch (error) {
-        // 失败/取消：大残片留下当续传起点，小残片删掉（避免目录里堆垃圾）。
-        await cleanupDownloadPart({
-          partPath: resume.partPath,
-          transferred: (resume.transferred ?? 0) + resume.offset,
-          remove: (part) => rm(part, { force: true }),
+        // 先落最终位置再计入完成：rename 失败不算完成。
+        await commitDownloadPart({
+          partPath,
+          target,
+          renamePart: rename,
+          permissions: info.permissions,
           log: options.log
         });
+      } catch (error) {
+        // 失败或取消时删除临时文件；本次未完成内容不会留作后续传输输入。
+        await rm(partPath, { force: true }).catch(() => undefined);
         throw error;
       }
-      // 先落最终位置再计入完成：rename 失败不算完成。
-      await commitDownloadPart({
-        partPath: resume.partPath,
-        target,
-        renamePart: rename,
-        permissions: info.permissions,
-        log: options.log
-      });
       completedFiles += 1;
       report('downloading', relative);
     })().catch(recordFailure).finally(() => active.delete(task));

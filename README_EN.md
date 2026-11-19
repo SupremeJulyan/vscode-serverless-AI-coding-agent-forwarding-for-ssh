@@ -26,7 +26,7 @@ SAFS lets you browse and edit remote files, use remote terminals, and let AI Cod
 - **Remote terminals**: run commands in remote directories and open files from terminal paths.
 - **Agent forwarding**: let Agents such as Copilot, Codex, and Claude Code use SAFS CLI to read, search, and edit remote files, transfer files, and run commands.
 - **Agent activity**: view operation history and execution status, with type and status filters.
-- **File transfers**: upload and download files and directories with progress and cancellation; resume large transfers.
+- **File transfers**: upload and download files and directories with progress and cancellation.
 - **Two-way sync**: download a remote directory or upload a local directory and keep both copies synchronized.
 - **Remote Git**: view changes, diffs, history, and branches; stage, unstage, discard, commit, fetch, fast-forward pull, and push; initialize and clone repositories.
 - **Connection management**: manage multiple hosts and accounts, and reopen remote directories or terminals from history.
@@ -69,7 +69,7 @@ Right-click a file or directory in the Explorer:
 
 Synced directories appear in SAFS history. Use the entry's button to start or stop synchronization.
 
-After a large transfer is interrupted, transferring the same file again can resume it. Transfers restart in full if the source changes or the connection does not support resuming.
+After a transfer is interrupted or cancelled, its incomplete temporary file is removed; a later transfer starts from the beginning.
 
 ## Remote Git
 

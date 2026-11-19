@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import { downloadRemoteDirectoryTree } from '../src/transfer/remote-download';
-import { downloadPartPath } from '../src/transfer/resume-plan';
 import { SftpSession } from '../src/ssh2/session';
 
 interface FakeEntry {
@@ -22,12 +21,10 @@ function fakeSession(
   session: SftpSession;
   maxActive: () => number;
   events: string[];
-  starts: Array<{ remotePath: string; start?: number }>;
 } {
   let active = 0;
   let maximum = 0;
   const events: string[] = [];
-  const starts: Array<{ remotePath: string; start?: number }> = [];
   const session = {
     hostName: 'fake',
     transport: 'sftp',
@@ -42,25 +39,19 @@ function fakeSession(
         size: entry.content?.length ?? 0, mtime: remoteMtimeMs, ctime: 0
       }));
     },
-    readFileStream: async (remotePath: string, _signal?: AbortSignal, start?: number) => {
+    readFileStream: async (remotePath: string, _signal?: AbortSignal) => {
       active += 1;
       maximum = Math.max(maximum, active);
       events.push(`start:${remotePath}`);
-      starts.push({ remotePath, start });
       const content = entries[remotePath].content ?? '';
       async function* chunks() {
         if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
-        yield Buffer.from(content.slice(start ?? 0));
+        yield Buffer.from(content);
         active -= 1;
         events.push(`finish:${remotePath}`);
       }
       return Readable.from(chunks());
     },
-    readFileRange: async (remotePath: string, offset: number, length: number) => {
-      const content = Buffer.from(entries[remotePath].content ?? '', 'latin1');
-      return content.subarray(offset, offset + length);
-    },
-    // 续传判定要读远端 size+mtime：签名一致才允许复用残片。
     stat: async (remotePath: string) => ({
       type: entries[remotePath]?.type ?? 'file',
       size: entries[remotePath]?.content?.length ?? 0,
@@ -68,7 +59,7 @@ function fakeSession(
       permissions: entries[remotePath]?.permissions
     })
   } as unknown as SftpSession;
-  return { session, maxActive: () => maximum, events, starts };
+  return { session, maxActive: () => maximum, events };
 }
 
 test('downloads while discovering with bounded concurrency and preserves empty directories', async () => {
@@ -92,7 +83,6 @@ test('downloads while discovering with bounded concurrency and preserves empty d
   assert.deepEqual(await readdir(path.join(localRoot, 'empty')), []);
   await assert.rejects(readFile(path.join(localRoot, 'link')));
 });
-
 test('stops the queue on the first file failure without leaving a partial file', async () => {
   const session = {
     hostName: 'fake', transport: 'sftp', isAlive: () => true,
@@ -139,75 +129,6 @@ test('cancellation aborts active downloads and removes their partial files', asy
   await assert.rejects(readFile(path.join(localRoot, 'slow')));
 });
 
-/** 造一个「同一远端文件、上一轮留下的残片」：名字由远端 size+mtime 推导。 */
-async function seedPart(
-  localRoot: string, remotePath: string, content: Buffer, signature: { size: number; mtimeMs: number },
-  prefixLength: number
-) {
-  const target = path.join(localRoot, path.posix.basename(remotePath));
-  await mkdir(path.dirname(target), { recursive: true });
-  const partPath = downloadPartPath(target, signature);
-  await writeFile(partPath, content.subarray(0, prefixLength));
-  await utimes(partPath, new Date(), new Date(signature.mtimeMs - 60_000));
-  return { target, partPath };
-}
-
-test('resumes an interrupted download from the bytes already on disk', async () => {
-  const mtimeMs = 5_000;
-  const content = Buffer.alloc(2 * 1024 * 1024, 0x42);
-  const remote = fakeSession({ '/root/big.bin': { type: 'file', content: content.toString('latin1') } }, 0, mtimeMs);
-  const localRoot = path.join(await mkdtemp(path.join(os.tmpdir(), 'safs-download-')), 'copy');
-  const signature = { size: content.length, mtimeMs };
-  const { target } = await seedPart(localRoot, '/root/big.bin', content, signature, 1024 * 1024);
-
-  const result = await downloadRemoteDirectoryTree({
-    session: remote.session, remoteRoot: '/root', localRoot, concurrency: 1
-  });
-
-  assert.equal(remote.starts[0].start, 1024 * 1024);
-  assert.equal(result.transferredBytes, 1024 * 1024);
-  assert.equal((await readFile(target)).length, content.length);
-});
-
-test('a same-size corrupted download part fails SHA-256 and restarts from zero', async () => {
-  const mtimeMs = 5_000;
-  const content = Buffer.alloc(2 * 1024 * 1024, 0x42);
-  const remote = fakeSession({
-    '/root/big.bin': { type: 'file', content: content.toString('latin1') }
-  }, 0, mtimeMs);
-  const localRoot = path.join(await mkdtemp(path.join(os.tmpdir(), 'safs-download-')), 'copy');
-  const signature = { size: content.length, mtimeMs };
-  const corrupted = Buffer.alloc(content.length, 0x43);
-  const { target } = await seedPart(
-    localRoot, '/root/big.bin', corrupted, signature, 1024 * 1024
-  );
-
-  const result = await downloadRemoteDirectoryTree({
-    session: remote.session, remoteRoot: '/root', localRoot, concurrency: 1
-  });
-
-  assert.equal(remote.starts[0].start, undefined);
-  assert.equal(result.transferredBytes, content.length);
-  assert.deepEqual(await readFile(target), content);
-});
-
-test('a part from an older remote version is not reused', async () => {
-  const content = Buffer.alloc(2 * 1024 * 1024, 0x43);
-  // 残片属于 mtime=5000 的旧版本；远端现在是 mtime=9000。
-  const oldSignature = { size: content.length, mtimeMs: 5_000 };
-  const remote = fakeSession({ '/root/big.bin': { type: 'file', content: content.toString('latin1') } }, 0, 9_000);
-  const localRoot = path.join(await mkdtemp(path.join(os.tmpdir(), 'safs-download-')), 'copy');
-  const { target } = await seedPart(localRoot, '/root/big.bin', content, oldSignature, 1024 * 1024);
-
-  const result = await downloadRemoteDirectoryTree({
-    session: remote.session, remoteRoot: '/root', localRoot, concurrency: 1
-  });
-
-  assert.equal(remote.starts[0].start, undefined);
-  assert.equal(result.transferredBytes, content.length);
-  assert.equal((await readFile(target)).length, content.length);
-});
-
 test('remote executable bits carry over without touching local read/write bits', async (t) => {
   if (process.platform === 'win32') return t.skip('Windows has no executable bit');
   const remote = fakeSession({
@@ -228,34 +149,4 @@ test('remote executable bits carry over without touching local read/write bits',
   assert.equal(data & 0o111, 0);
   // 读写范围仍由本地 umask 决定：远端 0600 不该把本地文件收窄成只有属主可读。
   assert.equal(script & 0o666, data & 0o666);
-});
-
-test('a failed first download keeps a large part and the next attempt resumes it', async (t) => {
-  const { rm } = await import('node:fs/promises');
-  const localRoot = await mkdtemp(path.join(os.tmpdir(), 'safs-first-resume-'));
-  t.after(() => rm(localRoot, { recursive: true, force: true }));
-  const content = Buffer.alloc(3 * 1024 * 1024, 0x44);
-  const remote = fakeSession({
-    '/root/big.bin': { type: 'file', content: content.toString('latin1') }
-  });
-  const read = remote.session.readFileStream.bind(remote.session);
-  remote.session.readFileStream = async () => Readable.from((async function* () {
-    yield content.subarray(0, 2 * 1024 * 1024);
-    // Let the first chunk reach disk before simulating a connection failure.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    throw new Error('connection lost');
-  })());
-  await assert.rejects(downloadRemoteDirectoryTree({
-    session: remote.session, remoteRoot: '/root', localRoot, concurrency: 1
-  }), /connection lost/);
-  const partPath = downloadPartPath(path.join(localRoot, 'big.bin'), {
-    size: content.length, mtimeMs: 5000
-  });
-  assert.equal((await stat(partPath)).size, 2 * 1024 * 1024);
-  remote.session.readFileStream = read;
-  await downloadRemoteDirectoryTree({
-    session: remote.session, remoteRoot: '/root', localRoot, concurrency: 1
-  });
-  assert.equal(remote.starts[0].start, 2 * 1024 * 1024);
-  assert.deepEqual(await readFile(path.join(localRoot, 'big.bin')), content);
 });

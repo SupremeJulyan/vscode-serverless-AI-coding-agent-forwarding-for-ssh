@@ -4,14 +4,14 @@ import * as vscode from 'vscode';
 import { isRemotePathInsideRoot } from '../ssh2/uri';
 import { SftpSession } from '../ssh2/session';
 import { diffFingerprints, linesToMap, scanRemote } from './sync-diff';
-import { cleanupDownloadPart, commitDownloadPart, prepareDownloadResume } from '../transfer/resume-store';
+import { commitDownloadPart } from '../transfer/download-commit';
+import { localTransferTempPath } from '../transfer/temp-path';
 import { ensureLocalDirectory, writeStreamToFile } from '../transfer/stream-file';
 import { DownloadEchoGuard } from './sync-echo';
 import { TrailingOperationQueue } from '../shared/trailing-operation-queue';
 import { deleteRemoteTree, ensureRemoteDir } from '../remote/remote-tree';
 import { assertLocalSyncPath, localPathForRemote } from './sync-path';
 import { uploadRemoteTree } from '../transfer/remote-upload';
-import { sameResumePrefix } from '../transfer/resume-checksum';
 
 export { ensureRemoteDir } from '../remote/remote-tree';
 
@@ -585,49 +585,20 @@ export class RemoteSyncManager {
       const before = await fs.stat(localFull).catch(() => undefined);
       // 流式下载到临时文件：下载期间目标文件不被触碰，完成后按 before/after
       // 比对决定是否替换——本地在下载期间被修改/删除则丢弃产物，保留用户改动。
-      // 残片名由「远端 size+mtime」推导：远端变了名字就变，旧残片自动失效，
-      // 因此重试下载大文件时能从断点继续，而不是从 0 重来。
       const remoteStat = await session.stat(remotePath, options.signal);
-      let resume = await prepareDownloadResume({
-        remoteName: remotePath,
-        remote: { size: remoteStat.size, mtimeMs: remoteStat.mtime },
-        localTarget: localFull,
-        canRange: true,
-        log: (message) => this.log(message)
-      });
-      if (resume.offset > 0) {
-        const matches = await sameResumePrefix({
-          session, localPath: resume.partPath, remotePath,
-          length: resume.offset, signal: options.signal
-        });
-        if (!matches) {
-          this.log(`同步下载残片 SHA-256 校验失败，完整重传：${remotePath}`);
-          await fs.rm(resume.partPath, { force: true });
-          resume = { ...resume, offset: 0, reason: 'source-changed' };
-        }
-      }
-      let transferred = resume.offset;
+      const partPath = localTransferTempPath(localFull);
+      let transferred = 0;
       try {
         await writeStreamToFile(
-          await session.readFileStream(
-            remotePath, options.signal, resume.offset > 0 ? resume.offset : undefined
-          ),
-          resume.partPath,
+          await session.readFileStream(remotePath, options.signal),
+          partPath,
           {
             signal: options.signal,
-            preservePartialOnError: true,
-            onDelta: (delta) => { transferred += delta; onDelta?.(delta); },
-            ...(resume.offset > 0 ? { resume: { offset: resume.offset } } : {})
+            onDelta: (delta) => { transferred += delta; onDelta?.(delta); }
           }
         );
       } catch (error) {
-        // 大残片留下当续传起点；小残片删掉（同步目录里不该堆垃圾）。
-        await cleanupDownloadPart({
-          partPath: resume.partPath,
-          transferred,
-          remove: (part) => fs.rm(part, { force: true }),
-          log: (message) => this.log(message)
-        });
+        await fs.rm(partPath, { force: true }).catch(() => undefined);
         throw error;
       }
       const after = await fs.stat(localFull).catch(() => undefined);
@@ -638,25 +609,25 @@ export class RemoteSyncManager {
           && before.size === after.size
           && before.isDirectory() === after.isDirectory();
       if (!unchanged) {
-        // 本地在下载窗口内被改过：不能覆盖用户改动；残片照常按大小决定去留。
+        // 本地在下载窗口内被改过：不能覆盖用户改动。
         this.log(`跳过覆盖（下载期间本地被修改/删除）: ${localFull}`);
-        await cleanupDownloadPart({
-          partPath: resume.partPath,
-          transferred,
-          remove: (part) => fs.rm(part, { force: true }),
-          log: (message) => this.log(message)
-        });
+        await fs.rm(partPath, { force: true }).catch(() => undefined);
         return;
       }
-      await assertLocalSyncPath(localRoot, localFull);
-      options.signal?.throwIfAborted();
-      await commitDownloadPart({
-        partPath: resume.partPath,
-        target: localFull,
-        renamePart: (from, to) => fs.rename(from, to),
-        permissions: remoteStat.permissions,
-        log: (message) => this.log(message)
-      });
+      try {
+        await assertLocalSyncPath(localRoot, localFull);
+        options.signal?.throwIfAborted();
+        await commitDownloadPart({
+          partPath,
+          target: localFull,
+          renamePart: (from, to) => fs.rename(from, to),
+          permissions: remoteStat.permissions,
+          log: (message) => this.log(message)
+        });
+      } catch (error) {
+        await fs.rm(partPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
       const written = await fs.stat(localFull);
       this.downloadEchoes.record(localFull, written);
     });

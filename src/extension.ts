@@ -81,12 +81,10 @@ import {
 import { connectSftp } from './ssh2/sftp-client';
 import { SftpSession } from './ssh2/session';
 import { writeStreamToFile, pipeStreams } from './transfer/stream-file';
-import { configureResumeSession, withLocalDownloadLease } from './transfer/resume-session';
-import {
-  cleanupDownloadPart, commitDownloadPart, prepareDownloadResume
-} from './transfer/resume-store';
+import { withLocalDownloadLease } from './transfer/download-lease';
+import { commitDownloadPart } from './transfer/download-commit';
 import { downloadRemoteDirectoryTree } from './transfer/remote-download';
-import { sameResumePrefix } from './transfer/resume-checksum';
+import { localTransferTempPath } from './transfer/temp-path';
 import { uploadRemoteTree } from './transfer/remote-upload';
 import { isConnectionError, SftpConnectionPool } from './ssh2/connection-pool';
 import { RemoteSyncManager, RemoteSyncTask } from './sync/remote-sync';
@@ -1929,46 +1927,24 @@ async function downloadRemoteFile(
   }))?.fsPath;
   if (!target) return false;
   if (forcedLocalPath !== undefined) {
-    return transferRemoteFileToLocal(session, remotePath, remote, target, transferTimeoutMs, false);
+    return transferRemoteFileToLocal(session, remotePath, remote, target, transferTimeoutMs);
   }
   return withLocalDownloadLease(target, canonicalTarget =>
-    transferRemoteFileToLocal(session, remotePath, remote, canonicalTarget, transferTimeoutMs, true)
+    transferRemoteFileToLocal(session, remotePath, remote, canonicalTarget, transferTimeoutMs)
   );
 }
 
 async function transferRemoteFileToLocal(
   session: SftpSession, remotePath: string,
   remote: { size: number; mtimeMs: number; permissions?: number },
-  target: string, transferTimeoutMs: number | undefined, interactive: boolean
+  target: string, transferTimeoutMs: number | undefined
 ): Promise<boolean> {
   const totalBytes = remote.size;
   const baseName = path.posix.basename(remotePath);
-  // 续传准备：残片名由「远端 size+mtime」推导，远端一变名字就变、旧残片自动失效；
-  // Resume using the native file stream.
-  let resume = await prepareDownloadResume({
-    remoteName: remotePath,
-    remote,
-    localTarget: target,
-    canRange: true,
-    interactive,
-    log: (message) => bridgeOutput?.appendLine(message)
-  });
-  if (resume.offset > 0) {
-    const matches = await sameResumePrefix({
-      session, localPath: resume.partPath, remotePath,
-      length: resume.offset
-    });
-    if (!matches) {
-      bridgeOutput?.appendLine(`[下载] 残片 SHA-256 校验失败，完整重传：${remotePath}`);
-      await rm(resume.partPath, { force: true });
-      resume = { ...resume, offset: 0, reason: 'source-changed' };
-    } else {
-      bridgeOutput?.info(`[下载] 残片 SHA-256 校验通过，从 ${resume.offset} 字节继续：${target}`);
-    }
-  }
+  const partPath = localTransferTempPath(target);
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: resume.offset > 0 ? 'SAFS：正在续传下载' : 'SAFS：正在下载文件',
+    title: 'SAFS：正在下载文件',
     cancellable: true
   }, async (progress, token) => {
     const controller = new AbortController();
@@ -1977,20 +1953,14 @@ async function transferRemoteFileToLocal(
     const timeout = transferTimeoutMs && transferTimeoutMs > 0
       ? setTimeout(() => { timedOut = true; controller.abort(); }, transferTimeoutMs)
       : undefined;
-    let cumulative = resume.offset;
-    // 立即上报一次：通知一出现即带大小，而不是等跨过 1% 才显示。续传时这里显示的
-    // 就是已经躺在残片里的那段，用户能直接看出「不是从 0 开始」。
+    let cumulative = 0;
+    // 立即上报一次，让通知一出现就显示当前文件大小。
     progress.report({
-      message: `${formatDownloadBytes(cumulative)} / ${formatDownloadBytes(totalBytes)}（${
-        totalBytes > 0 ? Math.floor(cumulative / totalBytes * 100) : 0}%）${
-        resume.offset > 0 ? ' · 续传' : ''}`
+      message: `${formatDownloadBytes(cumulative)} / ${formatDownloadBytes(totalBytes)}（0%）`
     });
     try {
-      const source = await session.readFileStream(
-        remotePath, controller.signal, resume.offset > 0 ? resume.offset : undefined
-      );
-      await writeStreamToFile(source, resume.partPath, {
-        preservePartialOnError: true,
+      const source = await session.readFileStream(remotePath, controller.signal);
+      await writeStreamToFile(source, partPath, {
         onDelta: (delta) => {
           cumulative += delta;
           const percent = totalBytes > 0 ? cumulative / totalBytes * 100 : 0;
@@ -2001,12 +1971,11 @@ async function transferRemoteFileToLocal(
             increment: totalBytes > 0 ? delta / totalBytes * 100 : undefined
           });
         },
-        signal: controller.signal,
-        ...(resume.offset > 0 ? { resume: { offset: resume.offset } } : {})
+        signal: controller.signal
       });
       // 先落最终位置再报完成：rename 失败不应该说「完成」。
       await commitDownloadPart({
-        partPath: resume.partPath,
+        partPath,
         target,
         renamePart: rename,
         permissions: remote.permissions,
@@ -2019,18 +1988,11 @@ async function transferRemoteFileToLocal(
       showTransferCompleted(`下载完成：${baseName} · 1 个文件，${formatDownloadBytes(cumulative)} → ${target}`);
       return true;
     } catch (error) {
-      resume.kept = await cleanupDownloadPart({
-        partPath: resume.partPath,
-        transferred: cumulative,
-        remove: (part) => rm(part, { force: true }),
-        log: (message) => bridgeOutput?.appendLine(message)
-      });
+      await rm(partPath, { force: true }).catch(() => undefined);
       if (controller.signal.aborted) {
         if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
         bridgeOutput?.appendLine(`[下载取消] ${remotePath}`);
-        void vscode.window.showInformationMessage(resume.kept
-          ? 'SAFS：下载已取消，残片已保留。'
-          : 'SAFS：下载已取消。');
+        void vscode.window.showInformationMessage('SAFS：下载已取消，未完成文件已清理。');
         return false;
       }
       throw error;
@@ -2159,8 +2121,6 @@ async function visualUpload(
       ? setTimeout(() => { timedOut = true; controller.abort(); }, transferTimeoutMs)
       : undefined;
     let lastReport = 0;
-    // 取消时是否留下了可续传的残片：决定提示文案，不让用户以为一定留了。
-    let uploadKeptPart = false;
     progress.report({ message: '正在发现文件并上传…' });
     try {
       const result = await uploadRemoteTree({
@@ -2169,7 +2129,6 @@ async function visualUpload(
           ? (remote) => verifyRemoteTransferFileDestination(session, secureWorkspaceRoot, remote)
           : undefined,
         log: (message) => bridgeOutput?.appendLine(message),
-        onKeptPart: () => { uploadKeptPart = true; },
         onProgress: (state) => {
           const now = Date.now();
           if (now - lastReport < 100) return;
@@ -2177,7 +2136,7 @@ async function visualUpload(
           progress.report({
             message: `已完成 ${state.completed}/${state.discovered} 个 · ${
               formatDownloadBytes(state.bytes)
-            }${state.resumed ? ' · 续传中' : ''}`
+            }`
           });
         }
       });
@@ -2190,9 +2149,7 @@ async function visualUpload(
       if (controller.signal.aborted) {
         if (timedOut) throw new Error(`文件传输超时（${transferTimeoutMs}ms）`);
         bridgeOutput?.appendLine(`[上传取消] ${mount.name}:${targetDir}；已完成文件保留`);
-        void vscode.window.showInformationMessage(uploadKeptPart
-          ? 'SAFS：上传已取消，残片已保留。'
-          : 'SAFS：上传已取消。');
+        void vscode.window.showInformationMessage('SAFS：上传已取消，未完成文件已清理。');
         return false;
       }
       throw error;
@@ -6275,7 +6232,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerConfigDiagnostics(context, configPath);
   output = vscode.window.createOutputChannel('SAFS');
   bridgeOutput = vscode.window.createOutputChannel('SAFS Log', { log: true });
-  configureResumeSession(context.globalStorageUri.fsPath, message => bridgeOutput?.warn(message));
   const previousVersion = context.globalState.get<string>('patches.previousVersion');
   if (needsPasswordMigration(previousVersion) || !context.globalState.get<boolean>('patches.sshPasswords217')) {
     try {
