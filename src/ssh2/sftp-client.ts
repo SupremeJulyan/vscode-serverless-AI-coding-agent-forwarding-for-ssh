@@ -1,4 +1,4 @@
-import { Writable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { Client, FileEntryWithStats, SFTPWrapper, Stats } from 'ssh2';
 import { HostConfig } from '../config/config';
 import { acquireSsh2Connection, Ssh2ConnectionLease } from './shared-connection';
@@ -36,11 +36,9 @@ function abortError(): Error {
 /** 流式写单个数据块的超时：远端停止确认（网关/抖动）时避免无限挂起。 */
 const sftpWriteChunkTimeoutMs = 60_000;
 
-// ssh2's SFTP ReadStream keeps one READ request in flight. A 64 KiB
-// high-water mark therefore caps throughput at roughly 64 KiB / RTT. Keep a
-// bounded, larger read window so high-latency links can fill the pipe without
-// allowing unbounded read-ahead.
-const sftpReadHighWaterMark = 1024 * 1024;
+const sftpTransferChunkBytes = 32 * 1024;
+const sftpTransferConcurrency = 32;
+const sftpTransferHighWaterMark = sftpTransferChunkBytes * sftpTransferConcurrency;
 
 /** SSH 认证成功后的 SFTP 通道打开超时。ssh2 的 readyTimeout 只覆盖握手；
  * 某些网关会静默丢弃 subsystem 请求，不设此超时会让连接进度永久等待。 */
@@ -192,24 +190,47 @@ export class Ssh2SftpSession implements SftpSession {
         reject(new Error(`无效的读取起始偏移: ${start}`));
         return;
       }
-      // Keep the SSH2 SFTP read-ahead bounded, but large enough to avoid
-      // making throughput proportional to a 64 KiB packet divided by RTT.
-      // start > 0 即续传：SFTP 的 READ 报文自带 offset，剩下的量由服务端算。
-      const stream = this.sftp.createReadStream(remotePath, {
-        highWaterMark: sftpReadHighWaterMark,
-        ...(start > 0 ? { start } : {})
-      });
-      const aborted = () => {
-        stream.destroy();
-        reject(abortError());
-      };
-      signal?.addEventListener('abort', aborted, { once: true });
-      stream.once('error', (error: Error) => {
-        signal?.removeEventListener('abort', aborted);
-        reject(error);
-      });
-      stream.once('open', () => {
-        signal?.removeEventListener('abort', aborted);
+      const flags = 0x01;
+      this.sftp.open(remotePath, flags, (openError, handle) => {
+        if (openError) {
+          reject(openError);
+          return;
+        }
+        let position = start;
+        let stopped = false;
+        const stream = Readable.from((async function* (sftp: SFTPWrapper) {
+          try {
+            while (!stopped && !signal?.aborted) {
+              const offsets = Array.from({ length: sftpTransferConcurrency }, (_, index) =>
+                position + index * sftpTransferChunkBytes);
+              const results = await Promise.all(offsets.map(offset => new Promise<Buffer>((res, rej) => {
+                sftp.read(handle, Buffer.allocUnsafe(sftpTransferChunkBytes), 0,
+                  sftpTransferChunkBytes, offset, (error, bytesRead, data) => {
+                    if (String((error as NodeJS.ErrnoException | null)?.code) === '1') {
+                      res(Buffer.alloc(0));
+                      return;
+                    }
+                    if (error) { rej(error); return; }
+                    res(data.subarray(0, bytesRead));
+                  });
+              })));
+              for (const data of results) {
+                if (stopped || signal?.aborted || data.length === 0) return;
+                position += data.length;
+                yield data;
+                if (data.length < sftpTransferChunkBytes) return;
+              }
+            }
+            if (signal?.aborted) throw abortError();
+          } finally {
+            stopped = true;
+            await new Promise<void>((res, rej) => sftp.close(handle, error => error ? rej(error) : res()));
+          }
+        })(this.sftp), { highWaterMark: sftpTransferHighWaterMark });
+        const aborted = () => stream.destroy(abortError());
+        signal?.addEventListener('abort', aborted, { once: true });
+        stream.once('close', () => signal?.removeEventListener('abort', aborted));
+        stream.once('error', (error: Error) => reject(error));
         resolve(stream);
       });
     });
@@ -306,24 +327,49 @@ export class Ssh2SftpSession implements SftpSession {
         let handleOpen = true;
         let pendingTimer: NodeJS.Timeout | undefined;
         const writable = new Writable({
-          highWaterMark: 64 * 1024,
+          highWaterMark: sftpTransferHighWaterMark,
           write(chunk: Buffer, _encoding, callback) {
-            pendingTimer = setTimeout(() => {
+            let settled = false;
+            const timeout = setTimeout(() => {
               pendingTimer = undefined;
+              settled = true;
               callback(new Error('远程写入超时'));
             }, sftpWriteChunkTimeoutMs);
-            sftp.write(handle, chunk, 0, chunk.length, position, (writeError) => {
-              if (pendingTimer) {
-                clearTimeout(pendingTimer);
-                pendingTimer = undefined;
+            pendingTimer = timeout;
+            const writePosition = position;
+            position += chunk.length;
+            void (async () => {
+              try {
+                for (let windowStart = 0; windowStart < chunk.length;
+                  windowStart += sftpTransferHighWaterMark) {
+                  const window: Promise<void>[] = [];
+                  const windowEnd = Math.min(chunk.length, windowStart + sftpTransferHighWaterMark);
+                  for (let offset = windowStart; offset < windowEnd; offset += sftpTransferChunkBytes) {
+                    const length = Math.min(sftpTransferChunkBytes, chunk.length - offset);
+                    window.push(new Promise<void>((resolveWrite, rejectWrite) => {
+                      sftp.write(handle, chunk, offset, length, writePosition + offset,
+                        error => error ? rejectWrite(error) : resolveWrite());
+                    }));
+                  }
+                  const results = await Promise.allSettled(window);
+                  const failure = results.find((result): result is PromiseRejectedResult =>
+                    result.status === 'rejected'
+                  );
+                  if (failure) throw failure.reason;
+                }
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                if (pendingTimer === timeout) pendingTimer = undefined;
+                callback();
+              } catch (error) {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                if (pendingTimer === timeout) pendingTimer = undefined;
+                callback(error instanceof Error ? error : new Error(String(error)));
               }
-              if (writeError) {
-                callback(writeError);
-                return;
-              }
-              position += chunk.length;
-              callback();
-            });
+            })();
           },
           final(callback) {
             handleOpen = false;
