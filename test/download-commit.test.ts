@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
-import { commitDownloadPart, prepareDownloadResume } from '../src/transfer/resume-store';
-import { downloadPartPath, RESUME_MIN_BYTES } from '../src/transfer/resume-plan';
+import { commitDownloadPart } from '../src/transfer/download-commit';
 
 test('failed download commit preserves the old target and complete part and rejects', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'safs-commit-'));
@@ -34,17 +33,3 @@ test('download commit replaces an existing file', async (t) => {
 });
 
 
-test('saving under another local name still resumes the matching part', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'safs-renamed-resume-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const localTarget = path.join(root, 'local.bin');
-  const remote = { size: 3 * RESUME_MIN_BYTES, mtimeMs: 5000 };
-  const partPath = downloadPartPath(localTarget, remote);
-  await writeFile(partPath, Buffer.alloc(RESUME_MIN_BYTES));
-  await utimes(partPath, new Date(), new Date(1000));
-  const resume = await prepareDownloadResume({
-    remoteName: '/remote/remote.bin', remote, localTarget, canRange: true
-  });
-  assert.equal(resume.partPath, partPath);
-  assert.equal(resume.offset, RESUME_MIN_BYTES);
-});
