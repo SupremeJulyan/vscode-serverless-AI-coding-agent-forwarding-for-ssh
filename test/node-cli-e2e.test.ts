@@ -153,9 +153,16 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       '--config', config, 'exec', 'exit 7', '--id', workspaceId
     ] });
     assert.equal(run.exitCode, 7);
-    assert.equal(run.stdout, 'node-out');
-    assert.equal(run.stderr, 'node-err');
+    assert.equal(JSON.parse(run.stdout).stdout, 'node-out');
+    assert.equal(JSON.parse(run.stdout).stderr, 'node-err');
+    assert.equal(run.stderr, '');
     assert.equal(runs, 1);
+    const raw = await executeCaptured({ command: executable, args: [
+      '--config', config, 'exec', '--raw', '--id', workspaceId, '--', 'exit 7'
+    ] });
+    assert.equal(raw.exitCode, 7);
+    assert.equal(raw.stdout, 'node-out');
+    assert.equal(raw.stderr, 'node-err');
     const blockedRun = await executeCaptured({ command: executable, args: [
       '--config', config, 'exec', '--id', workspaceId, '--', 'blocked-write'
     ] });
@@ -165,7 +172,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       blockedRun.stderr,
       /WORKSPACE_BOUNDARY_VIOLATION: outside workspace/
     );
-    assert.equal(runs, 1);
+    assert.equal(runs, 2);
     const currentFile = await executeCaptured({ command: executable, args: [
       '--config', config, 'current-file', '--id', workspaceId
     ] });
@@ -228,7 +235,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     const batchResult = JSON.parse(batch.stdout);
     assert.equal(batchResult.results.length, 2);
     assert.equal(batchResult.results[0].result.content, 'content:a.txt');
-    assert.equal('truncated' in batchResult.results[0].result, false);
+    assert.equal(batchResult.results[0].result.truncated, false);
     assert.equal(
       activity.filter((event) => event.phase === 'start').length,
       batchStarts + 2

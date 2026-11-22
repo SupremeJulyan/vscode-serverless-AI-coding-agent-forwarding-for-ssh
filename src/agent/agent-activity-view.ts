@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
-import { AgentActivityStore } from './agent-activity';
+import { AgentActivityStore, type AgentActivityEvent } from './agent-activity';
 
 export const agentActivityViewId = 'safs.agentActivity';
 
@@ -23,6 +23,7 @@ export interface AgentActivityViewActions {
   setWorkspaceMode?(mode: 'workspace' | 'terminalDirect'): Promise<void>;
   openTerminalDirectory(): Promise<void>;
   recoverForwarding(): Promise<void>;
+  snapshotAction?(event: AgentActivityEvent, action: 'diff' | 'restore'): Promise<void>;
 }
 
 export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -57,6 +58,12 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
           type: 'state', events: this.store.snapshot(), initial: true
         });
         await this.updateTerminalTarget();
+      } else if (type === 'snapshotDiff' || type === 'snapshotRestore') {
+        const id = (message as { id?: unknown }).id;
+        const event = this.store.snapshot().find(item => item.id === id);
+        if (!event?.snapshotId || event.snapshotExpired) return;
+        try { await this.actions?.snapshotAction?.(event, type === 'snapshotDiff' ? 'diff' : 'restore'); }
+        catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)); }
       } else if (type === 'clear') {
         const selected = await vscode.window.showWarningMessage(
           '确定清空当前窗口的 Agent 活动记录吗？',
@@ -367,6 +374,15 @@ export function activityViewHtml(webview: vscode.Webview): string {
       card.className = 'event ' + event.status + (compact ? ' group-item' : '');
       const head = textElement('div', 'event-head', '');
       head.appendChild(textElement('span', 'event-title', label(event)));
+      if (event.snapshotExpired) head.appendChild(textElement('span', 'source', '快照已失效'));
+      else if (event.snapshotId) {
+        [['snapshotDiff', '查看差异'], ['snapshotRestore', '还原更改']].forEach(function(action) {
+          const button = textElement('button', '', action[1]);
+          button.type = 'button';
+          button.addEventListener('click', function() { vscode.postMessage({ type: action[0], id: event.id }); });
+          head.appendChild(button);
+        });
+      }
       head.appendChild(textElement('span', 'source', event.source.toUpperCase()));
       card.appendChild(head);
       const destination = target(event);

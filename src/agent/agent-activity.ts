@@ -22,6 +22,8 @@ export interface AgentActivityEvent {
   durationMs?: number;
   mountName: string;
   workspaceRoot: string;
+  snapshotId?: string;
+  snapshotExpired?: boolean;
   summary: AgentActivitySummary;
   error?: string;
 }
@@ -227,6 +229,18 @@ export class AgentActivityStore {
     this.finish(id, 'success', result);
   }
 
+  expireSnapshots(ids: string[]): void {
+    if (!ids.length) return;
+    const expired = new Set(ids);
+    let changed = false;
+    for (const event of this.events) {
+      if (!event.snapshotId || !expired.has(event.snapshotId) || event.snapshotExpired) continue;
+      event.snapshotExpired = true;
+      changed = true;
+    }
+    if (changed) this.changed();
+  }
+
   fail(id: string, error: unknown): void {
     this.finish(id, 'error', undefined, error);
   }
@@ -256,6 +270,8 @@ export class AgentActivityStore {
     event.completedAt = completed.toISOString();
     event.durationMs = Math.max(0, completed.getTime() - Date.parse(event.startedAt));
     event.summary = { ...event.summary, ...summarizeAgentActivityResult(result) };
+    const snapshotId = (result as { snapshotId?: unknown } | undefined)?.snapshotId;
+    if (typeof snapshotId === 'string' && /^[0-9a-f-]{36}$/.test(snapshotId)) event.snapshotId = snapshotId;
     if (status === 'error') {
       const detail = error instanceof Error ? error.message : String(error ?? 'Remote operation failed');
       event.error = safeText(detail, 500) || 'Remote operation failed';

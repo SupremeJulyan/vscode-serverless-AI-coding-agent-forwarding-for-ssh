@@ -33,7 +33,7 @@ printf '%s' 'multiline or sensitive content' | safs write PATH --id ID --file -
 safs create PATH file --id ID [--content 'initial text']
 safs create PATH directory --id ID
 safs delete PATH --id ID
-safs delete PATH --id ID --input '{"recursive":true}'
+safs delete PATH --id ID --recursive
 safs chmod PATH 755 --id ID
 safs move --id ID --input '{"sourcePath":"old","targetPath":"new","overwrite":false}'
 safs upload --id ID --input '{"localPaths":["/absolute/local/path"],"remoteDirectory":"."}'
@@ -41,6 +41,8 @@ safs download --id ID --input '{"remotePath":"file","localPath":"/absolute/local
 ```
 
 Pass large, multiline, or sensitive JSON through `--input -` on stdin so it is not exposed in command arguments.
+
+`write` replaces the full file. Use `--allow-empty` for an intentional empty replacement. Read, write, and edit are limited to 5 MiB per file. Use download and upload for larger files. Write, edit, delete, and move save a snapshot before modifying remote files. Agent Activity can compare a snapshot with the current files and restore it. SAFS keeps the three most recent snapshots per path. The remote host needs Git, GNU tar, and Python 3 for snapshots.
 
 ## Task commands and batching
 
@@ -50,7 +52,7 @@ safs exec "git status --short" --id ID
 safs batch --id ID --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
 ```
 
-`exec` prints remote stdout and stderr directly and returns the remote exit code. When output is truncated, it emits continuation metadata containing an output ID and byte offsets.
+`exec` returns JSON and propagates the remote exit code. Use `--raw` for remote stdout and stderr streams or `--file SCRIPT` for multiline commands. When output is truncated, use the output ID and byte offsets to continue with `safs output`.
 
 Named options such as `--path`, `--query`, and `--command` remain valid when positional arguments are inconvenient.
 

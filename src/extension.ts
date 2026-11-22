@@ -1,6 +1,7 @@
 import { migrateSessionCwds, needsSessionMigration } from './patches/session-cwd';
 import { Preparation } from './shared/preparation';
 import { adoptedRemoteSaveResult } from './remote/save-result';
+import { saveRemoteSnapshot, remoteSnapshotDiffCommand, remoteSnapshotRestoreCommand, remoteSnapshotTextPairCommand } from './remote/remote-snapshot';
 import { saveConfirmation } from './remote/save-confirmation';
 import { operationMetric } from './shared/operation-metric';
 import { untilCancelled, cancellableStep, isUiCancellation, UiOperationGate } from './ui/ui-operation';
@@ -3550,7 +3551,37 @@ async function remoteList(input: {
   return { path: remotePath, ...pageDirectory(entries, remotePath, input) };
 }
 
-async function remoteRead(input: RemoteReadOptions & { mountName: string }): Promise<unknown> {
+const maxCliTextBytes = 5 * 1024 * 1024;
+
+function assertCliTextSize(bytes: number): void {
+  if (bytes > maxCliTextBytes) throw new Error('SAFS text operations are limited to 5 MiB. Use safs download or upload.');
+}
+
+async function runSnapshotCommand(context: vscode.ExtensionContext, mountName: string, root: string, command: string) {
+  const { mount } = await mountAndFolder(mountName);
+  const resolved = resolveMount(await readConfig(), mount);
+  requireConfiguredHostLogin(resolved.hostConfig);
+  const host = await resolveStoredHostPassword(context, resolved.hostConfig);
+  const result = await executeSshCommand(host, host.password, root, command,
+    AbortSignal.timeout(120_000), 1024 * 1024, '__SAFS_SNAPSHOT_' + randomBytes(16).toString('hex') + '__');
+  if (result.exitCode !== 0 || result.truncated) throw new Error(result.stderr || 'SAFS snapshot command failed');
+  return result;
+}
+
+async function captureCliSnapshot(context: vscode.ExtensionContext | undefined, mountName: string,
+  folder: RemoteFolder, operation: string, targets: string[]): Promise<{ snapshotId?: string }> {
+  if (!context) return {};
+  const root = currentWorkspacePath(folder);
+  const session = await pool.get(folder.hostName);
+  if (await session.realpath(root) !== root) throw new Error('Snapshot workspace root must be a canonical path');
+  const snapshotId = await saveRemoteSnapshot(
+    command => runSnapshotCommand(context, mountName, root, command), root, operation, targets,
+    false, ids => agentActivityStore.expireSnapshots(ids)
+  );
+  return { snapshotId };
+}
+
+async function remoteRead(input: RemoteReadOptions & { mountName: string }, cli = false): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const requestedPath = resolveRemotePath(folder, input.path);
   const session = await pool.get(folder.hostName);
@@ -3558,6 +3589,7 @@ async function remoteRead(input: RemoteReadOptions & { mountName: string }): Pro
   if (resolved.stat.type !== 'file') {
     throw new Error(`remote_read requires a regular file: ${input.path}`);
   }
+  if (cli) assertCliTextSize(resolved.stat.size);
   const result = await readTextRange(resolved.stat.size,
     (offset, length) => session.readFileRange(resolved.path, offset, length), input);
   const key = folderUri(folder, requestedPath);
@@ -3569,8 +3601,8 @@ async function remoteRead(input: RemoteReadOptions & { mountName: string }): Pro
 }
 
 async function remoteWrite(input: {
-  mountName: string; path: string; content: string;
-}): Promise<unknown> {
+  mountName: string; path: string; content: string; allowEmpty?: boolean;
+}, context?: vscode.ExtensionContext): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const workspaceRoot = currentWorkspacePath(folder);
   const remotePath = input.path.startsWith('/')
@@ -3581,9 +3613,24 @@ async function remoteWrite(input: {
   }
   const uri = vscode.Uri.parse(folderUri(folder, remotePath));
   const content = new TextEncoder().encode(input.content);
+  if (context) {
+    assertCliTextSize(content.length);
+    if (input.allowEmpty !== undefined && typeof input.allowEmpty !== 'boolean') throw new Error('allowEmpty must be a boolean');
+    if (input.allowEmpty !== true && !input.content.trim()) throw new Error('Empty replacement requires --allow-empty');
+    const session = await pool.get(folder.hostName);
+    await verifiedRemoteDestination(folder, session, input.path);
+    try {
+      const existing = await session.stat(remotePath);
+      if (existing.type !== 'file') throw new Error('SAFS write requires a regular file');
+      assertCliTextSize(existing.size);
+    } catch (error) {
+      if (!isMissingRemoteError(error)) throw error;
+    }
+  }
+  const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_write', [remotePath]);
   const saved = await provider.saveFile(uri, content, { create: true, overwrite: true }, false, workspaceRoot);
-  return { path: remotePath, ...(saved.remotePreferred
-    ? adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions)
+  return { path: remotePath, ...snapshot, ...(saved.remotePreferred
+    ? adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions, !context)
     : { written: true, bytes: saved.bytes }) };
 }
 
@@ -3624,22 +3671,24 @@ async function remoteCreate(input: {
 
 async function remoteEdit(input: {
   mountName: string; path: string; edits: RemoteTextEdit[]; expectedHash?: string;
-}): Promise<unknown> {
+}, context?: vscode.ExtensionContext): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const session = await pool.get(folder.hostName);
   const entry = await verifiedRemoteEntry(folder, session, input.path);
   if (entry.stat.type !== 'file') {
     throw new Error(`remote_edit requires a regular file: ${input.path}`);
   }
-  if (entry.stat.size > maxRemoteEditFileBytes) {
+  if (context) assertCliTextSize(entry.stat.size);
+  if (!context && entry.stat.size > maxRemoteEditFileBytes) {
     throw new Error(`remote_edit source exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
   }
   const data = await session.readFile(entry.remotePath);
-  if (data.length > maxRemoteEditFileBytes) {
+  if (context) assertCliTextSize(data.length);
+  if (!context && data.length > maxRemoteEditFileBytes) {
     throw new Error(`remote_edit source exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
   }
-  const beforeHash = textSha256(data);
-  if (input.expectedHash && input.expectedHash.toLowerCase() !== beforeHash) {
+  const beforeHash = context ? undefined : textSha256(data);
+  if (!context && input.expectedHash && input.expectedHash.toLowerCase() !== beforeHash) {
     throw new Error(
       `remote_edit source changed; expectedHash=${input.expectedHash.toLowerCase()}, ` +
       `actualHash=${beforeHash}`
@@ -3653,18 +3702,20 @@ async function remoteEdit(input: {
   }
   const edited = applyRemoteTextEdits(content, input.edits);
   const encoded = new TextEncoder().encode(edited.content);
-  if (encoded.length > maxRemoteEditFileBytes) {
+  if (context) assertCliTextSize(encoded.length);
+  if (!context && encoded.length > maxRemoteEditFileBytes) {
     throw new Error(`remote_edit result exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
   }
   const uri = vscode.Uri.parse(folderUri(folder, entry.remotePath));
-  const saved = await provider.saveFile(uri, encoded, { create: false, overwrite: true }, input.expectedHash !== undefined);
-  if (saved.remotePreferred) return { path: entry.remotePath, replacements: 0, ...adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions) };
+  const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_edit', [entry.remotePath]);
+  const saved = await provider.saveFile(uri, encoded, { create: false, overwrite: true }, !context && input.expectedHash !== undefined);
+  if (saved.remotePreferred) return { path: entry.remotePath, replacements: 0, ...snapshot, ...adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions, !context) };
   return {
     path: entry.remotePath,
     replacements: edited.replacements,
     bytes: encoded.length,
-    beforeHash,
-    hash: textSha256(encoded)
+    ...snapshot,
+    ...(context ? {} : { beforeHash, hash: textSha256(encoded) })
   };
 }
 
@@ -3724,16 +3775,17 @@ async function verifiedRemoteDestination(
 
 async function remoteDelete(input: {
   mountName: string; path: string; recursive?: boolean;
-}): Promise<unknown> {
+}, context?: vscode.ExtensionContext): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const session = await pool.get(folder.hostName);
   const entry = await verifiedRemoteEntry(folder, session, input.path, {
     allowSymbolicLink: true
   });
+  const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_delete', [entry.remotePath]);
   await provider.delete(vscode.Uri.parse(folderUri(folder, entry.remotePath)), {
     recursive: input.recursive === true
   });
-  return { path: entry.remotePath, type: entry.stat.type, recursive: input.recursive === true };
+  return { ...snapshot, path: entry.remotePath, type: entry.stat.type, recursive: input.recursive === true };
 }
 
 async function remoteChmod(input: {
@@ -3749,19 +3801,20 @@ async function remoteChmod(input: {
 
 async function remoteMove(input: {
   mountName: string; sourcePath: string; targetPath: string; overwrite?: boolean;
-}): Promise<unknown> {
+}, context?: vscode.ExtensionContext): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const session = await pool.get(folder.hostName);
   const source = await verifiedRemoteEntry(folder, session, input.sourcePath, {
     allowSymbolicLink: true
   });
   const targetPath = await verifiedRemoteDestination(folder, session, input.targetPath);
+  const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_move', [source.remotePath, targetPath]);
   await provider.rename(
     vscode.Uri.parse(folderUri(folder, source.remotePath)),
     vscode.Uri.parse(folderUri(folder, targetPath)),
     { overwrite: input.overwrite === true }
   );
-  return { sourcePath: source.remotePath, targetPath, overwrite: input.overwrite === true };
+  return { ...snapshot, sourcePath: source.remotePath, targetPath, overwrite: input.overwrite === true };
 }
 
 async function executeRemoteCommand(
@@ -5509,25 +5562,25 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
         }),
         read: async (input) => remoteRead({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
-        }),
+        }, true),
         edit: async (input) => remoteEdit({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
-        }),
+        }, context),
         write: async (input) => remoteWrite({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
-        }),
+        }, context),
         create: async (input) => remoteCreate({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         delete: async (input) => remoteDelete({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
-        }),
+        }, context),
         chmod: async (input) => remoteChmod({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
         }),
         move: async (input) => remoteMove({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
-        }),
+        }, context),
         upload: async (input) => {
           const mountName = forwardedWindowMountName(
             context, boundMountName, input.mountName
@@ -6277,7 +6330,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.workspaceState, platformStateKey('agentActivity')
   );
   await agentActivityStore.initialize();
+  const snapshotDocuments = new Map<string, string>();
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider('safs-snapshot', {
+      provideTextDocumentContent: uri => snapshotDocuments.get(uri.toString()) ?? ''
+    }),
+    vscode.workspace.onDidCloseTextDocument(document => { snapshotDocuments.delete(document.uri.toString()); })
+  );
   agentActivityView = new AgentActivityViewProvider(agentActivityStore, {
+    snapshotAction: async (event, action) => {
+      const { folder } = await mountAndFolder(event.mountName);
+      const root = currentWorkspacePath(folder);
+      if (root !== event.workspaceRoot || !event.snapshotId) {
+        throw new Error('请切换回快照所属工作区后重试。');
+      }
+      if (action === 'restore') {
+        const confirmed = await vscode.window.showWarningMessage(
+          '还原快照会覆盖相关路径上的当前更改。', { modal: true }, '还原更改'
+        );
+        if (confirmed !== '还原更改') return;
+        await runSnapshotCommand(context, event.mountName, root, remoteSnapshotRestoreCommand(root, event.snapshotId));
+        return;
+      }
+      const textPair = await runSnapshotCommand(context, event.mountName, root, remoteSnapshotTextPairCommand(root, event.snapshotId));
+      const pair = JSON.parse(textPair.stdout) as { path: string; before: string; current: string } | null;
+      if (pair && pair.before !== pair.current) {
+        const key = randomBytes(16).toString('hex');
+        const before = vscode.Uri.from({ scheme: 'safs-snapshot', authority: key, path: '/' + pair.path, query: 'before' });
+        const current = before.with({ query: 'current' });
+        snapshotDocuments.set(before.toString(), pair.before);
+        snapshotDocuments.set(current.toString(), pair.current);
+        try {
+          await vscode.commands.executeCommand('vscode.diff', before, current, pair.path + '（操作前快照 ↔ 当前文件）');
+        } catch (error) {
+          snapshotDocuments.delete(before.toString());
+          snapshotDocuments.delete(current.toString());
+          throw error;
+        }
+        return;
+      }
+      const result = await runSnapshotCommand(context, event.mountName, root, remoteSnapshotDiffCommand(root, event.snapshotId));
+      if (!result.stdout) {
+        void vscode.window.showInformationMessage('无文本差异');
+        return;
+      }
+      const document = await vscode.workspace.openTextDocument({ language: 'diff', content: result.stdout });
+      await vscode.window.showTextDocument(document, { preview: true });
+    },
     terminalTarget: activityForwardingState,
     initialTerminalTarget: activityForwardingPreview,
     openTerminalDirectory: () => guard(openAgentTerminalDirectory),

@@ -30,6 +30,7 @@ const positional: Record<string, string[]> = {
   chmod: ['path', 'mode'], output: ['outputId', 'stream'], exec: ['command']
 };
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
+const booleanOptions = new Set(['--compact', '--verbose', '--raw', '--allow-empty', '--recursive', '--skills', '--global']);
 function option(args: string[], flag: string): string | undefined {
   const boundary = args.indexOf('--');
   const i = args.findIndex((v, j) => v === flag && (boundary < 0 || j < boundary));
@@ -59,6 +60,9 @@ async function parse(args: string[]) {
     };
     while (args.length) {
       const flag = args.shift()!;
+      if ((verb === 'write' && flag === '--allow-empty') || (verb === 'delete' && ['-r', '--recursive'].includes(flag))) {
+        assign(verb === 'write' ? 'allowEmpty' : 'recursive', true); continue;
+      }
       if (flag === '--') {
         if (verb !== 'exec' || args.length !== 1) throw new Error('Pass one remote command after --');
         assign('command', args.shift()); break;
@@ -94,6 +98,7 @@ async function parse(args: string[]) {
         if (!object(op) || !tools[op.command] || ['batch', 'find', 'workspaces'].includes(op.command)) throw new Error(`Unsupported batch command: ${op?.command}`);
         const arguments_ = op.arguments ?? {};
         if (!object(arguments_) || 'workspaceId' in arguments_ || 'mountName' in arguments_) throw new Error('Batch arguments must not override workspaceId or mountName');
+        if (op.command === 'edit' && 'expectedHash' in arguments_) throw new Error('Unsupported input field: expectedHash');
         return { name: tools[op.command], arguments: { ...arguments_, workspaceId: workspace } };
       });
       return { name: tools[verb], arguments: { operations } };
@@ -103,11 +108,12 @@ async function parse(args: string[]) {
       if (!values.outputId) throw new Error('--output-id is required');
       if (!['stdout', 'stderr'].includes(values.stream)) throw new Error('--stream stdout|stderr is required');
     }
-    if (verb === 'exec' && (typeof values.command !== 'string' || !values.command.trim())) throw new Error("Remote command is required. Retry with `safs exec --id ID -- 'COMMAND'` or `--command 'COMMAND'`");
     if (file !== undefined) {
-      if (!['write', 'create'].includes(verb)) throw new Error('--file is only valid for write or create');
-      assign('content', file === '-' ? stdin : await readFile(file, 'utf8'));
+      if (!['write', 'create', 'exec'].includes(verb)) throw new Error('--file is only valid for write, create, or exec');
+      assign(verb === 'exec' ? 'command' : 'content', file === '-' ? stdin : await readFile(file, 'utf8'));
     }
+    if (verb === 'edit' && 'expectedHash' in values) throw new Error('Unsupported input field: expectedHash');
+    if (verb === 'exec' && (typeof values.command !== 'string' || !values.command.trim())) throw new Error('Remote command is required');
     if (verb === 'write' && !('content' in values)) throw new Error('Write content is required. Retry with `--content TEXT` or pipe UTF-8 data to `--file -`');
     if (verb === 'create') {
       if (!['file', 'directory'].includes(values.type)) throw new Error('Create type must be file or directory');
@@ -152,7 +158,7 @@ function concise(result: any): string {
 function compact(result: any): any {
   if (Array.isArray(result)) return result.map(compact);
   if (!object(result)) return result;
-  return Object.fromEntries(Object.entries(result).filter(([k, v]) => !(k === 'status' && v === 'ok' || k === 'ok' && v === true || ['truncated', 'hasMore'].includes(k) && v === false)).map(([k,v]) => [k,compact(v)]));
+  return Object.fromEntries(Object.entries(result).filter(([k, v]) => !(k === 'status' && v === 'ok' || k === 'ok' && v === true)).map(([k,v]) => [k,compact(v)]));
 }
 let activeConfig = '';
 async function inferWorkspace(): Promise<string> {
@@ -168,18 +174,19 @@ async function main() {
   for (let i = 0; i < args.length && args[i] !== '--'; i++) {
     if (['--help', '-h'].includes(args[i])) { process.stdout.write(commandHelp[helpCommand ?? ''] ?? help); return; }
     if (!args[i].startsWith('-') && !helpCommand) helpCommand = args[i];
-    if (args[i].startsWith('--') && !['--compact', '--verbose', '--skills', '--global'].includes(args[i]) && !args[i].startsWith('--skills=')) i++;
+    if (args[i].startsWith('--') && !booleanOptions.has(args[i]) && !args[i].startsWith('--skills=')) i++;
   }
   const config = option(args, '--config') ?? process.env.SAFS_CONFIG ?? join(dirname(process.argv[1]), '.safs-connection.json');
-  let isCompact = false, verbose = false;
+  let isCompact = false, verbose = false, raw = false;
   const commandArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--') { commandArgs.push(...args.slice(i)); break; }
     if (arg === '--compact') { isCompact = true; continue; }
     if (arg === '--verbose') { verbose = true; continue; }
+    if (arg === '--raw') { raw = true; continue; }
     commandArgs.push(arg);
-    if (arg.startsWith('--') && arg !== '--skills' && arg !== '--global' && !arg.startsWith('--skills=') && i + 1 < args.length) {
+    if (arg.startsWith('--') && !booleanOptions.has(arg) && !arg.startsWith('--skills=') && i + 1 < args.length) {
       commandArgs.push(args[++i]);
     }
   }
@@ -199,6 +206,7 @@ async function main() {
   }
   activeConfig = config;
   const request = await parse(args);
+  if (raw && request.name !== 'run_remote_command') throw new Error('--raw is only valid for exec');
   let result = await invoke(config, request);
   const code = exitCode(result);
   if (code && (request.name !== 'run_remote_command' || result.code || result.status === 'error')) throw new Error(verbose ? JSON.stringify(result) : concise(result));
@@ -212,7 +220,7 @@ async function main() {
     };
   }
   if (isCompact) result = compact(result);
-  if (request.name === 'run_remote_command') {
+  if (raw && request.name === 'run_remote_command') {
     process.stdout.write(result.stdout ?? ''); process.stderr.write(result.stderr ?? '');
     if (result.truncated) process.stderr.write('\n'+JSON.stringify({ safsOutput: result })+'\n');
   } else console.log(JSON.stringify(result));
