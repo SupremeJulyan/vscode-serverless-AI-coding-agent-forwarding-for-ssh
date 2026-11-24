@@ -33,9 +33,14 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
       for (const index of duplicates) depths[index]++;
       labels = workspaceLabels(records, depths);
     }
-    return records.map((record, index) => new RemoteWorkspaceItem(
-      record, labels[index], record.instanceId === this.selectedInstanceId
-    ));
+    return records.map((record, index) => ({
+      label: labels[index],
+      item: new RemoteWorkspaceItem(
+        record, labels[index], record.instanceId === this.selectedInstanceId
+      )
+    })).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base', numeric: true })
+      || left.item.record.instanceId.localeCompare(right.item.record.instanceId))
+      .map(entry => entry.item);
   }
 
   refresh(): void { this.emitter.fire(undefined); }
