@@ -27,7 +27,7 @@ import { RemoteGitHistory } from './git/remote-git-history';
 import { RemoteGitView } from './git/git-view';
 import { updateCliInstructions, writeCliConnectionFile, writePlaceholderGuidance } from './cli/cli-integration';
 import {
-  ensureUnixCliPath, globalNodeCli, globalNodeCliSkill, installNodeCli, removeNodeCli,
+  ensureUnixCliPath, globalNodeCli, globalNodeCliSkill, installGlobalNodeCliSkill, installNodeCli, removeNodeCli,
   NodeRuntimeUnavailableError, requireNodeRuntime, updateInstalledNodeCliSkills, NodeCliSkillTarget,
   nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion,
@@ -5988,16 +5988,14 @@ async function uninstallGlobalCli(context: vscode.ExtensionContext): Promise<str
   return executable;
 }
 
-async function installGlobalCliSkill(executable: string, target: NodeCliSkillTarget = 'agents'): Promise<void> {
-  const result = await executeCaptured({
-    command: executable,
-    args: target === 'agents' ? ['install', '--skills', '-g']
-      : ['install', `--skills=${target}`, '-g']
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(`SAFS Agent Skill 安装失败：${result.stderr.trim() || `exit ${result.exitCode}`}`);
+async function installGlobalCliSkill(context: vscode.ExtensionContext, target: NodeCliSkillTarget = 'agents'): Promise<void> {
+  const source = path.join(context.extensionPath, 'skills');
+  try {
+    const destination = await installGlobalNodeCliSkill(os.homedir(), target, source);
+    bridgeOutput?.info(`[Agent CLI] 已将 ${target} 的 SAFS Agent Skill 安装到：${destination}`);
+  } catch (error) {
+    throw new Error(`SAFS Agent Skill 安装失败（${target}）：${error instanceof Error ? error.message : String(error)}`);
   }
-  bridgeOutput?.info(`[Agent CLI] ${result.stdout.trim()}`);
 }
 
 function configureAgentInterface(
@@ -6040,9 +6038,9 @@ async function performAgentInterfacePreparation(
   let executable: string;
   try {
     executable = await installGlobalCli(context, router.socketPath, await agentBackendToken(context));
-    await installGlobalCliSkill(executable);
+    await installGlobalCliSkill(context);
     await updateInstalledNodeCliSkills(os.homedir(), async (target) => {
-      if (target !== 'agents') await installGlobalCliSkill(executable, target);
+      if (target !== 'agents') await installGlobalCliSkill(context, target);
     });
   } catch (error) {
     const detail = redactSensitiveText(error instanceof Error ? error.message : String(error));

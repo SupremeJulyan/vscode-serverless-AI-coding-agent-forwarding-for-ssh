@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.2
+
+- 修复 SAFS Agent Skill 安装失败：由扩展直接安装打包的 Skill 文件，不再调用不存在的 `safs install` 子命令。
+
 ## 2.2.1
 
 - SAFS 在写入、编辑、删除和移动远程文件前保存快照，每个路径保留最近 3 份；可在 Agent 活动中比较和恢复快照。快照功能要求远端安装 Git、GNU tar 和 Python 3。

@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import type { CommandPlan } from '../platform/platform';
 
@@ -44,6 +44,20 @@ export function globalNodeCliSkill(
 ): string {
   const directory = target === 'copilot' ? '.copilot' : `.${target}`;
   return path.join(home, directory, 'skills', 'safs-cli');
+}
+
+/** Install the extension-bundled Skill directly, without depending on a CLI subcommand. */
+export async function installGlobalNodeCliSkill(
+  home: string, target: NodeCliSkillTarget, source: string
+): Promise<string> {
+  const destination = globalNodeCliSkill(home, target);
+  const sourceSkill = path.join(source, 'safs-cli');
+  await lstat(path.join(sourceSkill, 'SKILL.md'));
+  await lstat(path.join(sourceSkill, 'references', 'commands.md'));
+  await mkdir(path.dirname(destination), { recursive: true });
+  await rm(destination, { recursive: true, force: true });
+  await cp(sourceSkill, destination, { recursive: true });
+  return destination;
 }
 
 /** Update only user-level Skill targets that are already installed. */

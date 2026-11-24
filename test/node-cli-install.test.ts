@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import {
   NodeRuntimeUnavailableError, requireNodeRuntime, ensureUnixCliPath, globalNodeCli, installNodeCli,
   globalNodeCliSkill, nodeCliConnectionPath, nodeCliMatchesBundle,
-  parseNodeCliVersion, removeGlobalNodeCliSkill, removeNodeCli, withoutSafsPathBlock,
+  installGlobalNodeCliSkill, parseNodeCliVersion, removeGlobalNodeCliSkill, removeNodeCli, withoutSafsPathBlock,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan, updateInstalledNodeCliSkills
 } from '../src/cli/node-cli-install';
 
@@ -54,6 +54,29 @@ test('locates and removes the global SAFS Agent Skill', async () => {
     await assert.rejects(readFile(join(skill, 'SKILL.md')), { code: 'ENOENT' });
   } finally {
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('installs the bundled Skill directly into each selected global target', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safs-skill-install-'));
+  try {
+    const source = join(root, 'extension', 'skills');
+    const bundled = join(source, 'safs-cli');
+    await mkdir(join(bundled, 'references'), { recursive: true });
+    await writeFile(join(bundled, 'SKILL.md'), 'skill contents');
+    await writeFile(join(bundled, 'references', 'commands.md'), 'command reference');
+    for (const target of ['agents', 'claude', 'codex', 'copilot'] as const) {
+      const destination = await installGlobalNodeCliSkill(root, target, source);
+      assert.equal(destination, globalNodeCliSkill(root, target));
+      assert.equal(await readFile(join(destination, 'SKILL.md'), 'utf8'), 'skill contents');
+      assert.equal(await readFile(join(destination, 'references', 'commands.md'), 'utf8'), 'command reference');
+    }
+    await writeFile(join(bundled, 'SKILL.md'), 'updated skill');
+    await installGlobalNodeCliSkill(root, 'agents', source);
+    assert.equal(await readFile(join(globalNodeCliSkill(root), 'SKILL.md'), 'utf8'), 'updated skill');
+    await assert.rejects(installGlobalNodeCliSkill(root, 'agents', join(root, 'missing')));
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
