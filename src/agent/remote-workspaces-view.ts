@@ -13,9 +13,11 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
   private readonly focusTimer: NodeJS.Timeout;
   private focusCheck: Promise<void> = Promise.resolve();
   private selectedInstanceId: string | undefined;
+  private workspaces = discoverAgentWorkspaces();
+  private workspaceSignature = workspaceListSignature(this.workspaces);
 
   constructor() {
-    this.timer = setInterval(() => this.refresh(), 5_000);
+    this.timer = setInterval(() => this.refreshIfWorkspacesChanged(), 5_000);
     this.focusTimer = setInterval(() => {
       this.focusCheck = this.focusCheck.then(() => this.handleFocusRequests()).catch(() => undefined);
     }, 500);
@@ -24,7 +26,7 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
   getTreeItem(item: RemoteWorkspaceItem): vscode.TreeItem { return item; }
 
   getChildren(): RemoteWorkspaceItem[] {
-    const records = discoverAgentWorkspaces();
+    const records = this.workspaces;
     const depths = records.map(() => 1);
     let labels = workspaceLabels(records, depths);
     for (let attempt = 0; attempt < records.length; attempt++) {
@@ -44,6 +46,15 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
   }
 
   refresh(): void { this.emitter.fire(undefined); }
+
+  private refreshIfWorkspacesChanged(): void {
+    const workspaces = discoverAgentWorkspaces();
+    const signature = workspaceListSignature(workspaces);
+    if (signature === this.workspaceSignature) return;
+    this.workspaces = workspaces;
+    this.workspaceSignature = signature;
+    this.refresh();
+  }
 
   setSelected(instanceId: string | undefined): void {
     if (instanceId === this.selectedInstanceId) return;
@@ -91,6 +102,13 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
     clearInterval(this.focusTimer);
     this.emitter.dispose();
   }
+}
+
+function workspaceListSignature(records: readonly DiscoveredAgentWorkspace[]): string {
+  return JSON.stringify(records.map(record => [
+    record.instanceId, record.mountName, record.workspaceUri, record.workspaceRoot,
+    record.host, record.hostName ?? '', record.user ?? ''
+  ]).sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
 }
 
 function remotePathParts(remotePath: string): string[] {
