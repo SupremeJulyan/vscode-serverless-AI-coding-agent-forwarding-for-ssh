@@ -1,3 +1,4 @@
+import { localWatchPatterns } from './local-watch-patterns';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
@@ -722,16 +723,8 @@ export class RemoteSyncManager {
       else if (kind === 'changed') this.onLocalChanged(task, uri);
       else this.onLocalDeleted(task, uri);
     };
-    const patterns = task.isFile
-      ? [new vscode.RelativePattern(path.dirname(task.localDir), '*')]
-      : [
-          // 子树 watcher 不包含同步根本身；单独监听父目录下的根条目，确保
-          // 删除/重建整个本地同步目录或根类型切换不会漏同步。
-          new vscode.RelativePattern(path.dirname(task.localDir), '*'),
-          new vscode.RelativePattern(task.localDir, '**/*')
-        ];
-    const active = patterns.map((pattern) => {
-      const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+    const active = localWatchPatterns(task.localDir, task.isFile).map(({ directory, glob }) => {
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(directory, glob));
       watcher.onDidCreate(dispatch('created'));
       watcher.onDidChange(dispatch('changed'));
       watcher.onDidDelete(dispatch('deleted'));

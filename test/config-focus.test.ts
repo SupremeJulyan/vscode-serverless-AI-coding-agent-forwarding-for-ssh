@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isConfigFocus, hostConfigOffset } from '../src/config/config-focus';
+import { isConfigFocus, hostConfigOffset, resolveConfigFocus } from '../src/config/config-focus';
 
 test('accepts well-formed config focus arguments', () => {
   assert.equal(isConfigFocus({ kind: 'entry', name: '192.0.2.10(dev_alice)' }), true);
@@ -34,4 +34,18 @@ test('host configuration focuses the host block even when no accounts exist', ()
   assert.ok(content.slice(offset).startsWith('{'));
   assert.ok(content.slice(offset).indexOf('second') < content.slice(offset).indexOf('2'));
   assert.equal(hostConfigOffset(content, 'missing'), undefined);
+});
+
+test('open-config focus resolves explicit, multi-selection and implicit selection arguments', () => {
+  const explicit = { kind: 'password', name: 'dev' } as const;
+  const first = { type: 'user', name: 'first' };
+  const selected = { type: 'history', name: 'selected' };
+  const focusFor = (element: unknown) => (
+    { kind: 'entry', name: (element as typeof first).name } as const
+  );
+  assert.equal(resolveConfigFocus(explicit, () => assert.fail(), focusFor), explicit);
+  assert.deepEqual(resolveConfigFocus([first, selected], () => assert.fail(), focusFor),
+    { kind: 'entry', name: 'first' });
+  assert.deepEqual(resolveConfigFocus(undefined, () => selected, focusFor),
+    { kind: 'entry', name: 'selected' });
 });

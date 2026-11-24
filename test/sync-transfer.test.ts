@@ -91,3 +91,35 @@ test('cancelled initial sync never publishes a baseline or replaces existing fil
   assert.equal(s.task.fingerprintLines, undefined);
   assert.equal(await readFile(path.join(s.root, 'a'), 'utf8'), 'old');
 });
+
+test('sync retries when another window owns the task without showing a notification', async t => {
+  const s = await setup(t);
+  let attempts = 0;
+  let retry!: () => void;
+  const retried = new Promise<void>(resolve => { retry = resolve; });
+  const statuses: string[] = [];
+  const manager = new RemoteSyncManager(
+    async () => assert.fail('opened a session without ownership'),
+    () => undefined,
+    undefined,
+    undefined,
+    message => statuses.push(message),
+    async () => {
+      attempts++;
+      if (attempts === 2) retry();
+      return false;
+    }
+  );
+  t.after(() => manager.dispose());
+  await manager.add(s.task);
+  assert.equal(attempts, 1);
+  const timeout = setTimeout(() => retry(), 4_000);
+  try {
+    await retried;
+    assert.equal(attempts, 2);
+    assert.deepEqual(statuses, []);
+    assert.equal(manager.isReady(s.task.mountName, s.task.remotePath), false);
+  } finally {
+    clearTimeout(timeout);
+  }
+});

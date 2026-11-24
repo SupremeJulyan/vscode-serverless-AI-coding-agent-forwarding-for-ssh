@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { directAgentMcpInstructions, routedAgentMcpInstructions } from '../src/mcp/agent-mcp-tools';
 import { defaultHighRiskCommandPatterns } from '../src/security/high-risk-commands';
 
 interface ExtensionManifest {
@@ -107,27 +108,7 @@ test('contributes SAFS navigation and filename search to remote explorer menus',
     && item.when === 'resourceScheme == safs && explorerResourceIsFolder'));
 });
 
-test('the Git webview offers inline initialization and cloning', async () => {
-  const source = await readFile(new URL('../src/git/git-view-client.ts', import.meta.url), 'utf8');
-  for (const label of ['初始化 Git', '克隆 Git 项目', '用户名', '邮箱', '远程链接', '新文件夹名称']) assert.ok(source.includes(label));
-  const extension = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extension.includes('setup: setupRemoteGit'));
-  assert.ok(extension.includes('initializeRemoteGit(transport, identity, signal)'));
-  assert.ok(extension.includes('cloneThroughLocalGit(transport,'));
-});
-
-test('remote directory commands can select a connection from a local or empty window', async () => {
-  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extensionSource.includes('mount = await selectMount(mountPlaceHolder)'));
-  assert.ok(extensionSource.includes(
-    "selectRemoteDirectory('选择要打开的远程连接', '打开', selectedUri)"
-  ));
-  assert.ok(extensionSource.includes(
-    "selectRemoteDirectory('选择要切换的远程连接', '切换', selectedUri)"
-  ));
-});
-
-test('new configuration collects host and authentication method without credentials', async () => {
+test('declares the add-host configuration command', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
@@ -135,15 +116,6 @@ test('new configuration collects host and authentication method without credenti
     manifest.contributes?.commands?.find(item => item.command === 'safs.addRemoteDirectory')?.title,
     '新增主机配置'
   );
-  const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('async function addRemoteDirectoryConfig(');
-  const body = source.slice(start, source.indexOf('\nasync function addHostCredentials', start));
-  for (const prompt of ["prompt: '主机名'", "prompt: 'IP 地址或主机名'", "prompt: '端口'", "prompt: '账号'"]) {
-    assert.ok(body.includes(prompt), prompt);
-  }
-  assert.ok(body.includes('selectAuthentication(title)'));
-  assert.ok(!body.includes('password: true'));
-  assert.ok(!body.includes('selectPrivateKey('));
 });
 
 test('declares every command referenced by a menu contribution', async () => {
@@ -180,10 +152,6 @@ test('uses distinct conflict-resistant shortcuts on each desktop platform', asyn
     mac: 'cmd+ctrl+t',
     command: 'safs.openTerminal'
   });
-  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.equal(extensionSource.includes('showRemoteShortcutHintOnce(vscodeContext)'), false);
-  assert.ok(extensionSource.includes('远程工作区 ${mount.name} 自动启用 Agent 转发'));
-  assert.ok(extensionSource.includes('await setAiForwardEnabled(mount, true)'));
 });
 
 test('shows a restart action for automatic Agent forwarding', async () => {
@@ -199,50 +167,30 @@ test('shows a restart action for automatic Agent forwarding', async () => {
     && item.when?.includes('safs\\.connection')));
 });
 
-test('packages Agent integration without the legacy JS stdio router or Codex plugin', async () => {
-  await access(new URL('../src/agent/agent-ipc-router.ts', import.meta.url));
-  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const nodeCliSource = await readFile(
-    new URL('../src/safs-cli.ts', import.meta.url), 'utf8'
-  );
-  const nodeCliIntegrationSource = await readFile(
-    new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8'
-  );
-  const vscodeIgnore = await readFile(new URL('../.vscodeignore', import.meta.url), 'utf8');
-  assert.equal(extensionSource.includes('backend-router.cjs'), false);
-  assert.equal(extensionSource.includes("'--', 'node'"), false);
-  assert.equal(nodeCliSource.includes('backend-bridge'), false);
-  assert.equal(/^bin\/\*\*$/m.test(vscodeIgnore), true);
-  assert.equal(nodeCliIntegrationSource.includes('releases/download'), false);
-  assert.ok(nodeCliIntegrationSource.includes('Node.js CLI'));
-  await access(new URL('../src/safs-cli.ts', import.meta.url));
-  await access(new URL('../skills/safs-cli/SKILL.md', import.meta.url));
-  await access(new URL('../skills/safs-cli/references/commands.md', import.meta.url));
-  await assert.rejects(access(new URL(
-    '../plugins/safs/.codex-plugin/plugin.json', import.meta.url
-  )));
+test('the VSIX file list includes the CLI, Skill and shell integration resources', () => {
+  const files = execFileSync(process.execPath, [
+    'node_modules/@vscode/vsce/vsce', 'ls', '--no-dependencies'
+  ], { encoding: 'utf8' }).split(/\r?\n/).map(file => file.replaceAll('\\', '/'));
+  for (const required of [
+    'dist/extension.js',
+    'dist/safs-cli.js',
+    'skills/safs-cli/SKILL.md',
+    'skills/safs-cli/references/commands.md',
+    ...['bash.sh', 'fish.fish', 'zsh-env.zsh', 'zsh-profile.zsh', 'zsh-rc.zsh']
+      .map(file => `resources/shell-integration/${file}`)
+  ]) {
+    assert.ok(files.includes(required), `Missing from VSIX: ${required}`);
+  }
+  assert.deepEqual(files.filter(file => /^(?:bin\/|plugins\/safs\/)|(?:backend-router|backend-bridge)\.cjs$/.test(file)), []);
 });
 
-test('Agent integration installs the bundled CLI Skill without probing Agent installations', async () => {
-  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const nodeCliSource = await readFile(new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8');
-  assert.ok(nodeCliSource.includes('globalNodeCliSkill'));
-  assert.ok(nodeCliSource.includes('installGlobalNodeCliSkill'));
-  assert.ok(extensionSource.includes('installGlobalNodeCliSkill(os.homedir(), target, source)'));
-  assert.equal(extensionSource.includes("['install', '--skills', '-g']"), false);
-  assert.equal(extensionSource.includes('nativeCliUsagePrompt'), false);
-  assert.equal(extensionSource.includes('cliInstructions('), false);
-  assert.ok(extensionSource.includes('installGlobalCli(context'));
-  assert.ok(extensionSource.includes('agentTaggedMcpUrl(router.url, agentName.trim())'));
-  assert.equal(extensionSource.includes("command('installCli'"), false);
-  assert.ok(extensionSource.includes("if (!cliEnabled())"));
-  assert.equal(extensionSource.includes('cliAgentIdentity'), false);
-  assert.ok(extensionSource.includes("args: ['--version']"));
-  assert.ok(extensionSource.includes('installedVersion !== extensionVersion'));
-  assert.equal(extensionSource.includes('configureDetectedAgents'), false);
-  assert.equal(extensionSource.includes('recordObservedAgentSource'), false);
-  assert.equal(extensionSource.includes('runAgentBackendOperation'), false);
-  await assert.rejects(access(new URL('../src/agent/agent-backend-registry.ts', import.meta.url)));
+test('the bundled CLI rejects the retired Skill installation command', () => {
+  const result = spawnSync(process.execPath, ['dist/safs-cli.js', 'install', '--skills', '-g'], {
+    encoding: 'utf8'
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unknown command/);
 });
 
 test('Git webview hosts its controls without duplicate native tree actions', async () => {
@@ -303,61 +251,15 @@ test('contributes the Agent activity Webview in the SAFS sidebar', async () => {
   );
   assert.ok(activityIcon.includes('M3 13h4l2-5 4 10'));
   assert.equal(activityIcon.includes('M8 2.75 L16 2.75'), false);
-  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.ok(extensionSource.includes('registerWebviewViewProvider(agentActivityViewId'));
-  assert.ok(extensionSource.includes('onDidChangeTerminalShellIntegration'));
-  assert.ok(extensionSource.includes('onDidEndTerminalShellExecution'));
-  assert.ok(extensionSource.includes('queueAgentCommandTerminalRefresh'));
-  assert.ok(extensionSource.includes('工作区已切换，停止使用不匹配的终端'));
 });
 
-test('packages session-only remote shell integration scripts', async () => {
-  for (const file of [
-    'bash.sh', 'fish.fish', 'zsh-env.zsh', 'zsh-profile.zsh', 'zsh-rc.zsh'
-  ]) {
-    await access(new URL(`../resources/shell-integration/${file}`, import.meta.url));
+test('MCP instructions restrict remote tools to SAFS tasks and require explicit routing', () => {
+  for (const instructions of [directAgentMcpInstructions, routedAgentMcpInstructions]) {
+    assert.match(instructions, /Do not call SAFS tools for ordinary local workspaces/);
+    assert.match(instructions, /explicit SAFS tasks or known safs:\/\/ context/);
   }
-});
-
-test('CLI IPC and MCP HTTP remain independent and remote tools require SAFS context', async () => {
-  const cli = await readFile(new URL('../src/agent/agent-backend.ts', import.meta.url), 'utf8');
-  const ipcRouter = await readFile(new URL('../src/agent/agent-ipc-router.ts', import.meta.url), 'utf8');
-  const mcp = await readFile(new URL('../src/mcp/agent-mcp.ts', import.meta.url), 'utf8');
-  const router = await readFile(new URL('../src/mcp/agent-http-router.ts', import.meta.url), 'utf8');
-  const tools = await readFile(new URL('../src/mcp/agent-mcp-tools.ts', import.meta.url), 'utf8');
-  const operations = await readFile(new URL('../src/agent/agent-operation-dispatcher.ts', import.meta.url), 'utf8');
-  assert.ok(cli.includes('createIpcServer'));
-  assert.ok(ipcRouter.includes('ipcRequest'));
-  assert.equal(cli.includes('@modelcontextprotocol/sdk'), false);
-  assert.equal(ipcRouter.includes('@modelcontextprotocol/sdk'), false);
-  assert.ok(mcp.includes('StreamableHTTPServerTransport'));
-  assert.ok(mcp.includes('registerAgentMcpTools'));
-  assert.ok(router.includes('http.createServer(app)'));
-  assert.ok(router.includes('await fetch('));
-  assert.equal(router.includes('ipcRequest'), false);
-  assert.ok(tools.includes('Do not call SAFS tools for ordinary local workspaces'));
-  assert.ok(tools.includes('Use only for explicit SAFS tasks or known safs:// context'));
-  assert.ok(tools.includes('Pass the explicitly chosen workspaceId'));
-  assert.ok(tools.includes('This tool does not select, switch, or store a current workspace'));
-  assert.ok(operations.includes('callbacks.currentFile(input)'));
-  assert.equal(tools.includes('anthropic/alwaysLoad'), false);
-});
-
-test('omits Agent focus status bar and retains the SFTP entry', async () => {
-  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.equal(extensionSource.includes('Agent 已聚焦当前窗口'), false);
-  assert.equal(extensionSource.includes('👁'), false);
-  assert.equal(extensionSource.includes('forwardingFocusStatusBar'), false);
-  assert.equal(extensionSource.includes('focusedAgentSource'), false);
-  assert.equal(extensionSource.includes("'safs.agentForwardingFocus'"), false);
-  assert.ok(extensionSource.includes("'safs.status'"));
-  assert.equal(extensionSource.includes('syncStatusBar'), false);
-  assert.equal(extensionSource.includes('safsStatusBar.command'), false);
-  assert.ok(extensionSource.includes("'$(sync) SAFS SYNC'"));
-  assert.ok(extensionSource.includes("'$(git-branch) SAFS Git'"));
-  assert.ok(extensionSource.includes('if (statusBarSyncTask)'));
-  assert.ok(extensionSource.includes('else if (statusBarGitAvailable)'));
-  assert.ok(extensionSource.includes('refreshSafsEntryLabel()'));
+  assert.match(routedAgentMcpInstructions, /explicitly chosen workspaceId/);
+  assert.match(routedAgentMcpInstructions, /never fall back to another window/);
 });
 
 test('uses only the unified cross-platform config path', async () => {
@@ -368,9 +270,6 @@ test('uses only the unified cross-platform config path', async () => {
     manifest.contributes?.configuration?.properties?.['safs.configPath'],
     undefined
   );
-  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  assert.equal(extensionSource.includes("inspect<string>('configPath')"), false);
-  assert.ok(extensionSource.includes("const defaultConfigPath = '~/.safs/config.json'"));
   assert.equal(
     manifest.contributes?.configuration?.properties?.['safs.agentForwardingAgents'],
     undefined
@@ -388,30 +287,13 @@ test('uses only the unified cross-platform config path', async () => {
   assert.deepEqual(matches, ['**/.safs/config.json']);
 });
 
-test('prepares the chosen forwarding interface before enabling and respects explicit uninstall', async () => {
+test('contributes Agent forwarding installation and uninstall commands', async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as ExtensionManifest;
   const commands = manifest.contributes?.commands ?? [];
   for (const name of ['installAgentForwarding', 'uninstallAgentForwarding']) {
     assert.ok(commands.some(item => item.command === `safs.${name}`));
     assert.ok(manifest.activationEvents?.includes(`onCommand:safs.${name}`));
   }
-  const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const enableSetup = source.slice(source.indexOf('async function updateAiForwardEnabled('), source.indexOf('async function setAiForwardEnabled('));
-  const prepare = enableSetup.indexOf('configureAgentInterface(vscodeContext)');
-  const persist = enableSetup.indexOf('vscodeContext.globalState.update(aiForwardMountsKey');
-  assert.ok(prepare >= 0 && persist > prepare);
-  assert.ok(source.includes('void configureAgentInterface(context, false, firstRun)'));
-  assert.ok(source.includes('!context.globalState.get<boolean>(cliFirstRunCheckedKey, false)'));
-  assert.ok(source.includes('await context.globalState.update(cliFirstRunCheckedKey, true)'));
-  assert.ok(source.includes('!context.globalState.get<boolean>(cliAutoPrepareDisabledKey, false)'));
-  assert.ok(source.includes('await context.globalState.update(cliAutoPrepareDisabledKey, true)'));
-  assert.ok(source.includes('await uninstallGlobalCli(context)'));
-  assert.ok(source.includes('installGlobalCliSkill(context)'));
-  assert.equal(source.includes("['install', '--skills', '-g']"), false);
-  assert.ok(source.includes('shouldCopyMcpUninstallPrompt(previous, next, vscode.window.state.focused)'));
-  assert.ok(source.includes('streamableHttpMcpUninstallPrompt()'));
-  assert.ok(source.includes('await copyMcpUninstallPromptAndNotify(context)'));
-  assert.equal(source.includes('configureDetectedAgents'), false);
 });
 
 test('runs CLI cleanup after the extension is completely uninstalled', async () => {
@@ -433,7 +315,7 @@ test('declares host key change action setting', async () => {
   assert.equal(property?.default, 'prompt');
 });
 
-test('handles high-risk Agent commands without per-command prompts', async () => {
+test('declares the supported high-risk command policies', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as ExtensionManifest;
@@ -443,15 +325,6 @@ test('handles high-risk Agent commands without per-command prompts', async () =>
   assert.equal(property?.type, 'string');
   assert.deepEqual(property?.enum, ['deny', 'allow']);
   assert.equal(property?.default, 'deny');
-
-  const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
-  const policySource = await readFile(
-    new URL('../src/security/command-policy.ts', import.meta.url), 'utf8'
-  );
-  assert.equal(extensionSource.includes('SAFS：确认高风险远程 Shell 操作'), false);
-  assert.equal(extensionSource.includes('允许本次执行'), false);
-  assert.ok(policySource.includes("configuredAction === 'allow' ? 'allow' : 'deny'"));
-  assert.ok(extensionSource.includes('evaluateBackendCommandPolicy'));
 });
 
 test('manifest high-risk defaults are generated from the runtime rule set', async () => {
@@ -510,56 +383,6 @@ test('declares the two sync directions on the matching context menus', async () 
   assert.equal(local?.when, 'resourceScheme == file && explorerResourceIsFolder');
 });
 
-test('both sync directions transfer first and register the pair afterwards', async () => {
-  const extensionSource = await readFile(
-    new URL('../src/extension.ts', import.meta.url), 'utf8'
-  );
-  const bodyOf = (name: string): string => {
-    const start = extensionSource.indexOf(`async function ${name}(`);
-    assert.notEqual(start, -1, `missing ${name}`);
-    return extensionSource.slice(start, extensionSource.indexOf('\nasync function ', start + 10));
-  };
-  // 同步到远程 = 先可视化上传（整棵上传到 <所选目录>/<本地目录名>），
-  // 再以上传后的远程状态为基线开始双向同步。
-  const toRemote = bodyOf('syncLocalTreeToRemote');
-  assert.ok(toRemote.includes('visualUpload([vscode.Uri.file(localDir)], mountName, parentDir)'));
-  assert.ok(toRemote.includes('scanRemote(session, remotePath)'));
-  assert.ok(toRemote.includes('fingerprintLines'));
-  // 同步到本地保留"先整棵下载"的首次基线（远端为准），随后建立双向同步。
-  const toLocal = bodyOf('syncToLocal');
-  assert.ok(toLocal.includes('confirmInitialSyncTarget('));
-  assert.ok(toLocal.includes('startSyncMirror(manager'));
-  // 两条路径都只有同步成功才写历史列表与配对表。
-  const mirror = bodyOf('startSyncMirror');
-  assert.ok(mirror.includes('recordDirectoryHistory(vscodeContext, task.mountName, task.remotePath)'));
-  assert.ok(mirror.includes('recordSyncedDirectory(vscodeContext'));
-  const ready = mirror.indexOf('if (!await startRemoteSyncWithProgress(manager, task, remoteDirection)) return false;');
-  assert.notEqual(ready, -1);
-  assert.ok(ready < mirror.indexOf('recordDirectoryHistory('));
-});
-
-test('repeating a sync for the same directory prompts instead of transferring again', async () => {
-  const extensionSource = await readFile(
-    new URL('../src/extension.ts', import.meta.url), 'utf8'
-  );
-  const start = extensionSource.indexOf('async function promptRepeatSync(');
-  assert.notEqual(start, -1);
-  const prompt = extensionSource.slice(
-    start, extensionSource.indexOf('\nasync function ', start + 10)
-  );
-  assert.ok(prompt.includes('该目录已在历史列表中，同步过一次了'));
-  assert.ok(prompt.includes("'打开副本', '重新同步'"));
-  // 两个方向都要先查配对表，命中即弹窗，不再直接搬运。
-  for (const entry of ['async function syncToLocal(', 'async function syncToRemote(']) {
-    const index = extensionSource.indexOf(entry);
-    assert.notEqual(index, -1, `missing ${entry}`);
-    const body = extensionSource.slice(index, extensionSource.indexOf('\nasync function ', index + 10));
-    assert.ok(body.includes('promptRepeatSync('), `${entry} should prompt on repeat`);
-  }
-  // 删除历史条目同时忘掉配对，之后是全新一次同步。
-  assert.ok(extensionSource.includes('removeSyncedDirectory(vscodeContext, item.mountName, item.path)'));
-});
-
 test('history sync buttons read 启动同步 when the directory is not syncing', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
@@ -600,109 +423,4 @@ test('host items offer inline host configuration and omit redundant context acti
   const openHost = itemMenu.find(item => item.command === 'safs.openHostConfig');
   assert.equal(openHost?.group, 'inline@5');
   assert.equal(commands.find(item => item.command === 'safs.openHostConfig')?.title, '打开主机配置');
-});
-
-test('generates config names as host(account) and migrates the old ones', async () => {
-  const extensionSource = await readFile(
-    new URL('../src/extension.ts', import.meta.url), 'utf8'
-  );
-  // 两条命名路径：保存账号时立即生成，启动/配置变更时归一化旧名字。
-  assert.ok(extensionSource.includes(
-    'const generatedName = mountNameFor({ ...host, user: normalizedUser }, config.host_aliases);'
-  ));
-  assert.ok(extensionSource.includes('const baseName = host.user.trim() ? mountNameFor(host, config.host_aliases) : host.ip;'));
-  // 改名后把已打开窗口的工作区 URI（左下角指示器）也换成新名字。
-  assert.ok(extensionSource.includes('await guard(refreshRemoteWorkspaceNames)'));
-  assert.ok(extensionSource.includes("await vscode.commands.executeCommand('vscode.openFolder', desired, { forceReuseWindow: true })"));
-  // 改名后要跟着迁移的持久状态。
-  const start = extensionSource.indexOf('async function normalizeHierarchicalConfigNames(');
-  assert.notEqual(start, -1);
-  const body = extensionSource.slice(
-    start, extensionSource.indexOf('\nclass RemoteFoldersProvider', start)
-  );
-  for (const store of [
-    'directoryHistoryKey', 'aiForwardMountsKey', 'syncTasksKey', 'syncedDirectoriesKey'
-  ]) {
-    assert.ok(body.includes(store), `rename migration should cover ${store}`);
-  }
-  // 改名后已保存的 safs:// URI 仍能打开：启动时装载映射并注入解析器。
-  assert.ok(extensionSource.includes('async function rememberMountAliases('));
-  assert.ok(extensionSource.includes('setMountAliasResolver((mountName) => {'));
-  assert.ok(extensionSource.includes('return mountRenames.get(mountName) ?? mountName;'));
-  assert.ok(body.includes('rememberMountRenames(renamed)'));
-  // 改名之前保存的 URI：按历史命名回推候选旧名。
-  assert.ok(extensionSource.includes('await guard(registerMountAliases)'));
-  assert.ok(extensionSource.includes('addAlias(mountAuthorityAlias(host.name), host.name);'));
-  assert.ok(extensionSource.includes('addAlias(mountAuthorityAlias(host.name), host.name);'));
-  assert.ok(extensionSource.includes('mountAliasCandidates(host, config.host_aliases)'));
-  assert.ok(extensionSource.includes('mountAliasCandidates(host, config.host_aliases)'));
-});
-
-test('renames survive activation running before the registry and pool exist', async () => {
-  const extensionSource = await readFile(
-    new URL('../src/extension.ts', import.meta.url), 'utf8'
-  );
-  // activate 在创建 registry / pool 之前就归一化旧配置名（历史命名迁移），所以这一步
-  // 必须容忍两者尚未初始化：否则 `undefined.rename` 会被守卫捕成弹窗，并中断整段迁移。
-  const start = extensionSource.indexOf('async function applyMountRenames(');
-  assert.notEqual(start, -1);
-  const body = extensionSource.slice(start, extensionSource.indexOf('\n}', start));
-  assert.ok(body.includes('registry?.rename(from, to);'));
-  assert.ok(body.includes('pool?.rename(from, to);'));
-  // 迁移确实早于 registry / pool 的创建，这就是上面必须容错的原因。
-  const activateStart = extensionSource.indexOf('export async function activate(');
-  assert.notEqual(activateStart, -1);
-  const normalizeAt = extensionSource.indexOf(
-    'await guard(() => normalizeHierarchicalConfigNames(context));', activateStart
-  );
-  const registryAt = extensionSource.indexOf('registry = new RemoteFolderRegistry();', activateStart);
-  assert.notEqual(normalizeAt, -1);
-  assert.notEqual(registryAt, -1);
-  assert.ok(normalizeAt < registryAt, 'rename migration still runs before the registry exists');
-});
-
-test('every delete button confirms first', async () => {
-  const extensionSource = await readFile(
-    new URL('../src/extension.ts', import.meta.url), 'utf8'
-  );
-  // 主机分组删除 / 账号挂载删除 / 历史记录删除，都要先弹确认框。
-  assert.ok(extensionSource.includes('确定删除主机"${group.displayName}"的'));
-  assert.ok(extensionSource.includes('确定删除"${mount.name}"配置吗？'));
-  assert.ok(extensionSource.includes('确定删除历史记录"${item.path}"吗？'));
-  // 同步中的历史条目删掉后没法再停，所以一并停同步。
-  assert.ok(extensionSource.includes('if (syncing) await stopSync(item.mountName, item.path);'));
-  assert.equal(
-    extensionSource.includes("command('deleteHistoryItem', async (item: HistoryItem) => {\n    await removeHistoryEntry"),
-    false
-  );
-});
-
-test('打开配置 locates the selected tree item, and deleting a host removes all its accounts', async () => {
-  const extensionSource = await readFile(
-    new URL('../src/extension.ts', import.meta.url), 'utf8'
-  );
-  // 命令实参形状不一（树元素/元素数组/显式目标/无参），必须先判形再定位。
-  assert.ok(extensionSource.includes('configFocusForArgument(argument)'));
-  assert.ok(extensionSource.includes('Array.isArray(argument) ? argument[0] : argument'));
-  assert.ok(extensionSource.includes('configFocusForElement(mountsTreeView?.selection[0])'));
-  assert.ok(extensionSource.includes('configEntryOffset(content, focus.name)'));
-  assert.ok(extensionSource.includes('vscode.window.createTreeView(`${commandPrefix}.mounts`'));
-  // 主机节点的 ＋ 只追加账号，不再覆盖单账号主机。
-  assert.ok(extensionSource.includes('accountTargetIndex(config, requestedGroup'));
-  assert.equal(extensionSource.includes('groupHosts.length === 1'), false);
-  assert.ok(extensionSource.includes('该主机下已存在此账号，请编辑已有账号或使用其他账号。'));
-  // 删除配置后要清场：停同步任务、清历史目录与本地副本配对。
-  assert.ok(extensionSource.includes('async function forgetMountState('));
-  assert.ok(extensionSource.includes('await forgetMountState([mount.name]);'));
-  assert.ok(extensionSource.includes('await forgetMountState(hostNames);'));
-  // 主机分组删除：整组账号 + 各自的挂载配置。
-  const start = extensionSource.indexOf('async function deleteHostGroup(');
-  assert.notEqual(start, -1);
-  const body = extensionSource.slice(start, extensionSource.indexOf('\nasync function ', start + 10));
-  assert.ok(body.includes('for (const name of hostNames)'));
-  // 账号/挂载的删除只删自己那条，不再有"主机分组删整组"的分支。
-  assert.equal(extensionSource.includes("element.type === 'hostGroup') {\n    await deleteHostGroup"), false);
-  assert.ok(extensionSource.includes("command('deleteHostGroup', async (group) => {"));
-  assert.ok(body.includes('removeMountConfig(config, name)'));
-  assert.ok(body.includes('hostNames.filter((name) => enabled.delete(name))'));
 });

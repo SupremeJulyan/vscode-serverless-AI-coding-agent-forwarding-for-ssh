@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { accountTargetIndex } from '../src/config/host-accounts';
-import { BridgeConfig } from '../src/config/config';
+import { BridgeConfig, deriveMounts, removeHostGroupAccounts } from '../src/config/config';
 
 const config = (hosts: Array<{ name: string; ip: string; user: string }>): BridgeConfig => ({
   hosts, mounts: []
@@ -34,4 +34,14 @@ test('locates the named host for account nodes and the legacy view', () => {
   assert.equal(accountTargetIndex(hosts, { name: 'b' }), 1);
   assert.equal(accountTargetIndex(hosts, { name: 'missing' }), -1);
   assert.equal(accountTargetIndex(hosts, {}), -1);
+});
+
+test('deleting a host group removes all selected accounts and mounts and preserves other hosts', () => {
+  const a = { name: 'dev(a)', ip: '192.0.2.10', user: 'a' };
+  const b = { name: 'dev(b)', ip: '192.0.2.10', user: 'b' };
+  const other = { name: 'staging(a)', ip: '192.0.2.20', user: 'a' };
+  const current = { hosts: [a, b, other], mounts: deriveMounts([a, other]) };
+  removeHostGroupAccounts(current, [a.name, b.name]);
+  assert.deepEqual(current.hosts, [other]);
+  assert.deepEqual(current.mounts, deriveMounts([other]));
 });

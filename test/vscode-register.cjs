@@ -2,6 +2,7 @@ const Module = require('node:module');
 
 const vscodeMock = {
   ViewColumn: { Active: -1 },
+  ProgressLocation: { Notification: 15, Window: 10 },
   EventEmitter: class {
     constructor() {
       this.listeners = new Set();
@@ -15,6 +16,7 @@ const vscodeMock = {
     dispose() { this.listeners.clear(); }
   },
   window: {
+    showInformationMessage: async () => undefined,
     showWarningMessage: async () => undefined,
     showErrorMessage: async () => undefined
   },

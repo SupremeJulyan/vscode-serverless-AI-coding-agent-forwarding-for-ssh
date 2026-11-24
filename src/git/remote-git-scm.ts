@@ -1,3 +1,4 @@
+import { notificationWindow } from '../ui/notification-window';
 import {
   applyObservedPushState, GitSyncState, ObservedPushState, readGitSyncState
 } from './git-sync-state';
@@ -107,11 +108,11 @@ export class RemoteGitScm implements vscode.Disposable {
       this.handlers.set(name, handler);
       this.subscriptions.push(vscode.commands.registerCommand(`safs.git.${name}`, async (...args) => {
         try { await handler(...args); }
-        catch (error) { void vscode.window.showErrorMessage(`SAFS Git: ${describeGitOperationError(error)}`); }
+        catch (error) { void notificationWindow.showErrorMessage(`SAFS Git: ${describeGitOperationError(error)}`); }
       }));
     };
-    command('refresh', async () => vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification, title: 'SAFS：扫描远程 Git 仓库', cancellable: true
+    command('refresh', async () => notificationWindow.withProgress({
+      location: vscode.ProgressLocation.Notification, title: 'SAFS：扫描远程 Git 仓库'
     }, async (_progress, token) => {
       const listener = token.onCancellationRequested(() => this.discoveryController?.abort());
       try { await this.refresh(true); } finally { listener.dispose(); }
@@ -159,7 +160,7 @@ export class RemoteGitScm implements vscode.Disposable {
         await git.run(['config', '--local', 'branch.main.merge', 'refs/heads/main']);
       }
       await this.refresh(true);
-      void vscode.window.showInformationMessage(`SAFS：已在远程工作区 ${folder.name} 初始化 Git 仓库。`);
+      void notificationWindow.showInformationMessage(`SAFS：已在远程工作区 ${folder.name} 初始化 Git 仓库。`);
     });
     command('openChange', async (resource: Resource) => this.openChange(resource));
     command('branch', async (source?: GitSource) => {
@@ -241,7 +242,7 @@ export class RemoteGitScm implements vscode.Disposable {
       const selected = selectedResources(resources).filter(resource =>
         resource?.repository && resource.change && !resource.staged && !isGitConflict(resource.change));
       if (!selected.length) return;
-      const confirmation = await vscode.window.showWarningMessage(
+      const confirmation = await notificationWindow.showWarningMessage(
         selected.length === 1
           ? `确定还原“${selected[0].change.path}”的更改吗？此操作无法撤销。`
           : `确定还原选中的 ${selected.length} 项更改吗？此操作无法撤销。`,
@@ -263,8 +264,8 @@ export class RemoteGitScm implements vscode.Disposable {
       command(action, async (source?: GitSource, signal?: AbortSignal, report?: (message: string) => void) => {
         const repository = await this.select(source);
         if (!repository) return;
-        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification,
-          title: action === 'fetch' ? 'Git 提取' : action === 'pull' ? 'Git 拉取' : 'Git 推送', cancellable: true },
+        await notificationWindow.withProgress({ location: vscode.ProgressLocation.Notification,
+          title: action === 'fetch' ? 'Git 提取' : action === 'pull' ? 'Git 拉取' : 'Git 推送' },
           async (_progress, token) => {
             const controller = new AbortController();
             const abort = () => controller.abort();
@@ -387,7 +388,7 @@ export class RemoteGitScm implements vscode.Disposable {
           catch (error) {
             controller.signal.throwIfAborted();
             this.log(`Git 仓库扫描：${String(error)}`);
-            if (interactive) void vscode.window.showErrorMessage(`SAFS Git: ${String(error)}`);
+            if (interactive) void notificationWindow.showErrorMessage(`SAFS Git: ${String(error)}`);
           }
         }
         const candidates = this.discoveredFolders.get(key) ?? [folder];
@@ -433,7 +434,7 @@ export class RemoteGitScm implements vscode.Disposable {
           const message = `${folder.name}: ${error instanceof Error ? error.message : String(error)}`;
           if (this.failures.get(key)?.message !== message) this.log(message);
           this.failures.set(key, { message, retryAt: Date.now() + 60000 });
-          if (interactive) void vscode.window.showErrorMessage(`SAFS Git: ${message}`);
+          if (interactive) void notificationWindow.showErrorMessage(`SAFS Git: ${message}`);
         }
       }
       if (changed && !this.disposed) { this.repositoryEmitter.fire(); }

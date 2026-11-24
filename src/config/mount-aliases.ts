@@ -1,4 +1,4 @@
-import { HostConfig } from './config';
+import type { BridgeConfig, HostConfig } from './config';
 import { legacyMountAuthorityAlias, mountAuthorityAlias } from '../ssh2/uri';
 
 /**
@@ -75,4 +75,31 @@ export function mountAliasCandidates(
     ...plain.map((name) => legacyMountAuthorityAlias(name))
   ];
   return [...new Set([...plain, ...escaped].filter((name): name is string => Boolean(name)))];
+}
+
+export function collectMountAliases(config: BridgeConfig): Map<string, string> {
+  const currentNames = new Set(config.hosts.map((host) => host.name));
+  const aliases = new Map<string, string>();
+  const addAlias = (candidate: string | undefined, mountName: string) => {
+    if (candidate && candidate !== mountName && !currentNames.has(candidate)) {
+      aliases.set(candidate, mountName);
+    }
+  };
+  for (const host of config.hosts) {
+    // 历史命名与上一版 `IP(账号)` 的明文/转义形态（见 mountAliasCandidates）。
+    for (const candidate of mountAliasCandidates(host, config.host_aliases)) {
+      addAlias(candidate, host.name);
+    }
+    // 当前名字的 authority 转义形式：VS Code 存进窗口状态的就是它。
+    addAlias(mountAuthorityAlias(host.name), host.name);
+  }
+  return aliases;
+}
+
+export function resolveMountAlias(
+  name: string, config: BridgeConfig | undefined, aliases: ReadonlyMap<string, string>
+): string {
+  const configured = config?.mounts.some(mount => mount.name === name)
+    || config?.hosts.some(host => host.name === name);
+  return configured ? name : aliases.get(name) ?? name;
 }

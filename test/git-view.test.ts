@@ -79,6 +79,16 @@ test('Git webview validates repository actions, keeps native objects private, an
     assert.deepEqual(copied,[commit.id]);
     receive({type:'action',action:'setup',repository:'setup',mode:'init',target:'foreign',name:'a',email:'a@example.test',url:'https://example.test/r.git',directory:''});await tick();
     assert.equal(setups.length,0);
+    for (const mode of ['init', 'clone']) {
+      const message = {
+        type: 'action', action: 'setup', repository: 'setup', mode, target: uri.toString(),
+        name: 'a', email: 'a@example.test', url: 'https://example.test/r.git', directory: 'r'
+      };
+      receive(message);
+      await tick();
+      assert.deepEqual(setups.at(-1)?.[0], message);
+    }
+    assert.equal(setups.length, 2);
     receive({type:'action',action:'fetch',repository:uri.toString()});await tick();
     receive({type:'action',action:'fetch',repository:uri.toString()});
     assert.equal(executed.filter(args=>args[0]==='fetch').length,1);

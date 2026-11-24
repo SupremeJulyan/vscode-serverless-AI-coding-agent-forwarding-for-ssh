@@ -31,3 +31,13 @@ export function hostConfigOffset(content: string, ip: string): number | undefine
   }
   return undefined;
 }
+
+export function resolveConfigFocus(
+  argument: unknown,
+  selected: () => unknown,
+  focusForElement: (element: unknown) => ConfigFocus | undefined
+): ConfigFocus | undefined {
+  const value = Array.isArray(argument) ? argument[0] : argument;
+  if (isConfigFocus(value)) return value;
+  return focusForElement(value && typeof value === 'object' ? value : selected());
+}

@@ -1,3 +1,4 @@
+import { notificationWindow } from '../ui/notification-window';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   chmod, mkdir, readFile, rename, rmdir, stat, unlink, writeFile
@@ -397,7 +398,7 @@ export async function promptFirstConnection(
   host: HostConfig, fingerprints: string[]
 ): Promise<HostKeyDecision> {
   // 只保留一个确认按钮：modal 弹窗自带的 X / Esc 即隐式取消（返回 undefined → 拒绝）。
-  const choice = await vscode.window.showWarningMessage(
+  const choice = await notificationWindow.showWarningMessage(
     firstConnectionPromptMessage(host, fingerprints),
     { modal: true }, '信任并连接'
   );
@@ -431,7 +432,7 @@ export function changedKeyPromptMessage(
 export async function promptHostKeyChanged(
   host: HostConfig, oldFingerprints: string[], newFingerprints: string[]
 ): Promise<HostKeyDecision> {
-  const choice = await vscode.window.showWarningMessage(
+  const choice = await notificationWindow.showWarningMessage(
     changedKeyPromptMessage(host, oldFingerprints, newFingerprints),
     { modal: true }, '替换旧密钥', '追加新密钥'
   );
@@ -534,7 +535,7 @@ export function hostVerifierFor(
       }
       const action = hostKeyChangedAction();
       if (action === 'reject') {
-        void vscode.window.showErrorMessage(
+        void notificationWindow.showErrorMessage(
           `主机"${host.name}"的 SSH 主机密钥未受信任，已拒绝连接。`
         );
         callback(false);

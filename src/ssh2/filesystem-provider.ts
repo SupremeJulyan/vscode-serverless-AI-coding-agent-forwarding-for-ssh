@@ -1,3 +1,4 @@
+import { notificationWindow } from '../ui/notification-window';
 import { agentCwdMappings } from '../agent/agent-cwd';
 import { saveConfirmation } from '../remote/save-confirmation';
 import * as path from 'node:path';
@@ -412,7 +413,7 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
     } catch (error) {
       if (!(error instanceof RemoteFileChangedError)) throw error;
       const key = uri.toString();
-      const pending = editorConflictDecisions.get(key) ?? Promise.resolve(vscode.window.showWarningMessage(
+      const pending = editorConflictDecisions.get(key) ?? Promise.resolve(notificationWindow.showWarningMessage(
         `远程文件“${path.posix.basename(uri.path)}”已发生变化。`,
         { modal: true }, '覆盖远程', '撤销修改'
       )).then(value => value === '覆盖远程' ? 'overwrite' as const

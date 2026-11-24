@@ -1,3 +1,4 @@
+import { notificationWindow } from '../ui/notification-window';
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { AgentActivityStore, type AgentActivityEvent } from './agent-activity';
@@ -63,9 +64,9 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
         const event = this.store.snapshot().find(item => item.id === id);
         if (!event?.snapshotId || event.snapshotExpired) return;
         try { await this.actions?.snapshotAction?.(event, type === 'snapshotDiff' ? 'diff' : 'restore'); }
-        catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)); }
+        catch (error) { void notificationWindow.showErrorMessage(error instanceof Error ? error.message : String(error)); }
       } else if (type === 'clear') {
-        const selected = await vscode.window.showWarningMessage(
+        const selected = await notificationWindow.showWarningMessage(
           '确定清空当前窗口的 Agent 活动记录吗？',
           { modal: true },
           '清空'

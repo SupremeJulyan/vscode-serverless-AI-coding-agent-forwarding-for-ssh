@@ -1,115 +1,41 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import ts from 'typescript';
+import * as vscode from 'vscode';
+import { notificationWindow } from '../src/ui/notification-window';
 
-const sourceRoot = fileURLToPath(new URL('../src', import.meta.url));
-
-function isMessageCall(node: ts.CallExpression): boolean {
-  return ts.isPropertyAccessExpression(node.expression)
-    && /^show(?:Information|Warning|Error)Message$/.test(node.expression.name.text);
-}
-
-function isModal(node: ts.CallExpression): boolean {
-  const options = node.arguments[1];
-  return !!options && ts.isObjectLiteralExpression(options)
-    && options.properties.some((property) =>
-      ts.isPropertyAssignment(property)
-      && property.name.getText() === 'modal'
-      && property.initializer.kind === ts.SyntaxKind.TrueKeyword
-    );
-}
-
-function progressTitles(node: ts.Expression): string[] | undefined {
-  if (ts.isStringLiteralLike(node)) return [node.text];
-  if (ts.isConditionalExpression(node)) {
-    const whenTrue = progressTitles(node.whenTrue);
-    const whenFalse = progressTitles(node.whenFalse);
-    return whenTrue && whenFalse ? [...whenTrue, ...whenFalse] : undefined;
+test('non-modal messages are bounded by code points and preserve actions', async t => {
+  for (const method of ['showInformationMessage', 'showWarningMessage', 'showErrorMessage'] as const) {
+    const stub = t.mock.method(vscode.window, method, async (_message: string, _action: string) => '查看');
+    const text = '远'.repeat(30) + '🧪路径';
+    assert.equal(await notificationWindow[method](text, '查看'), '查看');
+    assert.deepEqual(stub.mock.calls[0].arguments, ['远'.repeat(30) + '🧪…', '查看']);
+    stub.mock.restore();
   }
-  return undefined;
-}
-
-test('non-modal literal notifications remain short enough for narrow windows', async () => {
-  const entries = await readdir(sourceRoot, { recursive: true });
-  const violations: string[] = [];
-  for (const entry of entries) {
-    if (!entry.endsWith('.ts')) continue;
-    const file = path.join(sourceRoot, entry);
-    const source = await readFile(file, 'utf8');
-    const syntax = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && isMessageCall(node) && !isModal(node)) {
-        const message = node.arguments[0];
-        if (message && ts.isStringLiteralLike(message) && [...message.text].length > 32) {
-          const line = syntax.getLineAndCharacterOfPosition(message.getStart()).line + 1;
-          violations.push(`${entry}:${line} (${[...message.text].length} chars): ${message.text}`);
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(syntax);
-  }
-  assert.deepEqual(violations, []);
 });
 
-test('notification progress titles never contain unbounded paths or names', async () => {
-  const entries = await readdir(sourceRoot, { recursive: true });
-  const violations: string[] = [];
-  for (const entry of entries) {
-    if (!entry.endsWith('.ts')) continue;
-    const file = path.join(sourceRoot, entry);
-    const source = await readFile(file, 'utf8');
-    const syntax = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node)
-          && ts.isPropertyAccessExpression(node.expression)
-          && node.expression.name.text === 'withProgress') {
-        const options = node.arguments[0];
-        if (options && ts.isObjectLiteralExpression(options)) {
-          const location = options.properties.find((property): property is ts.PropertyAssignment =>
-            ts.isPropertyAssignment(property) && property.name.getText() === 'location'
-          );
-          if (location?.initializer.getText().includes('ProgressLocation.Notification')) {
-            const title = options.properties.find((property): property is ts.PropertyAssignment =>
-              ts.isPropertyAssignment(property) && property.name.getText() === 'title'
-            );
-            const choices = title && progressTitles(title.initializer);
-            if (!choices || choices.some((choice) => [...choice].length > 32)) {
-              const line = syntax.getLineAndCharacterOfPosition(options.getStart()).line + 1;
-              violations.push(`${entry}:${line}`);
-            }
-          }
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(syntax);
-  }
-  assert.deepEqual(violations, []);
+test('modal messages keep the full confirmation details', async t => {
+  const stub = t.mock.method(vscode.window, 'showWarningMessage', async () => undefined);
+  const text = '目录'.repeat(32);
+  await notificationWindow.showWarningMessage(text, { modal: true }, '删除');
+  assert.deepEqual(stub.mock.calls[0].arguments, [text, { modal: true }, '删除']);
 });
 
-test('every native long-running progress window offers cancellation', async () => {
-  const entries = await readdir(sourceRoot, { recursive: true });
-  const violations: string[] = [];
-  for (const entry of entries) {
-    if (!entry.endsWith('.ts')) continue;
-    const source = await readFile(path.join(sourceRoot, entry), 'utf8');
-    const syntax = ts.createSourceFile(entry, source, ts.ScriptTarget.Latest, true);
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'withProgress') {
-        const options = node.arguments[0];
-        const cancellation = ts.isObjectLiteralExpression(options) && options.properties.find(property =>
-          ts.isPropertyAssignment(property) && property.name.getText(syntax) === 'cancellable');
-        if (!cancellation || !ts.isPropertyAssignment(cancellation) || cancellation.initializer.kind !== ts.SyntaxKind.TrueKeyword) {
-          violations.push(`${entry}:${syntax.getLineAndCharacterOfPosition(node.getStart()).line + 1}`);
-        }
-      }
-      ts.forEachChild(node, visit);
+test('native progress bounds notification titles and exposes cancellation to the task', async t => {
+  const window = vscode.window as unknown as Record<string, unknown>;
+  const token = { isCancellationRequested: true };
+  const progress = { report() {} };
+  t.after(() => { delete window.withProgress; });
+  const title = '/remote/' + '长'.repeat(80);
+  for (const location of [vscode.ProgressLocation.Notification, vscode.ProgressLocation.Window]) {
+    window.withProgress = async (options: vscode.ProgressOptions, task: Function) => {
+      assert.equal(options.location, location);
+      assert.equal(options.title, location === vscode.ProgressLocation.Notification ? title.slice(0, 31) + '…' : title);
+      assert.equal(options.cancellable, true);
+      return task(progress, token);
     };
-    visit(syntax);
+    assert.equal(await notificationWindow.withProgress({ location, title }, async (reporter, cancellation) => {
+      assert.equal(reporter, progress);
+      return cancellation.isCancellationRequested;
+    }), true);
   }
-  assert.deepEqual(violations, []);
 });

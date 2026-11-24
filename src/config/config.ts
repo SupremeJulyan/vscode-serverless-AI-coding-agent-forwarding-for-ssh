@@ -46,6 +46,14 @@ export function removeMountConfig(config: BridgeConfig, mountName: string): Moun
   return removed;
 }
 
+/** Remove the accounts selected by the host group and their corresponding mounts. */
+export function removeHostGroupAccounts(config: BridgeConfig, names: readonly string[]): void {
+  for (const name of names) {
+    if (config.mounts.some(mount => mount.name === name)) removeMountConfig(config, name);
+    else config.hosts = config.hosts.filter(host => host.name !== name);
+  }
+}
+
 /** 删除最后一个账号时保留主机地址，供界面直接重新添加账号。 */
 export function removeAccountConfig(config: BridgeConfig, mountName: string): MountConfig {
   const mount = config.mounts.find(candidate => candidate.name === mountName);

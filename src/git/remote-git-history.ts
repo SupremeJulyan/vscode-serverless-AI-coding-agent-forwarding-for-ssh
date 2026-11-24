@@ -1,3 +1,4 @@
+import { notificationWindow } from '../ui/notification-window';
 import {
   GitSyncState, readGitSyncState, syncStateLabel, syncStateTooltip
 } from './git-sync-state';
@@ -186,7 +187,7 @@ export class RemoteGitHistory implements vscode.TreeDataProvider<HistoryNode>, v
     this.subscriptions.push(vscode.commands.registerCommand('safs.git.copyCommitId', async (node?: HistoryNode) => {
       if (!(node instanceof CommitNode)) return;
       await vscode.env.clipboard.writeText(node.commit.id);
-      void vscode.window.showInformationMessage(`SAFS Git: 已复制提交 ID ${node.commit.id.slice(0, 8)}。`);
+      void notificationWindow.showInformationMessage(`SAFS Git: 已复制提交 ID ${node.commit.id.slice(0, 8)}。`);
     }));
     if (onRepositoriesChanged) {
       this.subscriptions.push(onRepositoriesChanged(() => {
