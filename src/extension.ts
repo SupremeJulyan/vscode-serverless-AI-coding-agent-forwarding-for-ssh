@@ -114,7 +114,7 @@ import { shellQuote } from './shared/shell-quote';
 import {
   evaluateBackendCommandPolicy, readBackendCommandPolicySettings
 } from './security/command-policy';
-import { remoteCommandBoundaryViolation } from './security/remote-command-boundary';
+import { remoteCommandBoundaryViolation, remoteCommandRealpathBoundaryViolation } from './security/remote-command-boundary';
 import { testLoopbackProxy } from './platform/proxy-diagnostic';
 import { remoteConnectionShortcutHint } from './ui/shortcut-hint';
 import {
@@ -3443,6 +3443,36 @@ function agentWorkspaceBoundaryError(message: string): AgentToolError {
   });
 }
 
+/** Resolve a write destination through existing symlinks, allowing a missing leaf. */
+async function realpathForRemoteWrite(session: SftpSession, remotePath: string): Promise<string> {
+  let candidate = path.posix.normalize(remotePath);
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const resolved = await session.realpath(candidate);
+      return path.posix.join(resolved, ...suffix.reverse());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && Number(code) !== 2) throw error;
+      try {
+        const stat = await session.stat(candidate);
+        if (stat.type === 'symbolic-link') {
+          throw agentWorkspaceBoundaryError(`Cannot safely resolve symbolic link in write target: ${remotePath}`);
+        }
+        throw agentWorkspaceBoundaryError(`Cannot safely resolve existing write target: ${remotePath}`);
+      } catch (statError) {
+        if (statError instanceof AgentToolError) throw statError;
+        const statCode = (statError as NodeJS.ErrnoException).code;
+        if (statCode !== 'ENOENT' && Number(statCode) !== 2) throw statError;
+      }
+      const parent = path.posix.dirname(candidate);
+      if (parent === candidate) throw error;
+      suffix.push(path.posix.basename(candidate));
+      candidate = parent;
+    }
+  }
+}
+
 /** Resolve an Agent file-transfer path without allowing it to leave this window's workspace. */
 function transferRemotePath(folder: RemoteFolder, value: string): string {
   const workspaceRoot = currentWorkspacePath(folder);
@@ -3876,6 +3906,16 @@ async function executeRemoteCommand(
       boundaryViolation.kind === 'working-directory'
         ? `The command cannot change its working directory outside workspaceRoot: ${target}`
         : `The command cannot write outside workspaceRoot: ${target}. Use a structured SAFS file operation and do not bypass it with exec.`
+    );
+  }
+  const realpathViolation = await remoteCommandRealpathBoundaryViolation(
+    input.command, realWorkspaceRoot, remoteCwd,
+    target => realpathForRemoteWrite(session, target)
+  );
+  if (realpathViolation) {
+    const target = redactSensitiveText(realpathViolation.target);
+    throw agentWorkspaceBoundaryError(
+      `The command cannot write outside workspaceRoot through a symbolic link or unresolved path: ${target}`
     );
   }
   if (!policy.allowed) {

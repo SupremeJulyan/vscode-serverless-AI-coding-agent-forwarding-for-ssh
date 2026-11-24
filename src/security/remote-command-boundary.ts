@@ -105,6 +105,48 @@ function writeTargets(segment: string): string[] {
   return targets;
 }
 
+/** Return explicit, statically resolved write destinations for remote realpath checks. */
+export function remoteCommandWriteTargets(
+  command: string, initialCwd: string
+): string[] {
+  let currentCwd = path.posix.normalize(initialCwd);
+  const targets: string[] = [];
+  for (const segment of shellSegments(command)) {
+    const words = shellWords(segment);
+    const commandIndex = executableIndex(words);
+    const commandName = path.posix.basename((words[commandIndex] ?? '').replace(/^\\+/, ''));
+    if (commandName === 'cd' || commandName === 'pushd') {
+      const requested = positionalArguments(words.slice(commandIndex + 1))[0];
+      const resolved = requested && requested !== '-'
+        ? resolveTarget(currentCwd, requested) : requested ?? '~';
+      if (resolved?.startsWith('/')) currentCwd = resolved;
+    }
+    for (const rawTarget of writeTargets(segment)) {
+      const resolved = resolveTarget(currentCwd, rawTarget);
+      if (resolved?.startsWith('/')) targets.push(resolved);
+    }
+  }
+  return targets;
+}
+
+/** Check explicit destinations after resolving remote symlinks. */
+export async function remoteCommandRealpathBoundaryViolation(
+  command: string, workspaceRoot: string, initialCwd: string,
+  realpath: (target: string) => Promise<string>
+): Promise<RemoteCommandBoundaryViolation | undefined> {
+  for (const target of remoteCommandWriteTargets(command, initialCwd)) {
+    let resolved: string;
+    try { resolved = await realpath(target); }
+    catch {
+      return { kind: 'write-target', target };
+    }
+    if (!isRemotePathInsideRoot(workspaceRoot, resolved)) {
+      return { kind: 'write-target', target };
+    }
+  }
+  return undefined;
+}
+
 function resolveTarget(remoteCwd: string, rawTarget: string): string | undefined {
   const target = rawTarget.trim();
   if (!target || target === '-' || target.startsWith('&')) return undefined;

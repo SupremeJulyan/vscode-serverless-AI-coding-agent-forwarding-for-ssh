@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { remoteCommandBoundaryViolation } from '../src/security/remote-command-boundary';
+import {
+  remoteCommandBoundaryViolation, remoteCommandRealpathBoundaryViolation
+} from '../src/security/remote-command-boundary';
 
 const root = '/A/B';
 
@@ -51,4 +53,29 @@ test('allows commands and explicit write targets that stay inside the workspace'
       `expected an in-workspace command: ${command}`
     );
   }
+});
+
+test('rejects write destinations whose remote realpath escapes through a symlink', async () => {
+  const violation = await remoteCommandRealpathBoundaryViolation(
+    'touch linked-dir/new-file', root, root,
+    async target => target === `${root}/linked-dir/new-file`
+      ? '/outside/new-file' : target
+  );
+  assert.deepEqual(violation, { kind: 'write-target', target: `${root}/linked-dir/new-file` });
+});
+
+test('allows a missing write leaf when its resolved parent stays inside the workspace', async () => {
+  const violation = await remoteCommandRealpathBoundaryViolation(
+    'touch generated/new-file', root, root,
+    async target => target
+  );
+  assert.equal(violation, undefined);
+});
+
+test('fails closed when a write destination cannot be resolved safely', async () => {
+  const violation = await remoteCommandRealpathBoundaryViolation(
+    'touch linked-dir/new-file', root, root,
+    async () => { throw new Error('unresolved remote path'); }
+  );
+  assert.deepEqual(violation, { kind: 'write-target', target: `${root}/linked-dir/new-file` });
 });
