@@ -42,29 +42,26 @@ export function searchResult(result: Record<string, unknown>, mode?: string) {
   };
 }
 
+export type DirectoryListRequest = { path: string; limit?: number; cursor?: string };
+
 export async function listDirectories(
-  paths: string[], limit: number,
-  list: (input: { path: string; limit: number }) => Promise<unknown>
+  requests: DirectoryListRequest[],
+  list: (input: DirectoryListRequest) => Promise<unknown>
 ) {
-  let remaining = limit;
-  const results = [];
-  for (const path of paths) {
-    if (!remaining) {
-      results.push({ path, status: 'not_listed', reason: 'batch_budget_exhausted' });
-      continue;
-    }
+  const results = await Promise.all(requests.map(async ({ path, limit = 100, cursor }) => {
     try {
-      const value = await list({ path, limit: remaining });
+      const value = await list({ path, limit, ...(cursor ? { cursor } : {}) });
       if (!value || typeof value !== 'object' || !Array.isArray((value as any).entries)) {
         throw new Error('Invalid directory response.');
       }
       const result = value as Record<string, unknown> & { entries: unknown[] };
-      if (result.entries.length > remaining) throw new Error('Directory exceeded batch entry budget.');
-      remaining -= result.entries.length;
-      results.push({ ...result, path, status: 'ok' });
+      if (result.entries.length > limit) throw new Error('Directory exceeded its entry limit.');
+      return { ...result, path, status: 'ok' as const };
     } catch (error) {
-      results.push({ path, status: 'error', message: error instanceof Error ? error.message : String(error) });
+      return { path, status: 'error' as const, message: error instanceof Error ? error.message : String(error) };
     }
-  }
-  return { results, returnedEntries: limit - remaining };
+  }));
+  const returnedEntries = results.reduce((total, result) =>
+    total + (result.status === 'ok' ? result.entries.length : 0), 0);
+  return { results, returnedEntries };
 }

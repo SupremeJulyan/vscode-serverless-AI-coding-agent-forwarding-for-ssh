@@ -98,6 +98,14 @@ test('installs the bundled Node CLI and migrates Windows native launchers', asyn
     await assert.rejects(installNodeCli(root, 'linux', '2.0.4', source));
     assert.equal(await readFile(installed, 'utf8'), content);
     await writeFile(source, content);
+    await writeFile(installed, content + '// safs_cli_batch\n');
+    const current = content + '// SAFS_CONFIG list_remote_workspaces .safs-connection.json\n';
+    await writeFile(source, current);
+    await installNodeCli(root, 'linux', '2.0.4', source);
+    assert.equal(await readFile(installed, 'utf8'), current);
+    await writeFile(source, content);
+    await installNodeCli(root, 'linux', '2.0.4', source);
+    assert.equal(await readFile(installed, 'utf8'), content);
     const winRoot = join(root, 'windows');
     const win = globalNodeCli(winRoot, 'win32');
     await mkdir(join(winRoot, 'AppData', 'Local', 'SAFS', 'bin'), { recursive: true });

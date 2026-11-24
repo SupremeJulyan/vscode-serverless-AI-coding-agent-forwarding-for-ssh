@@ -132,13 +132,14 @@ function toolDefinitions(
     {
       name: 'remote_list',
       title: 'List a remote directory',
-      description: 'Lists directory entries directly over SFTP. Use either path/cursor for one directory or paths for a batch; never combine paths with path or cursor. Omitting path lists workspaceRoot. Relative paths start at workspaceRoot; an explicit absolute path may perform read-only inspection outside it. limit defaults to 100 and is shared by a batch of up to 16 paths. Results are sorted and include path, entries, total, truncated, and optionally nextCursor. A changed directory invalidates its cursor; resume batched paths individually.',
+      description: 'Lists directory entries directly over SFTP. Use either path/cursor for one directory or paths/cursors for a batch. If supplied, cursors must align with paths; use null for a first page. Omitting path lists workspaceRoot. Relative paths start at workspaceRoot; an explicit absolute path may perform read-only inspection outside it. Up to 16 paths are listed concurrently. The limit defaults to 100 entries per directory. Results are sorted and include path, entries, total, truncated, and optionally nextCursor. A changed directory invalidates its cursor.',
       inputSchema: {
         ...workspaceSelector,
         path: z.string().optional(),
         paths: z.array(z.string().min(1)).min(1).max(16).optional(),
         limit: z.number().int().min(1).max(10000).optional(),
-        cursor: z.string().max(2048).optional()
+        cursor: z.string().max(2048).optional(),
+        cursors: z.array(z.string().min(1).max(2048).nullable()).min(1).max(16).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },

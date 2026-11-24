@@ -32,7 +32,7 @@ export async function writePlaceholderGuidance(directory: string, terminalOnly: 
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const block = `${begin}\n# ARW remote workspace\n\nThis local directory is a startup placeholder, not a project copy or mount.\nRead .awm/workspace.json locally for the remote workspace binding. Run safs from this directory; omit --id for this workspace. Explicit --id overrides the binding. Never change targets automatically.\n${terminalOnly
     ? 'This workspace is in terminal mode. Use safs exec -- COMMAND for all remote operations.'
-    : 'Use safs list/read/search/find for remote inspection, safs edit/write/create/delete/move/chmod for file changes, and safs exec for builds, tests and Git. Read applicable remote AGENTS.md instructions before changing project files.'}\nDo not create or edit project files in this placeholder. Use safs --help or safs COMMAND --help for syntax.\n${end}\n`;
+    : 'Use safs list/read/find-text/find-name for remote inspection, safs edit/write/create/delete/move/chmod for file changes, and safs exec for builds, tests and Git. Read applicable remote AGENTS.md instructions before changing project files.'}\nDo not create or edit project files in this placeholder. Use safs --help or safs COMMAND --help for syntax.\n${end}\n`;
   const a = previous.indexOf(begin), b = previous.indexOf(end);
   if ((a < 0) !== (b < 0) || (a >= 0 && b < a)) throw new Error(`Malformed SAFS instruction block: ${target}`);
   const next = a < 0 ? previous + (previous && !previous.endsWith('\n') ? '\n' : '') + block

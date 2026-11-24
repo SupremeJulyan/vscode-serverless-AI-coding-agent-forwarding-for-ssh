@@ -502,7 +502,6 @@ function agentInterface(): AgentInterface { return selectedAgentInterface; }
 
 function cliEnabled(): boolean { return agentInterface() === 'cli'; }
 
-function routerOperationProfile(): 'full' { return 'full'; }
 
 function windowOperationProfile(): 'full' | 'terminal' {
   return activeAgentCommandTerminal() ? 'terminal' : 'full';
@@ -3546,6 +3545,10 @@ async function verifyRemoteTransferFileDestination(
   }
 }
 
+function localPlaceholderPath(folder: RemoteFolder, remotePath: string): string {
+  return vscode.Uri.from({ scheme: 'file', path: placeholderPathForRemote(folder, remotePath) }).fsPath;
+}
+
 async function localTransferRoot(folder: RemoteFolder): Promise<string> {
   return ensureAgentCwdSubdirectory(
     localRootForFolder(folder), folder.remoteRoot, currentWorkspacePath(folder)
@@ -5498,9 +5501,7 @@ async function ensureAgentIpcRouter(
           await agentBackendToken(context),
           {
             log: (message) => logBackendMessage('Agent IPC Router', message),
-            audit: auditBackendTool,
-            forwardTimeoutMs: settings().get<number>('agentBackendTimeoutMs', 120_000),
-            toolProfile: routerOperationProfile
+            forwardTimeoutMs: settings().get<number>('agentBackendTimeoutMs', 120_000)
           }
         );
         ipcRouter = router;
@@ -5623,12 +5624,6 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
             context, boundMountName, input.mountName
           );
           const { folder } = await mountAndFolder(mountName);
-          const stagingRoot = await localTransferRoot(folder);
-          const localPaths = await Promise.all(input.localPaths.map(
-            (localPath) => validateLocalUploadSource(
-              stagingRoot, localPath
-            )
-          ));
           const session = await pool.get(folder.hostName);
           const lexicalWorkspaceRoot = currentWorkspacePath(folder);
           const realWorkspaceRoot = await session.realpath(lexicalWorkspaceRoot);
@@ -5638,6 +5633,7 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
           const remoteDirectory = await ensureRemoteTransferDirectory(
             session, realWorkspaceRoot, requestedTarget
           );
+          const localPaths = input.localPaths ?? [localPlaceholderPath(folder, lexicalWorkspaceRoot)];
           const sources = localPaths.map((localPath) => vscode.Uri.file(localPath));
           const timeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
           return {
@@ -5652,10 +5648,6 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
             context, boundMountName, input.mountName
           );
           const { folder } = await mountAndFolder(mountName);
-          const stagingRoot = await localTransferRoot(folder);
-          const localPath = await validateLocalDownloadTarget(
-            stagingRoot, input.localPath
-          );
           const workspaceRoot = currentWorkspacePath(folder);
           const session = await pool.get(folder.hostName);
           const realWorkspaceRoot = await session.realpath(workspaceRoot);
@@ -5666,10 +5658,17 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
               `Download path escapes workspaceRoot through a symbolic link: ${input.remotePath}`
             );
           }
+          const name = path.posix.basename(requestedPath) || 'root';
+          if (path.basename(name) !== name) {
+            throw new Error('The remote name cannot be used as a local filename.');
+          }
+          const localDirectory = input.localPath ?? localPlaceholderPath(folder, workspaceRoot);
+          const localPath = path.join(localDirectory, name);
+          await mkdir(localDirectory, { recursive: true });
           const uri = vscode.Uri.parse(remoteUri(mountName, resolved.path));
           const timeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
           return {
-            completed: await visualDownload(uri, localPath, timeoutMs, stagingRoot),
+            completed: await visualDownload(uri, localPath, timeoutMs),
             remotePath: resolved.path,
             localPath
           };
@@ -5773,7 +5772,7 @@ async function publishAgentWorkspace(context: vscode.ExtensionContext): Promise<
   const editorWorkspacePath = currentWorkspacePath(folder);
   const terminalCommandOnly = activeAgentCommandTerminal() !== undefined;
   const workspacePath = terminalCommandOnly ? agentCommandTerminalCwd! : editorWorkspacePath;
-  const localRoot = vscode.Uri.from({ scheme: 'file', path: placeholderPathForRemote(folder, editorWorkspacePath) }).fsPath;
+  const localRoot = localPlaceholderPath(folder, editorWorkspacePath);
   const workspaceUri = folderUri(folder, workspacePath);
   await mkdir(localRoot, { recursive: true });
   await writeWorkspaceId(localRoot, workspaceIdFor({

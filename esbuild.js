@@ -73,9 +73,7 @@ esbuild.build({
   entryPoints: ['src/safs-cli.ts'], bundle: true, platform: 'node', target: 'node18',
   format: 'cjs', outfile: 'dist/safs-cli.js', minify: production,
   define: {
-    CLI_VERSION: JSON.stringify(require('./package.json').version),
-    CLI_SKILL: JSON.stringify(fs.readFileSync('skills/safs-cli/SKILL.md', 'utf8')),
-    CLI_REFERENCE: JSON.stringify(fs.readFileSync('skills/safs-cli/references/commands.md', 'utf8'))
+    CLI_VERSION: JSON.stringify(require('./package.json').version)
   }
 }).catch(() => process.exit(1));
 

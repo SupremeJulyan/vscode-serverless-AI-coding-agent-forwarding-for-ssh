@@ -10,10 +10,14 @@ export const defaultSearchExcludes = ['.git', 'node_modules', 'dist', 'build', '
   'site-packages', 'bower_components', 'Pods', '.gradle'];
 
 export function searchCommand(searchPath: string, input: RemoteSearchOptions) {
+  const { contextLines } = input;
+  if (contextLines !== undefined && (!Number.isSafeInteger(contextLines) || contextLines < 0)) {
+    throw new Error('contextLines must be a nonnegative integer.');
+  }
   const mode = input.mode ?? 'content';
   const excludes = input.excludeDirs ?? defaultSearchExcludes;
   if (mode === 'names') {
-    if (input.contextLines) throw new Error('contextLines is not valid for filename search.');
+    if (contextLines) throw new Error('contextLines is not valid for filename search.');
     if (input.fixedStrings) throw new Error('fixedStrings is not valid for filename search; query is a basename glob.');
     const nameOperator = input.ignoreCase ? '-iname' : '-name';
     const excludedDirectories = excludes.length
@@ -28,11 +32,11 @@ export function searchCommand(searchPath: string, input: RemoteSearchOptions) {
       mode, excludeDirs: excludes
     };
   }
-  if (mode !== 'content' && input.contextLines) throw new Error('contextLines requires content mode.');
+  if (mode !== 'content' && contextLines) throw new Error('contextLines requires content mode.');
   const flags = ['-rI', mode === 'files' ? '-l' : mode === 'count' ? '-cH' : '-nH'];
   if (input.fixedStrings) flags.push('-F');
   if (input.ignoreCase) flags.push('-i');
-  if (input.contextLines) flags.push(`-C ${input.contextLines}`);
+  if (contextLines) flags.push(`-C ${contextLines}`);
   const filters = [...excludes.map(dir => `--exclude-dir=${shellQuote(dir)}`),
     ...(input.include ?? []).map(glob => `--include=${shellQuote(glob)}`)];
   const command = `grep ${[...flags, ...filters].join(' ')} -- ${shellQuote(input.query)} ${shellQuote(searchPath)}`;

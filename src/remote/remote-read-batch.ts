@@ -20,25 +20,36 @@ export async function readTextBatch(
       wave.push({ request, length });
       index++;
     }
-    const completed = await Promise.all(wave.map(async ({ request, length }) => {
-      try {
-        const value = await read({ ...request, length });
-        if (!value || typeof value !== 'object' || typeof (value as any).content !== 'string') {
-          throw new Error('Invalid text read response.');
-        }
-        const result = value as Record<string, unknown> & { content: string };
-        const bytes = Buffer.byteLength(result.content);
-        if (bytes > length) throw new Error('Read exceeded the requested byte budget.');
-        return { value: { ...result, path: request.path, status: 'ok' }, bytes };
-      } catch (error) {
-        return { value: { path: request.path, status: 'error',
-          message: error instanceof Error ? error.message : String(error) }, bytes: 0 };
-      }
-    }));
+    const completed = await Promise.all(wave.map(({ request, length }) => readItem({ ...request, length }, read)));
     for (const item of completed) { remaining -= item.bytes; results.push(item.value); }
   }
   for (; index < requests.length; index++) {
     results.push({ path: requests[index].path, status: 'not_read', reason: 'batch_budget_exhausted' });
   }
   return { results, contentBytes: maxBytes - remaining, maxBytes };
+}
+
+export async function readFiles(
+  requests: RemoteReadOptions[], read: (input: RemoteReadOptions) => Promise<unknown>
+) {
+  const completed = await Promise.all(requests.map(request => readItem(request, read)));
+  return {
+    results: completed.map(item => item.value),
+    contentBytes: completed.reduce((total, item) => total + item.bytes, 0)
+  };
+}
+
+async function readItem(request: RemoteReadOptions, read: (input: RemoteReadOptions) => Promise<unknown>) {
+  try {
+    const value = await read(request);
+    if (!value || typeof value !== 'object' || !('content' in value) || typeof value.content !== 'string') {
+      throw new Error('Invalid text read response.');
+    }
+    const bytes = Buffer.byteLength(value.content);
+    if (bytes > (request.length ?? 8192)) throw new Error('Read exceeded the requested byte budget.');
+    return { value: { ...value, path: request.path, status: 'ok' }, bytes };
+  } catch (error) {
+    return { value: { path: request.path, status: 'error',
+      message: error instanceof Error ? error.message : String(error) }, bytes: 0 };
+  }
 }

@@ -1,27 +1,18 @@
 import { createIpcServer, ipcRequest, listenIpc, IpcRequestError } from './agent-ipc';
 import { operationMetric } from '../shared/operation-metric';
-import { orderedBatch } from '../shared/ordered-batch';
 import { createHash } from 'node:crypto';
 import {
   DiscoveredAgentWorkspace, agentDiscoveryDirectories, discoverAgentWorkspaces
 } from './agent-discovery';
-import {
-  type AgentToolProfile,
-  terminalCliOnlyCommandMessage
-} from './agent-operations';
-import { AgentActivitySource } from './agent-activity';
+import { terminalCliOnlyCommandMessage } from './agent-operations';
 
 const routerIdentity = 'safs-ipc-router-v2';
 const cliToolNames = new Set([
   'list_remote_workspaces',
-  'current_remote_file', 'remote_list', 'remote_read', 'remote_read_many', 'remote_search',
+  'current_remote_file', 'remote_list', 'remote_read', 'remote_search',
   'remote_edit', 'remote_write', 'remote_create', 'remote_delete', 'remote_chmod', 'remote_move',
-  'remote_upload', 'remote_download', 'remote_output', 'run_remote_command',
-  'safs_cli_batch'
+  'remote_upload', 'remote_download', 'remote_output', 'run_remote_command'
 ]);
-const cliBatchToolNames = new Set([...cliToolNames].filter((name) =>
-  name !== 'list_remote_workspaces' && name !== 'safs_cli_batch'
-));
 
 export function unwrapCliToolResult(value: any, allowNull = false): Record<string, unknown> {
   if (!value || typeof value.ok !== 'boolean') throw new Error('Invalid backend response');
@@ -50,11 +41,6 @@ export interface AgentIpcRouterOptions {
   log?: (message: string) => void;
   /** 转发到窗口 IPC 后端的超时（毫秒），缺省 120s。 */
   forwardTimeoutMs?: number;
-  toolProfile?: () => AgentToolProfile;
-  audit?: (entry: {
-    toolName: string; input: Record<string, unknown>;
-    agentName?: string;
-  }) => void;
 }
 
 export class AgentIpcRouter {
@@ -87,10 +73,10 @@ export class AgentIpcRouter {
     return this.discover();
   }
 
-  private workspace(workspaceId: string, snapshot?: DiscoveredAgentWorkspace[]): DiscoveredAgentWorkspace | undefined {
+  private workspace(workspaceId: string): DiscoveredAgentWorkspace | undefined {
     // workspaceId is the exact route key. Never fall back to focus,
     // host, mount, or remote path after an operation has named its target.
-    return (snapshot ?? this.workspaces()).find((workspace) => workspaceIdFor(workspace) === workspaceId);
+    return this.workspaces().find((workspace) => workspaceIdFor(workspace) === workspaceId);
   }
 
   private publicWorkspace(workspace: DiscoveredAgentWorkspace): Record<string, unknown> {
@@ -118,7 +104,7 @@ export class AgentIpcRouter {
 
   private async forward(
     workspace: DiscoveredAgentWorkspace, name: string, args: Record<string, unknown>,
-    agentName?: string, source: AgentActivitySource = 'cli'
+    agentName?: string
   ): Promise<any> {
     if (!workspace.backendSocketPath || !workspace.backendToken) {
       throw new Error('Remote workspace IPC endpoint is unavailable');
@@ -130,15 +116,14 @@ export class AgentIpcRouter {
     const forwardTimeoutMs = this.options.forwardTimeoutMs ?? 120_000;
     const forwardStarted = performance.now();
     const result = await ipcRequest<any>(workspace.backendSocketPath, workspace.backendToken, 'operation', {
-      operation: name, input: args, agentName, source
+      operation: name, input: args, agentName, source: 'cli'
     }, { timeoutMs: forwardTimeoutMs });
     operationMetric(this.options.log, 'agent.forward', forwardStarted);
     return result;
   }
 
   private async callTool(
-    name: string, input: Record<string, unknown>, agentName?: string,
-    source: AgentActivitySource = 'cli', snapshot?: DiscoveredAgentWorkspace[]
+    name: string, input: Record<string, unknown>, agentName?: string
   ): Promise<any> {
     if (name === 'list_remote_workspaces') {
       const workspaces = this.workspaces();
@@ -153,7 +138,7 @@ export class AgentIpcRouter {
         'Pass the workspaceId returned by list_remote_workspaces.'
       );
     }
-    const workspace = this.workspace(workspaceId, snapshot);
+    const workspace = this.workspace(workspaceId);
     if (!workspace) {
       return this.toolError(
         'REMOTE_WORKSPACE_NOT_FOUND',
@@ -168,22 +153,16 @@ export class AgentIpcRouter {
         const cliCommand = `safs exec --id ${workspaceId} -- 'COMMAND'`;
         return this.toolError(
           'TERMINAL_COMMAND_ONLY',
-          source === 'cli'
-            ? terminalCliOnlyCommandMessage.replace('<workspaceId>', workspaceId)
-            : terminalCliOnlyCommandMessage,
-          source === 'cli'
-            ? { allowedCommand: cliCommand }
-            : { allowedTool: 'run_remote_command' }
+          terminalCliOnlyCommandMessage.replace('<workspaceId>', workspaceId),
+          { allowedCommand: cliCommand }
         );
       }
       args = { command: publicInput.command, mountName: workspace.mountName };
     }
-    const effectiveAgentName = source === 'cli'
-      ? requestAgentName(publicInput.agentName, agentName)
-      : agentName;
+    const effectiveAgentName = requestAgentName(publicInput.agentName, agentName);
     try {
       return await this.forward(
-        workspace, name, args, effectiveAgentName, source
+        workspace, name, args, effectiveAgentName
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -230,50 +209,16 @@ export class AgentIpcRouter {
           || !input || typeof input !== 'object' || Array.isArray(input)) {
         throw new IpcRequestError('Invalid CLI request', 'INVALID_REQUEST');
       }
-      const agentName = requestAgentName(request.agentName);
-      if (name === 'safs_cli_batch') {
-        const operations = (input as { operations?: unknown }).operations;
-        if (!Array.isArray(operations) || operations.length === 0 || operations.length > 50) {
-          throw new IpcRequestError('CLI batch requires 1 to 50 operations', 'INVALID_REQUEST');
+      const args = input as Record<string, unknown>;
+      if ((name === 'remote_list' || name === 'remote_read') && args.requests !== undefined) {
+        const requests = args.requests;
+        if (!Array.isArray(requests) || requests.length < 1 || requests.length > 16
+          || requests.some(item => !item || typeof item.path !== 'string' || !item.path)) {
+          throw new IpcRequestError('Expected 1 to 16 requests with a path per item', 'INVALID_REQUEST');
         }
-        for (let index = 0; index < operations.length; index += 1) {
-          const operation = operations[index] as { name?: unknown; arguments?: unknown };
-          if (!operation || typeof operation !== 'object' || typeof operation.name !== 'string'
-              || !cliBatchToolNames.has(operation.name) || !operation.arguments
-              || typeof operation.arguments !== 'object' || Array.isArray(operation.arguments)) {
-            throw new IpcRequestError(`Invalid CLI batch operation at index ${index}`, 'INVALID_REQUEST');
-          }
-        }
-        const snapshot = this.workspaces();
-        const terminalBatch = operations.some((operation) => {
-          if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return false;
-          const args = (operation as { arguments?: unknown }).arguments;
-          if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
-          const workspaceId = (args as { workspaceId?: unknown }).workspaceId;
-          return typeof workspaceId === 'string' && this.workspace(workspaceId, snapshot)?.terminalCommandOnly === true;
-        });
-        if (terminalBatch) return { ok: false, result: {
-          code: 'TERMINAL_COMMAND_ONLY', message: terminalCliOnlyCommandMessage,
-          allowedCommand: "safs exec --id <workspaceId> -- 'COMMAND'"
-        } };
-        const reads = new Set(['current_remote_file', 'remote_list', 'remote_read', 'remote_read_many', 'remote_search', 'remote_output']);
-        let uncertainExecution = false;
-        const results = await orderedBatch(operations as Array<{ name: string; arguments: Record<string, unknown> }>,
-          operation => reads.has(operation.name), async (operation, index) => {
-            if (uncertainExecution) return { index, name: operation.name, ok: false, result: {
-              code: 'BATCH_STOPPED', message: 'An earlier operation timed out; inspect remote state before retrying.'
-            } };
-            try {
-              const item = unwrapCliToolResult(await this.callTool(operation.name, operation.arguments, agentName, 'cli', snapshot), operation.name === 'current_remote_file');
-              if ((item.result as any)?.executionMayContinue) uncertainExecution = true;
-              return { index, name: operation.name, ...item };
-            } catch (error) { return { index, name: operation.name, ok: false, result: {
-              code: 'CLI_OPERATION_FAILED', message: error instanceof Error ? error.message : String(error)
-            } }; }
-          });
-        return { ok: true, result: { results } };
       }
-      return unwrapCliToolResult(await this.callTool(name, input as Record<string, unknown>, agentName, 'cli'), name === 'current_remote_file');
+      const agentName = requestAgentName(request.agentName);
+      return unwrapCliToolResult(await this.callTool(name, args, agentName), name === 'current_remote_file');
     });
     const outcome = await listenIpc(candidate, this.socketPath).then(() => 'leader', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') return 'occupied';

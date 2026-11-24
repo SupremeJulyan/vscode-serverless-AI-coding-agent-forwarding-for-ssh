@@ -13,48 +13,52 @@ safs current-file --id ID
 
 ```bash
 safs list [PATH] --id ID [--limit N] [--cursor CURSOR]
+safs list --id ID --json '[{"path":"src","limit":20},{"path":"test","limit":10,"cursor":"CURSOR"}]'
+safs list --id ID --json-file FILE
+safs read --id ID --json '[{"path":"a.txt","head":20},{"path":"b.txt","offset":200,"length":100}]'
+safs read --id ID --json-file FILE
 safs read PATH --id ID [--offset N] [--length N]
 safs read PATH --id ID --head N
 safs read PATH --id ID --tail N
 safs read PATH --id ID --start-line N [--line-count N]
-safs search QUERY [PATH] --id ID [--mode content|files|count|names]
-safs find GLOB [PATH] --id ID
+safs find-text QUERY [PATH] --id ID [--mode content|files|count]
+safs find-name GLOB [PATH] --id ID
 safs output OUTPUT_ID stdout|stderr --id ID [--offset N] [--length N]
 ```
 
-Use `read-many --json` or `--json-file` for multiple bounded reads. `search --mode files` finds files whose contents match; `find` matches file basenames.
+Pass the list JSON inline with `--json` or read it from a local file with `--json-file`. Each item requires `path` and accepts its own `limit` and `cursor`. Omit `limit` for the default of 100 entries and omit `cursor` to start at the first page. Directories are listed concurrently. A failed directory is reported alongside successful results and sets a nonzero exit code. For multiple files, pass an array of 1 to 16 read requests to `read --json` or `read --json-file`. Each file has its own selection and byte limit. The reads run concurrently and results follow input order. `find-text --mode files` finds files whose contents match; `find-name` matches file basenames.
 
 ## Structured changes
 
 ```bash
 safs edit PATH --id ID --json '{"edits":[{"oldText":"old","newText":"new"}]}'
 safs write PATH --id ID --content 'short text'
-printf '%s' 'multiline or sensitive content' | safs write PATH --id ID --file -
 safs create PATH file --id ID [--content 'initial text']
 safs create PATH directory --id ID
 safs delete PATH --id ID
 safs delete PATH --id ID --recursive
 safs chmod PATH 755 --id ID
-safs move --id ID --json '{"sourcePath":"old","targetPath":"new","overwrite":false}'
-safs upload --id ID --json '{"localPaths":["/absolute/local/path"],"remoteDirectory":"."}'
-safs download --id ID --json '{"remotePath":"file","localPath":"/absolute/local/target"}'
+safs move old new --id ID [--overwrite]
+safs upload [LOCAL_PATH] REMOTE_DIRECTORY --id ID
+safs download file --id ID [LOCAL_DIRECTORY]
 ```
 
-Pass large or multiline JSON through `--json-file PATH`; `--json` accepts inline JSON. JSON stdin is not supported.
+Use `upload` to transfer one local file or directory. The local source can be absolute or relative to the directory where you run `safs`. Omit the upload source to upload the selected workspace’s local placeholder directory. Omit the download destination to save into that directory under the remote name. An explicit download target is also a directory. For example, `safs download reports/a.txt ./downloads` saves `./downloads/a.txt`.
 
-`write` replaces the full file. Use `--allow-empty` for an intentional empty replacement. Read, write, and edit are limited to 5 MiB per file. Use download and upload for larger files. Write, edit, delete, and move save a snapshot before modifying remote files. Agent Activity can compare a snapshot with the current files and restore it. SAFS keeps the three most recent snapshots per path. The remote host needs Git, GNU tar, and Python 3 for snapshots.
+For `list`, `read`, `find-text`, and `edit`, pass large or multiline JSON through `--json-file PATH`; `--json` accepts inline JSON. File options take local file paths.
 
-## Task commands and batching
+`write` replaces the full file. For content too long to pass as a command argument, create a local file with the same basename as the remote target and upload it to the target directory. For example, to replace `reports/a.txt`, save the new content as a local `./staging/a.txt` and run `safs upload ./staging/a.txt reports --id ID`. Use `--allow-empty` for an intentional empty replacement. Read, write, and edit are limited to 5 MiB per file. Use download and upload for larger files. Write, edit, delete, and move save a snapshot before modifying remote files. Agent Activity can compare a snapshot with the current files and restore it. SAFS keeps the three most recent snapshots per path. The remote host needs Git, GNU tar, and Python 3 for snapshots.
+
+## Task commands
 
 ```bash
 safs exec "npm test" --id ID
 safs exec "git status --short" --id ID
-safs batch --id ID --json '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
 ```
 
-`exec` returns JSON and propagates the remote exit code. Use `--raw` for remote stdout and stderr streams or `--file SCRIPT` for multiline commands. When output is truncated, use the output ID and byte offsets to continue with `safs output`.
+`exec` returns JSON and propagates the remote exit code. With `--raw`, the CLI writes the captured stdout and stderr to the corresponding local streams after execution. Use `--file SCRIPT` for multiline commands. If the result includes an output ID, use it and the byte offsets to continue with `safs output`. Terminal-only workspaces support only `exec`, and truncated output cannot be continued there.
 
-Named options such as `--path`, `--query`, and `--command` remain valid when positional arguments are inconvenient.
+Named options such as `--path` and `--query` remain valid when positional arguments are inconvenient.
 
 
 Default selection reads `.awm/workspace.json` in cwd only. An expired ID is refreshed only after unique active-placeholder matching. Missing files, unavailable workspaces, and ambiguous matches require `--id ID`. Explicit IDs never update the marker or fall back. Always specify `--id` on each command for tasks spanning multiple workspaces. Retained output accepts positional OUTPUT_ID or `--output-id OUTPUT_ID`.

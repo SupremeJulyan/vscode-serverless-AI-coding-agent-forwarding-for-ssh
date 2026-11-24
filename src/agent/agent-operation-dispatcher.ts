@@ -1,5 +1,5 @@
-import { listDirectories } from '../remote/remote-results';
-import { readTextBatch } from '../remote/remote-read-batch';
+import { DirectoryListRequest, listDirectories } from '../remote/remote-results';
+import { readFiles, readTextBatch } from '../remote/remote-read-batch';
 import { RemoteReadOptions } from '../remote/remote-read';
 import { RemoteSearchOptions } from '../remote/remote-search';
 import { RemoteOutputStore } from '../remote/remote-output';
@@ -144,20 +144,33 @@ export function dispatchAgentOperation<Source extends AgentActivitySource>(
       });
     case 'remote_list':
       return invoke(name, input, () => {
+        const mountName = input.mountName as string | undefined;
+        const list = (request: DirectoryListRequest) => callbacks.list({ ...request, mountName });
+        if (Array.isArray(input.requests)) {
+          return listDirectories(input.requests as DirectoryListRequest[], list);
+        }
+        if (input.cursors !== undefined && (!Array.isArray(input.paths)
+          || !Array.isArray(input.cursors) || input.cursors.length !== input.paths.length)) {
+          throw new Error('Pass one cursor per batch path, using null for a first page.');
+        }
         if (!input.paths) return callbacks.list(input);
         if (input.path !== undefined || input.cursor !== undefined) {
           throw new Error('Choose paths for a batch or path/cursor for a single directory.');
         }
-        return listDirectories(input.paths as string[], (input.limit as number | undefined) ?? 100,
-          request => callbacks.list(request));
+        const cursors = input.cursors as (string | null)[] | undefined;
+        return listDirectories((input.paths as string[]).map((path, index) => ({
+          path, limit: input.limit as number | undefined, cursor: cursors?.[index] ?? undefined
+        })), list);
       });
     case 'remote_read_many':
       return invoke(name, input, () => readTextBatch(input.requests as RemoteReadOptions[],
-        (input.maxBytes as number | undefined) ?? 16384, request => callbacks.read(request)));
+        (input.maxBytes as number | undefined) ?? 16384,
+        request => callbacks.read({ ...request, mountName: input.mountName as string | undefined })));
     case 'remote_read':
-      return invoke(name, input, () => callbacks.read(
-        input as unknown as Parameters<typeof callbacks.read>[0]
-      ));
+      return invoke(name, input, () => Array.isArray(input.requests)
+        ? readFiles(input.requests as RemoteReadOptions[],
+          request => callbacks.read({ ...request, mountName: input.mountName as string | undefined }))
+        : callbacks.read(input as unknown as Parameters<typeof callbacks.read>[0]));
     case 'remote_edit':
       return invoke(name, input, () => callbacks.edit(input as Parameters<typeof callbacks.edit>[0]));
     case 'remote_write':

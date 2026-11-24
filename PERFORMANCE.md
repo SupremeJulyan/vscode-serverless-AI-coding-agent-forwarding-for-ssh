@@ -77,11 +77,9 @@ not remove additional model-visible schemas, since the CLI never requests them.
 `agentBackendToolProfile` controls the default CLI mode, while the CLI backend exposes
 all structured operations.
 
-The executable is selected from Windows/macOS/Linux x64/ARM64 repository assets and installed
-as the user-level global `safs` command. Its adjacent private connection file is
-discovered automatically. SAFS writes no AGENTS.md/CLAUDE.md instructions. Instead,
-`safs install --skills` installs the bundled Agent Skill locally (or globally with
-`-g`) without network access; CLI mode runs the global form while preparing its interface.
+The extension installs the bundled Node.js CLI as the user-level global `safs` command.
+Its adjacent private connection file is discovered automatically. The extension also
+installs the SAFS Agent Skill while preparing the CLI interface.
 All modes require consistent settings across windows, a window reload and Agent
 restart on migration. Undetected/manual CLI registrations cannot be assumed removed.
 

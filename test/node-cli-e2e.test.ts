@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { AgentBackendServer, AgentToolError } from '../src/agent/agent-backend';
 import { AgentIpcRouter, workspaceIdFor } from '../src/agent/agent-ipc-router';
-import { ipcPath, createIpcServer, listenIpc } from '../src/agent/agent-ipc';
+import { ipcPath, ipcRequest, createIpcServer, listenIpc } from '../src/agent/agent-ipc';
 import { cliConfigPath, writeCliConnection } from '../src/cli/cli-integration';
+import { pageDirectory } from '../src/remote/remote-results';
 import { executeCaptured as capture } from '../src/platform/process';
 
 function executeCaptured(plan: Parameters<typeof capture>[0], ...rest: Parameters<typeof capture> extends [any, ...infer R] ? R : never) {
@@ -17,46 +18,15 @@ function developmentNodeCli(): string {
   return join(process.cwd(), 'dist', 'safs-cli.js');
 }
 
-test('Node.js CLI installs its bundled Agent Skill without a router', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'safs-node-skill-'));
-  const executable = developmentNodeCli();
-  try {
-    await mkdir(join(temporary, 'project'));
-    const installed = await executeCaptured({
-      command: executable,
-      args: ['install', '--skills'],
-      cwd: join(temporary, 'project')
-    });
-    assert.equal(installed.exitCode, 0, installed.stderr);
-    assert.match(installed.stdout, /\.agents[/\\]skills[/\\]safs-cli/);
-    const skillRoot = join(temporary, 'project', '.agents', 'skills', 'safs-cli');
-    const skill = await readFile(join(skillRoot, 'SKILL.md'), 'utf8');
-    const commands = await readFile(join(skillRoot, 'references', 'commands.md'), 'utf8');
-    assert.match(skill, /^---\nname: safs-cli\n/);
-    assert.match(skill, /safs workspaces/);
-    assert.match(commands, /safs read PATH --id ID/);
+test('Node.js CLI rejects the removed install command', async () => {
+  const command = developmentNodeCli();
+  const help = await executeCaptured({ command, args: ['--help'] });
+  assert.equal(help.exitCode, 0, help.stderr);
+  assert.doesNotMatch(help.stdout, /\binstall\b/);
 
-    const globalCodex = await executeCaptured({
-      command: executable,
-      args: ['install', '--skills=codex', '-g'],
-      cwd: join(temporary, 'project'),
-      env: { HOME: temporary, USERPROFILE: temporary }
-    });
-    assert.equal(globalCodex.exitCode, 0, globalCodex.stderr);
-    assert.match(globalCodex.stdout, /\.codex[/\\]skills[/\\]safs-cli/);
-    await readFile(join(temporary, '.codex', 'skills', 'safs-cli', 'SKILL.md'));
-
-    const invalid = await executeCaptured({
-      command: executable,
-      args: ['install', '--skills=unknown'],
-      cwd: join(temporary, 'project')
-    });
-    assert.equal(invalid.exitCode, 1);
-    assert.match(invalid.stderr, /Unsupported skill target/);
-    assert.match(invalid.stderr, /Usage: safs install --skills/);
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
+  const result = await executeCaptured({ command, args: ['install', '--skills'] });
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /Unknown command/);
 });
 
 test('Node.js CLI lists and executes through the existing SAFS router', async () => {
@@ -71,15 +41,23 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     }),
     currentFile: async () => {
       currentFileReads += 1;
+      if (currentFileReads > 1) return null;
       return { path: '/project/open.ts', relativePath: 'open.ts', size: 12, dirty: true };
     },
-    list: async (input: { path?: string }) => {
+    list: async (input: { path?: string; limit?: number; cursor?: string; mountName?: string }) => {
+      assert.equal(input.mountName, 'dev');
       if (input.path === 'forbidden') throw new Error('denied detail');
       operations.push('list');
-      return { path: input.path, entries: [], truncated: false };
+      const entries = ['src', 'test'].includes(input.path ?? '')
+        ? ['a.ts', 'b.ts'].map(name => ({ name, type: 'file' }))
+        : [];
+      return { path: input.path, ...pageDirectory(entries, input.path ?? '/', input) };
     },
-    read: async (input: { path: string }) => {
+    read: async (input: { path: string; length?: number; mountName?: string }) => {
+      assert.equal(input.mountName, 'dev');
+      if (input.path === 'forbidden') throw new Error('read denied');
       operations.push('read');
+      if (input.length === 32) return { path: input.path, content: 'content:a.txt', length: input.length };
       return { path: input.path, content: `content:${input.path}`, truncated: false };
     },
     search: async () => { operations.push('search'); return { status: 'no_matches' }; },
@@ -88,8 +66,15 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     delete: async () => { operations.push('delete'); return { status: 'ok' }; },
     chmod: async () => { operations.push('chmod'); return { status: 'ok' }; },
     move: async () => { operations.push('move'); return { status: 'ok' }; },
-    upload: async () => { operations.push('upload'); return { status: 'ok' }; },
-    download: async () => { operations.push('download'); return { status: 'ok' }; },
+    upload: async (input) => {
+      operations.push('upload');
+      return { status: 'ok', remoteDirectory: input.remoteDirectory, localPaths: input.localPaths };
+    },
+    download: async (input) => {
+      assert.equal(input.localPath, resolve('downloads'));
+      operations.push('download');
+      return { status: 'ok' };
+    },
     run: async (input: { command: string }) => {
       if (input.command === 'blocked-write') {
         throw new AgentToolError(
@@ -116,7 +101,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
   const router = new AgentIpcRouter(ipcPath('e2e-router-' + temporary), routerToken, {
     discover: () => [{
       instanceId: 'node-window', workspaceRoot: '/project', localRoot: temporary,
-      workspaceUri: 'safs://dev/project', host: 'dev', focused: true, backendSocketPath: backend.socketPath, backendToken: 'node-test'
+      workspaceUri: 'safs://dev/project', mountName: 'dev', host: 'dev', focused: true, backendSocketPath: backend.socketPath, backendToken: 'node-test'
     } as any]
   });
   await router.start();
@@ -181,20 +166,21 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       path: '/project/open.ts', relativePath: 'open.ts', size: 12, dirty: true
     });
     assert.equal(currentFileReads, 1);
+    const noCurrentFile = await executeCaptured({ command: executable, args: [
+      '--config', config, 'current-file', '--id', workspaceId
+    ] });
+    assert.equal(noCurrentFile.exitCode, 0, noCurrentFile.stderr);
+    assert.equal(JSON.parse(noCurrentFile.stdout), null);
     const structuredCalls: string[][] = [
-      ['read-many', '--json', JSON.stringify({ requests: [{ path: 'a.txt' }] })],
-      ['search', '--query', 'TODO'],
+      ['read', '--json', JSON.stringify([{ path: 'a.txt' }])],
+      ['find-text', '--query', 'TODO', '--mode', 'files'],
+      ['find-name', '*.ts', 'src'],
       ['delete', '--path', 'a.txt'],
       ['chmod', '--path', 'a.txt', '--mode', '644'],
-      ['move', '--json', JSON.stringify({ sourcePath: 'a', targetPath: 'b' })],
-      ['upload', '--json', JSON.stringify({
-        localPaths: [join(temporary, 'upload.txt')], remoteDirectory: '.'
-      })],
-      ['download', '--json', JSON.stringify({
-        remotePath: 'a.txt', localPath: join(temporary, 'download.txt')
-      })]
+      ['move', 'a', 'b', '--overwrite'],
+      ['upload', 'upload.txt', '.'],
+      ['download', 'a.txt', 'downloads']
     ];
-    await writeFile(join(temporary, 'upload.txt'), 'upload');
     const editJsonFile = join(temporary, 'edit.json');
     await writeFile(editJsonFile, JSON.stringify({ edits: [{ oldText: 'a', newText: 'b' }] }));
     const edit = await executeCaptured({
@@ -205,53 +191,180 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       ]
     });
     assert.equal(edit.exitCode, 0, edit.stderr);
-    const inlineJson = await executeCaptured({ command: executable, args: [
-      '--config', config, 'read-many', '--id', workspaceId, '--json',
-      JSON.stringify({ requests: [{ path: 'a.txt' }] })
+    const readJsonFile = join(temporary, 'read.json');
+    await writeFile(readJsonFile, JSON.stringify([{ path: 'a.txt', length: 32 }, { path: 'forbidden' }]));
+    const bulkRead = await executeCaptured({ command: executable, args: [
+      '--config', config, 'read', '--id', workspaceId, '--json-file', readJsonFile
     ] });
-    assert.equal(inlineJson.exitCode, 0, inlineJson.stderr);
+    assert.equal(bulkRead.exitCode, 1);
+    assert.match(bulkRead.stderr, /forbidden: read denied/);
+    const [readOk, readError] = JSON.parse(bulkRead.stdout).results;
+    assert.equal(readOk.content, 'content:a.txt');
+    assert.equal(readOk.length, 32);
+    assert.equal(readError.status, 'error');
+    for (const [verb, flag, value] of [
+      ['write', '--json', '{"content":"replacement"}'],
+      ['exec', '--json-file', editJsonFile]
+    ]) {
+      const rejected = await executeCaptured({ command: executable, args: [
+        '--config', config, verb, '--id', workspaceId, flag, value
+      ] });
+      assert.equal(rejected.exitCode, 1);
+      assert.match(rejected.stderr, /only supported by list, read, find-text, and edit/);
+    }
+    for (const [verb, flag] of [['upload', '--remote-directory'], ['download', '--local-path']]) {
+      const rejected = await executeCaptured({ command: executable, args: [
+        '--config', config, verb, '--id', workspaceId, flag, '.'
+      ] });
+      assert.equal(rejected.exitCode, 1);
+      assert.match(rejected.stderr, /Invalid option/);
+    }
+    const filenameMode = await executeCaptured({ command: executable, args: [
+      '--config', config, 'find-text', '*.ts', '--id', workspaceId, '--mode', 'names'
+    ] });
+    assert.equal(filenameMode.exitCode, 1);
+    assert.match(filenameMode.stderr, /Use find-name to match filenames/);
     const legacyInput = await executeCaptured({ command: executable, args: [
-      '--config', config, 'read-many', '--id', workspaceId, '--input',
-      JSON.stringify({ requests: [{ path: 'a.txt' }] })
+      '--config', config, 'read-many', '--id', workspaceId
     ] });
     assert.equal(legacyInput.exitCode, 1);
-    assert.match(legacyInput.stderr, /Invalid option/);
+    assert.match(legacyInput.stderr, /Unknown command/);
     for (const call of structuredCalls) {
       const result = await executeCaptured({ command: executable, args: [
         '--config', config, call[0], '--id', workspaceId, ...call.slice(1)
       ] });
       assert.equal(result.exitCode, 0, `${call[0]}: ${result.stderr}`);
     }
+    for (const [verb, source, target] of [
+      ['upload', 'upload.txt', '.'],
+      ['download', 'a.txt', 'downloads']
+    ]) {
+      for (const args of [
+        [verb, '--id', workspaceId, source, target],
+        [verb, source, '--id', workspaceId, target],
+        [verb, source, target, '--id', workspaceId]
+      ]) {
+        const transfer = await executeCaptured({ command: executable, args: ['--config', config, ...args] });
+        assert.equal(transfer.exitCode, 0, `${args.join(' ')}: ${transfer.stderr}`);
+      }
+    }
+    const singleUpload = await executeCaptured({ command: executable, args: [
+      '--config', config, 'upload', 'upload.txt', '--id', workspaceId, 'reports'
+    ] });
+    assert.equal(singleUpload.exitCode, 0, singleUpload.stderr);
+    assert.deepEqual(JSON.parse(singleUpload.stdout), {
+      status: 'ok', localPaths: [resolve('upload.txt')], remoteDirectory: 'reports'
+    });
+    for (const [verb, first, second, target] of [
+      ['upload', 'first.txt', 'second.txt', 'reports'],
+      ['download', 'reports/first.txt', 'reports/second.txt', 'downloads']
+    ]) {
+      const multipleSources = await executeCaptured({ command: executable, args: [
+        '--config', config, verb, first, second, target, '--id', workspaceId
+      ] });
+      assert.equal(multipleSources.exitCode, 1);
+      assert.match(multipleSources.stderr, new RegExp('Too many arguments for ' + verb));
+    }
+    const defaultUpload = await executeCaptured({ command: executable, args: [
+      '--config', config, 'upload', 'reports', '--id', workspaceId
+    ] });
+    assert.equal(defaultUpload.exitCode, 0, defaultUpload.stderr);
+    assert.deepEqual(JSON.parse(defaultUpload.stdout), { status: 'ok', remoteDirectory: 'reports' });
+
+    const writeFilePath = join(temporary, 'replacement.txt');
+    await writeFile(writeFilePath, 'replacement');
     const write = await executeCaptured({
       command: executable,
       args: [
         '--config', config, 'write', '--id', workspaceId,
-        '--path', 'write.txt', '--file', '-'
-      ],
-      stdin: 'replacement'
+        'write.txt', '--content', 'replacement'
+      ]
     });
+    for (const [verb, flag] of [
+      ['exec', '--file'],
+      ['edit', '--json-file']
+    ]) {
+      const rejected = await executeCaptured({ command: executable, args: [
+        '--config', config, verb, '--id', workspaceId, flag, '-'
+      ] });
+      assert.equal(rejected.exitCode, 1);
+      assert.match(rejected.stderr, /Pass a local file path instead of -/);
+    }
+    const writeFromFile = await executeCaptured({ command: executable, args: [
+      '--config', config, 'write', 'write.txt', '--id', workspaceId, '--file', writeFilePath
+    ] });
+    assert.equal(writeFromFile.exitCode, 1);
+    assert.match(writeFromFile.stderr, /--file is not valid for write/);
+    const createFromFile = await executeCaptured({ command: executable, args: [
+      '--config', config, 'create', 'new.txt', 'file', '--id', workspaceId, '--file', writeFilePath
+    ] });
+    assert.equal(createFromFile.exitCode, 1);
+    assert.match(createFromFile.stderr, /--file is not valid for create/);
     assert.equal(write.exitCode, 0, write.stderr);
     assert.deepEqual(
       [...new Set(operations)],
       ['read', 'edit', 'search', 'delete', 'chmod', 'move', 'upload', 'download', 'write']
     );
-    const batchStarts = activity.filter((event) => event.phase === 'start').length;
-    const batch = await executeCaptured({ command: executable, args: [
-      '--config', config, '--compact', 'batch', '--id', workspaceId, '--json',
-      JSON.stringify({ operations: [
-        { command: 'read', arguments: { path: 'a.txt' } },
-        { command: 'list', arguments: { path: 'src' } }
-      ] })
+    const namedExecCommand = await executeCaptured({ command: executable, args: [
+      '--config', config, 'exec', '--id', workspaceId, '--command', 'npm test'
     ] });
-    assert.equal(batch.exitCode, 0, batch.stderr);
-    const batchResult = JSON.parse(batch.stdout);
-    assert.equal(batchResult.results.length, 2);
-    assert.equal(batchResult.results[0].result.content, 'content:a.txt');
-    assert.equal(batchResult.results[0].result.truncated, false);
-    assert.equal(
-      activity.filter((event) => event.phase === 'start').length,
-      batchStarts + 2
-    );
+    assert.equal(namedExecCommand.exitCode, 1);
+    assert.match(namedExecCommand.stderr, /Invalid option for exec: --command/);
+
+    const namedReadPath = await executeCaptured({ command: executable, args: [
+      '--config', config, 'read', '--id', workspaceId, '--path', 'a.txt'
+    ] });
+    assert.equal(namedReadPath.exitCode, 1);
+    assert.match(namedReadPath.stderr, /Invalid option for read: --path/);
+
+    const multiList = await executeCaptured({ command: executable, args: [
+      '--config', config, 'list', '--id', workspaceId, '--json', JSON.stringify([{ path: 'src', limit: 1 }, { path: 'test', limit: 2 }])
+    ] });
+    assert.equal(multiList.exitCode, 0, multiList.stderr);
+    const multiListResults = JSON.parse(multiList.stdout).results;
+    assert.deepEqual(multiListResults.map(({ path, entries }: { path: string; entries: unknown[] }) =>
+      [path, entries.length]), [['src', 1], ['test', 2]]);
+
+    const firstPage = await executeCaptured({ command: executable, args: [
+      '--config', config, 'list', 'test', '--id', workspaceId, '--limit', '1'
+    ] });
+    assert.equal(firstPage.exitCode, 0, firstPage.stderr);
+    const { nextCursor } = JSON.parse(firstPage.stdout);
+    assert.ok(nextCursor);
+
+    const listRequestFile = join(temporary, 'list-request.json');
+    await writeFile(listRequestFile, JSON.stringify([{ path: 'src' }, { path: 'test', limit: 1, cursor: nextCursor }]));
+    const resumedList = await executeCaptured({ command: executable, args: [
+      '--config', config, 'list', '--id', workspaceId, '--json-file', listRequestFile
+    ] });
+    assert.equal(resumedList.exitCode, 0, resumedList.stderr);
+    assert.deepEqual(JSON.parse(resumedList.stdout).results.map((result: { entries: { name: string }[] }) =>
+      result.entries.map(entry => entry.name)), [['a.ts', 'b.ts'], ['b.ts']]);
+
+    const objectList = await executeCaptured({ command: executable, args: [
+      '--config', config, 'list', '--id', workspaceId, '--json',
+      JSON.stringify({ paths: ['src', 'test'] })
+    ] });
+    assert.equal(objectList.exitCode, 1);
+    assert.match(objectList.stderr, /List JSON must contain an array/);
+
+    const partialList = await executeCaptured({ command: executable, args: [
+      '--config', config, 'list', '--id', workspaceId, '--json', JSON.stringify([{ path: 'forbidden' }, { path: 'test', limit: 1 }])
+    ] });
+    assert.equal(partialList.exitCode, 1);
+    assert.match(partialList.stderr, /forbidden: denied detail/);
+    const partialListResults = JSON.parse(partialList.stdout).results;
+    assert.deepEqual(partialListResults.map(({ status }: { status: string }) => status), ['error', 'ok']);
+    assert.ok(partialListResults[1].nextCursor);
+
+    const removedBatch = await executeCaptured({ command: executable, args: ['batch'] });
+    assert.equal(removedBatch.exitCode, 1);
+    assert.match(removedBatch.stderr, /Unknown command/);
+
+    await assert.rejects(ipcRequest(router.socketPath, routerToken, 'cli', {
+      name: 'remote_read', arguments: { workspaceId, requests: [null] }
+    }), /Expected 1 to 16 requests with a path per item/);
+
     const conciseError = await executeCaptured({ command: executable, args: [
       '--config', config, 'list', '--id', workspaceId, '--path', 'forbidden'
     ] });

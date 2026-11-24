@@ -33,6 +33,9 @@ test('search executes content and filename modes without hiding errors', {
     await writeFile(join(root, 'many.txt'), 'hello\nhello\nhello\n');
     const limited = await run({ query: 'hello', fixedStrings: true, maxResults: 2 });
     assert.equal(limited.stdout.trim().split('\n').length, 3);
+    assert.throws(() => searchCommand(root, {
+      query: 'hello', contextLines: '1' as unknown as number
+    }), /contextLines must be a nonnegative integer/);
     assert.throws(() => searchCommand(root, { query: 'hello', maxResults: 0 }), /maxResults/);
     assert.throws(
       () => searchCommand(root, { query: '*.ts', mode: 'names', fixedStrings: true }),

@@ -144,7 +144,10 @@ export async function installNodeCli(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       return undefined;
     });
-    if (previous !== undefined && previous !== content && !previous.includes('safs_cli_batch')) {
+    const isSafs = previous?.includes('safs_cli_batch')
+      || (previous?.startsWith('#!/usr/bin/env node') && previous.includes('SAFS_CONFIG')
+        && previous.includes('list_remote_workspaces') && previous.includes('.safs-connection.json'));
+    if (previous !== undefined && previous !== content && !isSafs) {
       throw new Error(`已有其他 safs 命令，未覆盖：${destination}`);
     }
   }

@@ -53,6 +53,13 @@ test('activity summaries retain metadata without file contents or command output
   assert.deepEqual(edit, { path: 'src/app.ts', editCount: 1 });
   assert.equal(JSON.stringify(edit).includes('private source'), false);
 
+  for (const name of ['remote_list', 'remote_read']) {
+    const batch = summarizeAgentActivityInput(name, { requests: [
+      { path: 'src/a.ts', cursor: 'private cursor' }, { path: 'src/b.ts' }
+    ] });
+    assert.deepEqual(batch, { requestCount: 2, paths: ['src/a.ts', 'src/b.ts'] });
+  }
+
   const command = summarizeAgentActivityInput('run_remote_command', {
     remoteCwd: '/srv/app', command: 'curl --token top-secret https://example.test'
   });

@@ -113,7 +113,7 @@ export function summarizeAgentActivityInput(
   if (toolName === 'remote_edit' && Array.isArray(input.edits)) {
     summary.editCount = input.edits.length;
   }
-  if (toolName === 'remote_read_many' && Array.isArray(input.requests)) {
+  if (['remote_list', 'remote_read', 'remote_read_many'].includes(toolName) && Array.isArray(input.requests)) {
     summary.requestCount = input.requests.length;
     const paths = input.requests.slice(0, 16).flatMap((request) => {
       if (!request || typeof request !== 'object' || Array.isArray(request)) return [];
@@ -132,7 +132,7 @@ export function summarizeAgentActivityResult(result: unknown): AgentActivitySumm
   const summary: AgentActivitySummary = {};
   for (const key of [
     'exitCode', 'size', 'completed', 'discovered', 'bytes', 'matchCount',
-    'completedFiles', 'discoveredFiles', 'discoveredDirectories'
+    'completedFiles', 'discoveredFiles', 'discoveredDirectories', 'contentBytes', 'returnedEntries'
   ]) {
     if (typeof value[key] === 'number' && Number.isFinite(value[key])) summary[key] = value[key] as number;
     else if (typeof value[key] === 'boolean') summary[key] = value[key] as boolean;

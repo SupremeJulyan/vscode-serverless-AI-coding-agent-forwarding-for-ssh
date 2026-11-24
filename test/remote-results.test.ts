@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { pageDirectory, searchResult } from '../src/remote/remote-results';
+import { listDirectories, pageDirectory, searchResult } from '../src/remote/remote-results';
 
 test('directory pages are stable, complete and reject stale or cross-path cursors', () => {
   const entries = ['c', 'a', 'b'].map(name => ({ name, type: 'file' }));
@@ -27,13 +27,25 @@ test('search distinguishes failure from no matches and counts only complete capt
   );
 });
 
-test('directory batches share the entry limit and retain resumable item cursors', async () => {
-  const { listDirectories } = await import('../src/remote/remote-results');
-  const result = await listDirectories(['missing', '/a', '/b'], 2, async ({ path, limit }) => {
+test('directory batches start concurrently and give each path its own page limit', async () => {
+  const started: string[] = [];
+  let finishFirst!: () => void;
+  const releaseFirst = new Promise<void>(resolve => { finishFirst = resolve; });
+  const pending = listDirectories(['/a', 'missing', '/b'].map(path => ({ path, limit: 2 })), async ({ path, limit }) => {
+    started.push(path);
+    if (path === '/a') await releaseFirst;
     if (path === 'missing') throw new Error('missing');
     return pageDirectory(['a', 'b', 'c'].map(name => ({ name, type: 'file' })), path, { limit });
   });
-  assert.deepEqual(result.results.map(r => r.status), ['error', 'ok', 'not_listed']);
-  assert.equal(result.returnedEntries, 2);
-  assert.ok((result.results[1] as any).nextCursor);
+  finishFirst();
+  assert.deepEqual(started, ['/a', 'missing', '/b']);
+  const result = await pending;
+  assert.deepEqual(result.results.map(r => [r.path, r.status]), [
+    ['/a', 'ok'], ['missing', 'error'], ['/b', 'ok']
+  ]);
+  assert.equal(result.returnedEntries, 4);
+  for (const item of result.results.filter(r => r.status === 'ok')) {
+    assert.equal(item.entries.length, 2);
+    assert.ok(item.nextCursor);
+  }
 });
