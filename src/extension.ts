@@ -94,6 +94,7 @@ import { addRecordedMcpAgentName, normalizeAgentInterface, recordedMcpAgentNames
 import { AgentActivityStore } from './agent/agent-activity';
 import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent/agent-activity-view';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent/agent-discovery';
+import { RemoteWorkspacesViewProvider, remoteWorkspacesViewId } from './agent/remote-workspaces-view';
 import {
   ensureAgentCwdPlaceholder, ensureAgentCwdSubdirectory, legacyAgentCwdPath,
   readLastRemoteDirectory, writeLastRemoteDirectory, agentCwdDirectoryName
@@ -6508,6 +6509,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push({ dispose: () => clearInterval(recoveryTimer) });
 
   const tree = new RemoteFoldersProvider(context);
+  const remoteWorkspaces = new RemoteWorkspacesViewProvider();
+  const remoteWorkspacesTree = vscode.window.createTreeView(remoteWorkspacesViewId, {
+    treeDataProvider: remoteWorkspaces
+  });
+  context.subscriptions.push(
+    remoteWorkspaces,
+    remoteWorkspacesTree,
+    remoteWorkspacesTree.onDidChangeSelection(event => {
+      remoteWorkspaces.setSelected(
+        event.selection[0] instanceof vscode.TreeItem
+          ? (event.selection[0] as vscode.TreeItem).id
+          : undefined
+      );
+    }),
+    vscode.commands.registerCommand('safs.focusRemoteWorkspace', async (instanceId: Parameters<RemoteWorkspacesViewProvider['focus']>[0]) => {
+      try { await remoteWorkspaces.focus(instanceId); }
+      catch (error) { void notificationWindow.showErrorMessage(error instanceof Error ? error.message : String(error)); }
+    })
+  );
   refreshTree = () => tree.refresh();
   // 用 createTreeView 而不是 registerTreeDataProvider：视图标题栏的「打开配置」
   // 需要读当前选中项，才能定位到 config.json 里对应的那一行。
