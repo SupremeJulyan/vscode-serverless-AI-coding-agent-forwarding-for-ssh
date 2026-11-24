@@ -1,7 +1,6 @@
 import { operationMetric } from '../shared/operation-metric';
 import { relayBundleExclusions } from './remote-git-bundle';
 import { attachRelayCache, relayHasCommit } from './git-relay-cache';
-import { trackingRef } from './git-sync-state';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -136,8 +135,17 @@ export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): P
   const merge = upstreamRemote === remote ? configuredMerge : undefined;
   const destination = merge ?? ref;
   if (!destination.startsWith('refs/heads/')) throw new Error('推送目标必须是分支。');
-  await git.run(['check-ref-format', destination]);
-  const urls = overrideUrl ? [overrideUrl] : (await git.run(['remote', 'get-url', '--push', '--all', remote!])).trim().split('\n');
+  const [validation, head, ...remoteMetadata] = await git.batch([
+    ['check-ref-format', destination],
+    ['rev-parse', '--verify', `${ref}^{commit}`],
+    ...(!overrideUrl ? [['remote', 'get-url', '--push', '--all', remote!]] : []),
+    ...(remote && upstreamRemote === remote && merge === destination
+      ? [['remote', 'get-url', remote], ['for-each-ref', '--format=%(upstream)', ref]] : [])
+  ]);
+  if (validation.exitCode !== 0) throw new Error('无效的推送目标分支引用。');
+  const pushUrls = overrideUrl ? undefined : remoteMetadata.shift();
+  if (pushUrls && pushUrls.exitCode !== 0) throw new Error(pushUrls.stderr.trim() || '无法读取推送地址。');
+  const urls = overrideUrl ? [overrideUrl] : pushUrls!.stdout.trim().split('\n');
   if (urls.length !== 1) throw new Error('仓库有多个 push URL，请用 safs.git.pushUrl 指定本次推送地址。');
   try {
     validatePushUrl(urls[0]);
@@ -146,7 +154,8 @@ export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): P
     throw new Error(`${error instanceof Error ? error.message : String(error)}`
       + `来源：${overrideUrl ? 'safs.git.pushUrl' : `远端 remote.${remote}.pushurl / url`}。`);
   }
-  const oid = (await git.run(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
+  if (head.exitCode !== 0) throw new Error(head.stderr.trim() || '当前分支尚无可推送的提交。');
+  const oid = head.stdout.trim();
   if (!objectId.test(oid)) throw new Error('Invalid Git commit ID');
   // Only update fetch tracking when push and fetch refer to exactly the same destination.
   // A fork/pushUrl override must not make an unrelated upstream appear synchronized.
@@ -154,9 +163,11 @@ export async function resolvePushTarget(git: RemoteGit, overrideUrl?: string): P
   let trackingOid: string | undefined;
   let outgoingCommits: number | undefined;
   if (remote && upstreamRemote === remote && merge === destination) {
-    const fetchUrl = (await git.run(['remote', 'get-url', remote])).trim();
-    if (fetchUrl === urls[0]) {
-      tracking = await trackingRef(git, branch);
+    const [fetchUrl, upstream] = remoteMetadata;
+    if (fetchUrl.exitCode !== 0) throw new Error(fetchUrl.stderr.trim() || '无法读取提取地址。');
+    if (fetchUrl.stdout.trim() === urls[0]) {
+      if (upstream.exitCode !== 0) throw new Error(upstream.stderr.trim() || '无法读取上游引用。');
+      tracking = upstream.stdout.trim() || undefined;
       if (tracking) trackingOid = (await git.probe(['rev-parse', '--verify', '--quiet', tracking]))?.trim();
       if (trackingOid) {
         const count = (await git.run(['rev-list', '--count', `${trackingOid}..${oid}`])).trim();

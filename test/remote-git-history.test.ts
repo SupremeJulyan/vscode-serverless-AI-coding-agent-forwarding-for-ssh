@@ -74,6 +74,7 @@ function repository(outputs: { log?: string | ((limit: number) => string); show?
       return { exitCode: 128, stdout: '', stderr: `fatal: ${outputs.fail} failed` };
     }
     if (command.includes("'symbolic-ref'")) return { exitCode: 0, stdout: 'main\n', stderr: '' };
+    if (command.includes('@{upstream}')) return { exitCode: 128, stdout: '', stderr: '' };
     if (command.includes("'rev-parse'")) return { exitCode: 0, stdout: first + '\n', stderr: '' };
     if (command.includes("'for-each-ref'")) return { exitCode: 0, stdout: '', stderr: '' };
     if (command.includes("'log'")) {
@@ -233,7 +234,7 @@ test('history labels outgoing, incoming and shared commits and invalidates after
   const git = new RemoteGit(mockGitBatch(async command => {
     let stdout = '';
     if (command.includes("'symbolic-ref'")) stdout = 'main';
-    else if (command.includes("'for-each-ref'")) stdout = 'refs/remotes/origin/main';
+    else if (command.includes("'--symbolic-full-name'")) stdout = 'refs/remotes/origin/main';
     else if (command.includes("'rev-parse'")) stdout = command.includes('HEAD^{commit}') ? outgoing : incoming;
     else if (command.includes("'rev-list'")) stdout = command.includes("'--count'") ? counts : differences;
     else if (command.includes("'log'")) stdout = logRecord(outgoing, common, 'local') + logRecord(incoming, common, 'server') + logRecord(common, '', 'shared');

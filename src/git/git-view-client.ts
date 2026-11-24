@@ -102,29 +102,6 @@ function renderRepo(repo: Repo): HTMLElement {
   const branch = el('div', 'repository-path'); branch.append(icon(faCodeBranch), document.createTextNode(' ' + repo.branch));
   const sync = el('div', 'repository-path', repo.sync); sync.title = repo.syncTooltip;
   section.append(el('div', 'repository-path', repo.root), branch, sync);
-  if (repo.inspectorError) section.append(errorBox(repo.inspectorError, repo.id));
-  const tabs = el('div', 'git-inspector-tabs'); tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Git 信息');
-  const tab = preferences.tabs[repo.id] ?? 'history';
-  for (const [name, label, image, count] of [['history', '提交记录', faClockRotateLeft, repo.commits.length], ['branches', '分支', faCodeBranch, repo.branches.length]] as const) {
-    const tabButton = button(label, image, () => { preferences.tabs[repo.id] = name; persist(); render(); }, tab === name ? 'selected' : '');
-    tabButton.setAttribute('role', 'tab'); tabButton.setAttribute('aria-selected', String(tab === name)); tabButton.append(el('span', 'count', count)); tabs.append(tabButton);
-  }
-  section.append(tabs);
-  const inspector = el('div', 'git-inspector');
-  if (tab === 'history') {
-    if (!repo.commits.length) inspector.append(el('div', 'repository-clean', '还没有提交记录'));
-    for (const commit of repo.commits) inspector.append(renderCommit(repo, commit));
-  } else {
-    if (!repo.branches.length) inspector.append(el('div', 'repository-clean', '没有可切换的本地分支'));
-    for (const branch of repo.branches) {
-      const row = el('div', 'git-branch-item'); row.append(icon(branch.current ? faCheck : faCodeBranch), el('span', 'file-name', branch.name));
-      if (branch.current) row.append(el('span', 'branch-current', '当前'));
-      else { const switchButton = button('切换', undefined, () => action('branch', repo.id, {branch: branch.name})); switchButton.disabled = busy; row.append(switchButton); }
-      inspector.append(row);
-    }
-    inspector.append(el('small', 'git-inspector-hint', '仅列出本地分支。切换时不会自动还原未提交改动。'));
-  }
-  section.append(inspector);
   const relay = el('div', 'git-relay');
   for (const [name, label, image, title] of [['fetch', '提取', faRotateRight, '提取上游状态，不修改工作区'], ['pull', '拉取', faArrowDown, '拉取上游更新，只允许快进合并'], ['push', '推送', faArrowUp, '推送当前分支到上游，不强制覆盖']] as const) {
     const node = button(label, image, () => action(name, repo.id)); node.disabled = busy || state.scanning; node.title = title; relay.append(node);
@@ -167,6 +144,29 @@ function renderRepo(repo: Repo): HTMLElement {
     section.append(changes);
   }
   if (!repo.count && !repo.error) { const clean = el('div', 'repository-clean'); clean.append(icon(faCircleCheck), document.createTextNode(' 没有变更')); section.append(clean); }
+  if (repo.inspectorError) section.append(errorBox(repo.inspectorError, repo.id));
+  const tabs = el('div', 'git-inspector-tabs'); tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Git 信息');
+  const tab = preferences.tabs[repo.id] ?? 'history';
+  for (const [name, label, image, count] of [['history', '提交记录', faClockRotateLeft, repo.commits.length], ['branches', '分支', faCodeBranch, repo.branches.length]] as const) {
+    const tabButton = button(label, image, () => { preferences.tabs[repo.id] = name; persist(); render(); }, tab === name ? 'selected' : '');
+    tabButton.setAttribute('role', 'tab'); tabButton.setAttribute('aria-selected', String(tab === name)); tabButton.append(el('span', 'count', count)); tabs.append(tabButton);
+  }
+  section.append(tabs);
+  const inspector = el('div', 'git-inspector');
+  if (tab === 'history') {
+    if (!repo.commits.length) inspector.append(el('div', 'repository-clean', '还没有提交记录'));
+    for (const commit of repo.commits) inspector.append(renderCommit(repo, commit));
+  } else {
+    if (!repo.branches.length) inspector.append(el('div', 'repository-clean', '没有可切换的本地分支'));
+    for (const branch of repo.branches) {
+      const row = el('div', 'git-branch-item'); row.append(icon(branch.current ? faCheck : faCodeBranch), el('span', 'file-name', branch.name));
+      if (branch.current) row.append(el('span', 'branch-current', '当前'));
+      else { const switchButton = button('切换', undefined, () => action('branch', repo.id, {branch: branch.name})); switchButton.disabled = busy; row.append(switchButton); }
+      inspector.append(row);
+    }
+    inspector.append(el('small', 'git-inspector-hint', '仅列出本地分支。切换时不会自动还原未提交改动。'));
+  }
+  section.append(inspector);
   return section;
 }
 function renderSetup(): HTMLElement {

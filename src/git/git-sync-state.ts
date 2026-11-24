@@ -36,9 +36,11 @@ export async function trackingRef(git: RemoteGit, branch: string): Promise<strin
 }
 
 export async function readGitSyncState(git: RemoteGit): Promise<GitSyncState> {
-  const [branchResult, headResult] = await git.batch([
+  const [branchResult, headResult, upstreamResult, upstreamOidResult] = await git.batch([
     ['symbolic-ref', '--short', '--quiet', 'HEAD'],
-    ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']
+    ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+    ['rev-parse', '--verify', '--symbolic-full-name', '@{upstream}'],
+    ['rev-parse', '--verify', '--quiet', '@{upstream}^{commit}']
   ]);
   for (const result of [branchResult, headResult]) {
     if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error(result.stderr.trim() || 'Cannot read Git state');
@@ -47,9 +49,12 @@ export async function readGitSyncState(git: RemoteGit): Promise<GitSyncState> {
   const head = headResult.exitCode === 0 ? headResult.stdout.trim() : undefined;
   if (!head) return { branch: branch || 'HEAD', kind: 'unborn' };
   if (!branch) return { branch: 'HEAD', head, kind: 'detached' };
-  const upstream = await trackingRef(git, branch);
+  const resolvedUpstream = upstreamResult.exitCode === 0 ? upstreamResult.stdout.trim() : '';
+  const upstream = resolvedUpstream || await trackingRef(git, branch);
   if (!upstream) return { branch, head, kind: 'no-upstream' };
-  const upstreamOid = (await git.probe(['rev-parse', '--verify', '--quiet', `${upstream}^{commit}`]))?.trim();
+  const upstreamOid = resolvedUpstream && upstreamOidResult.exitCode === 0
+    ? upstreamOidResult.stdout.trim()
+    : (await git.probe(['rev-parse', '--verify', '--quiet', `${upstream}^{commit}`]))?.trim();
   if (!upstreamOid) return { branch, head, upstream, kind: 'missing-upstream' };
   // Compare immutable object IDs so an external fetch cannot mix two snapshots.
   const counts = (await git.run(['rev-list', '--left-right', '--count', `${head}...${upstreamOid}`])).trim().split(/\s+/);

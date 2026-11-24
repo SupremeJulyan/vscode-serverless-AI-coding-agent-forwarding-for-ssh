@@ -6948,12 +6948,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }, (message) => bridgeOutput?.appendLine(`[Git] ${message}`), pushRemoteRepositoryLocally,
   pullRemoteRepositoryLocally, fetchRemoteRepositoryLocally, async (uri, git) => {
     try {
+      const receipts = vscodeContext.globalState.get<Record<string, SuccessfulPushReceipt>>(
+        gitPushReceiptsKey, {}
+      );
+      if (!Object.keys(receipts).length) return;
       const configuration = vscode.workspace.getConfiguration('safs', uri);
       const target = await resolvePushTarget(
         git, configuration.get<string>('git.pushUrl', '').trim() || undefined
-      );
-      const receipts = vscodeContext.globalState.get<Record<string, SuccessfulPushReceipt>>(
-        gitPushReceiptsKey, {}
       );
       const receipt = receipts[pushReceiptKey(target)];
       const result = await applySuccessfulPushReceipt(git, target, receipt);

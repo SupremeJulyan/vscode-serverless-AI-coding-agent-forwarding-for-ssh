@@ -109,21 +109,37 @@ export class RemoteGit {
     if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || `Git failed (${result.exitCode})`);
     return result.stdout;
   }
+  private static readonly statusArgs = ['status', '--porcelain=v1', '-z', '--untracked-files=all'];
+
   async status(): Promise<GitChange[]> {
-    return parseGitStatus(await this.run(['status', '--porcelain=v1', '-z', '--untracked-files=all']));
+    return parseGitStatus(await this.run(RemoteGit.statusArgs));
   }
-  async stage(changes: GitChange[]): Promise<void> {
+
+  private async mutate(commands: string[][], refresh: boolean): Promise<GitChange[] | undefined> {
+    if (!commands.length) return refresh ? this.status() : undefined;
+    if (!refresh && commands.length === 1) {
+      await this.run(commands[0]);
+      return;
+    }
+    // Keep mutation output separate from the NUL-delimited status response.
+    const steps = commands.map(args => `${gitCommand(args)} >&2`);
+    if (refresh) steps.push(gitCommand(RemoteGit.statusArgs));
+    const result = await this.runner(steps.join(' &&\n'));
+    if (result.truncated) throw new Error('Git output exceeded the capture limit; result was not used.');
+    if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `Git failed (${result.exitCode})`);
+    return refresh ? parseGitStatus(result.stdout) : undefined;
+  }
+  async stage(changes: GitChange[], refresh = false): Promise<GitChange[] | undefined> {
     const paths = changes.flatMap(c => c.originalPath ? [c.path, c.originalPath] : [c.path]);
-    if (paths.length) await this.run(['add', '--', ...new Set(paths)]);
+    return this.mutate(paths.length ? [['add', '--', ...new Set(paths)]] : [], refresh);
   }
-  async unstage(changes: GitChange[]): Promise<void> {
+  async unstage(changes: GitChange[], refresh = false): Promise<GitChange[] | undefined> {
     const paths = [...new Set(changes.flatMap(c => c.originalPath ? [c.path, c.originalPath] : [c.path]))];
     if (!paths.length) return;
     // Nearly every repository has HEAD. Try the normal operation immediately so
     // cancelling staging costs one remote round trip instead of probing first.
     try {
-      await this.run(['reset', 'HEAD', '--', ...paths]);
-      return;
+      return await this.mutate([['reset', 'HEAD', '--', ...paths]], refresh);
     } catch (resetError) {
       let head: string | undefined;
       try { head = await this.probe(['rev-parse', '--verify', '--quiet', 'HEAD']); }
@@ -131,9 +147,9 @@ export class RemoteGit {
       if (head) throw resetError;
     }
     // Before the first commit there is no HEAD to restore from. Remove only index entries.
-    await this.run(['rm', '--cached', '-f', '--', ...paths]);
+    return this.mutate([['rm', '--cached', '-f', '--', ...paths]], refresh);
   }
-  async discard(changes: GitChange[]): Promise<void> {
+  async discard(changes: GitChange[], refresh = false): Promise<GitChange[] | undefined> {
     if (changes.some(isGitConflict)) throw new Error('冲突文件需要先解决冲突，不能直接还原。');
     const tracked = new Set<string>();
     const untracked = new Set<string>();
@@ -142,18 +158,23 @@ export class RemoteGit {
       for (const path of paths) (change.index === '?' ? untracked : tracked).add(path);
     }
     // Worktree changes are restored from the index so partially staged content stays intact.
-    if (tracked.size) await this.run(['restore', '--worktree', '--', ...tracked]);
+    const commands: string[][] = [];
+    if (tracked.size) commands.push(['restore', '--worktree', '--', ...tracked]);
     // `restore` cannot remove untracked files. Git clean keeps literal pathspec handling and
     // removes only the explicitly selected, non-ignored files reported by status.
     if (untracked.size) {
-      await this.run(['clean', '-f', '-d', '--', ...untracked]);
-      const remaining = (await this.status()).filter(change => change.index === '?' && [...untracked].some(file =>
+      commands.push(['clean', '-f', '-d', '--', ...untracked]);
+    }
+    const status = await this.mutate(commands, refresh || untracked.size > 0);
+    if (status && untracked.size) {
+      const remaining = status.filter(change => change.index === '?' && [...untracked].some(file =>
         change.path === file || change.path.startsWith(file.endsWith('/') ? file : `${file}/`)));
       if (remaining.length) throw new Error(`未能删除未跟踪路径：${remaining.map(change => change.path).join('、')}。目录可能包含独立 Git 仓库，请检查后在终端处理。`);
     }
+    return status;
   }
-  async commit(message: string): Promise<void> {
+  async commit(message: string, refresh = false): Promise<GitChange[] | undefined> {
     if (!message.trim()) throw new Error('请输入提交说明。');
-    await this.run(['-c', 'core.editor=true', 'commit', '-m', message]);
+    return this.mutate([['-c', 'core.editor=true', 'commit', '-m', message]], refresh);
   }
 }

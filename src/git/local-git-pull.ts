@@ -1,6 +1,5 @@
 import { relayBundleExclusions } from './remote-git-bundle';
 import { attachRelayCache, relayHasCommit } from './git-relay-cache';
-import { trackingRef } from './git-sync-state';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { RemoteGit } from './remote-git';
@@ -58,13 +57,16 @@ export async function resolvePullTarget(git: RemoteGit): Promise<PullTarget> {
   if (!remote || remote === '.' || !merge?.startsWith('refs/heads/')) {
     throw new Error('当前分支没有上游分支：请在远端终端执行 git branch --set-upstream-to=<远程>/<分支>。');
   }
-  await git.run(['check-ref-format', merge]);
-  let urls: string[];
-  try {
-    urls = (await git.run(['remote', 'get-url', '--all', remote])).trim().split('\n').filter(Boolean);
-  } catch {
+  const [validation, remoteUrls, head, upstream] = await git.batch([
+    ['check-ref-format', merge], ['remote', 'get-url', '--all', remote],
+    ['rev-parse', '--verify', `${ref}^{commit}`],
+    ['for-each-ref', '--format=%(upstream)', ref]
+  ]);
+  if (validation.exitCode !== 0) throw new Error('无效的上游分支引用。');
+  if (remoteUrls.exitCode !== 0) {
     throw new Error(`远端仓库 ${remote} 不存在：请检查当前分支的上游配置。`);
   }
+  const urls = remoteUrls.stdout.trim().split('\n').filter(Boolean);
   if (urls.length !== 1) throw new Error('仓库配置了多个 fetch URL，无法确定本地中转地址。');
   try {
     validateFetchUrl(urls[0]);
@@ -72,9 +74,12 @@ export async function resolvePullTarget(git: RemoteGit): Promise<PullTarget> {
     throw new Error(`${error instanceof Error ? error.message : String(error)}`
       + `来源：远端 remote.${remote}.url。`);
   }
-  const oid = (await git.run(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
+  if (head.exitCode !== 0 || upstream.exitCode !== 0) {
+    throw new Error(head.stderr.trim() || '无法读取当前分支或上游引用。');
+  }
+  const oid = head.stdout.trim();
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)) throw new Error('Invalid Git commit ID');
-  const tracking = await trackingRef(git, branch);
+  const tracking = upstream.stdout.trim();
   if (!tracking) throw new Error('上游没有对应的 fetch refspec，请检查远端仓库配置。');
   return { branch, remote, tracking, upstream: merge, url: urls[0], oid, objectFormat: oid.length === 64 ? 'sha256' : 'sha1' };
 }
@@ -164,13 +169,12 @@ export async function pullThroughLocalGit(options: LocalPullOptions): Promise<Lo
     // 快进判定在本地做：分叉时不必先把增量传回远端再失败。
     // incoming = 上游有、远端没有的提交；outgoing = 远端有、上游没有的提交。
     // incoming > 0 且 outgoing = 0 时 base 是 pull 的祖先，可快进。
-    const count = async (range: string) => Number((await local([
-      '-C', repository, 'rev-list', '--count', range], signal)).trim());
-    const incoming = await count('refs/heads/safs-base..refs/heads/safs-pull');
-    const outgoing = await count('refs/heads/safs-pull..refs/heads/safs-base');
-    if (!Number.isFinite(incoming) || !Number.isFinite(outgoing)) {
+    const counts = (await local(['-C', repository, 'rev-list', '--left-right', '--count',
+      'refs/heads/safs-base...refs/heads/safs-pull'], signal)).trim().split(/\s+/);
+    if (counts.length !== 2 || counts.some(count => !/^\d+$/.test(count))) {
       throw new Error('无法比较远端分支与上游分支。');
     }
+    const [outgoing, incoming] = counts.map(Number);
     if (incoming === 0) {
       // 上游提交都已在远端分支里（远端更靠前，或上游被回退）：与 git pull --ff-only 一样什么都不做。
       options.report?.('远端分支已包含上游的全部提交，无需合并。');

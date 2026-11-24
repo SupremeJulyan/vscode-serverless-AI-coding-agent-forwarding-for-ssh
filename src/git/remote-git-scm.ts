@@ -232,10 +232,7 @@ export class RemoteGitScm implements vscode.Disposable {
         }
         for (const [repository, changes] of groups) {
           await this.enqueue(repository, async () => {
-            try { await repository.git[action](changes); }
-            // Index/worktree operations cannot change HEAD or its upstream. Reuse the
-            // current sync state instead of paying for many extra SSH Git queries.
-            finally { await this.update(repository, false); }
+            await this.updateAfterMutation(repository, () => repository.git[action](changes, true));
           });
         }
       });
@@ -258,8 +255,7 @@ export class RemoteGitScm implements vscode.Disposable {
       }
       for (const [repository, changes] of groups) {
         await this.enqueue(repository, async () => {
-          try { await repository.git.discard(changes); }
-          finally { await this.update(repository, false); }
+          await this.updateAfterMutation(repository, () => repository.git.discard(changes, true));
         });
       }
     });
@@ -312,9 +308,11 @@ export class RemoteGitScm implements vscode.Disposable {
         await this.update(repository, false);
         if (repository.conflicts.resourceStates.length) throw new Error('请先解决并暂存冲突。');
         if (!repository.index.resourceStates.length) throw new Error('请先暂存需要提交的更改。');
-        await repository.git.commit(message);
-        if (repository.message === message) repository.message = '';
-        await this.update(repository);
+        await this.updateAfterMutation(repository, async () => {
+          const changes = await repository.git.commit(message, true);
+          if (repository.message === message) repository.message = '';
+          return changes;
+        }, true);
         this.historyEmitter.fire();
       });
     });
@@ -447,8 +445,22 @@ export class RemoteGitScm implements vscode.Disposable {
     }
   }
 
-  private async update(repository: Repository, refreshSyncState = true): Promise<void> {
-    const changes = await repository.git.status();
+  private async updateAfterMutation(
+    repository: Repository, operation: () => Promise<GitChange[] | undefined>, refreshSyncState = false
+  ): Promise<void> {
+    let changes: GitChange[] | undefined;
+    try { changes = await operation(); }
+    catch (error) {
+      await this.update(repository, refreshSyncState).catch(refreshError => this.log(String(refreshError)));
+      throw error;
+    }
+    await this.update(repository, refreshSyncState, changes);
+  }
+
+  private async update(
+    repository: Repository, refreshSyncState = true, changes?: GitChange[]
+  ): Promise<void> {
+    changes ??= await repository.git.status();
     let syncState = repository.syncState;
     if (refreshSyncState || !syncState) {
       try {
