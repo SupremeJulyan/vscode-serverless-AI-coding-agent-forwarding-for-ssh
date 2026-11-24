@@ -132,8 +132,9 @@ export function normalizeRemotePath(remotePath: string): string {
  * filenames cannot contain '/'. Backslashes are rejected as well because they
  * become separators when the same name is materialized on Windows.
  */
-export function assertSafeRemoteEntryName(name: string): void {
-  if (!name || name === '.' || name === '..' || /[\0/\\]/.test(name)) {
+export function assertSafeRemoteEntryName(name: string, allowBackslash = false): void {
+  if (!name || name === '.' || name === '..' || /[\0/]/.test(name)
+    || (!allowBackslash && name.includes('\\'))) {
     throw new Error(`Unsafe remote directory entry name: ${JSON.stringify(name)}`);
   }
 }

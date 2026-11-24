@@ -126,7 +126,7 @@ export class Ssh2SftpSession implements SftpSession {
     );
     return entries.flatMap((entry) => {
       try {
-        assertSafeRemoteEntryName(entry.filename);
+        assertSafeRemoteEntryName(entry.filename, process.platform !== 'win32');
       } catch {
         console.warn(
           `[SAFS SFTP] ${this.hostName}: skipped unsafe directory entry ${JSON.stringify(entry.filename)}`

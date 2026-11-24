@@ -89,3 +89,11 @@ test('root login does not apply a conflicting home mapping to the root namespace
     await rm(storage, { recursive: true, force: true });
   }
 });
+
+test('POSIX placeholder mappings preserve quotes, newlines and literal backslashes', () => {
+  const folder: RemoteFolder = {
+    mountName: 'dev', hostName: 'dev', remoteRoot: '/remote', workspaceRoot: '/local/placeholder'
+  };
+  const basename = "a ' \" \\ \n.txt";
+  assert.equal(remotePathForUri(folder, `/local/placeholder/${basename}`), `/remote/${basename}`);
+});

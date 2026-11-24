@@ -60,7 +60,11 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       if (input.length === 32) return { path: input.path, content: 'content:a.txt', length: input.length };
       return { path: input.path, content: `content:${input.path}`, truncated: false };
     },
-    search: async () => { operations.push('search'); return { status: 'no_matches' }; },
+    search: async (input) => {
+      operations.push('search');
+      return input.query === '*.missing'
+        ? { status: 'no_matches', exitCode: 1 } : { status: 'matches', exitCode: 0 };
+    },
     edit: async () => { operations.push('edit'); return { status: 'ok' }; },
     write: async () => { operations.push('write'); return { status: 'ok' }; },
     delete: async () => { operations.push('delete'); return { status: 'ok' }; },
@@ -171,6 +175,12 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     ] });
     assert.equal(noCurrentFile.exitCode, 0, noCurrentFile.stderr);
     assert.equal(JSON.parse(noCurrentFile.stdout), null);
+    const noMatches = await executeCaptured({ command: executable, args: [
+      '--config', config, 'find-name', '*.missing', '--id', workspaceId
+    ] });
+    assert.equal(noMatches.exitCode, 1);
+    assert.equal(noMatches.stderr, '');
+    assert.equal(JSON.parse(noMatches.stdout).status, 'no_matches');
     const structuredCalls: string[][] = [
       ['read', '--json', JSON.stringify([{ path: 'a.txt' }])],
       ['find-text', '--query', 'TODO', '--mode', 'files'],
@@ -303,7 +313,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     assert.equal(write.exitCode, 0, write.stderr);
     assert.deepEqual(
       [...new Set(operations)],
-      ['read', 'edit', 'search', 'delete', 'chmod', 'move', 'upload', 'download', 'write']
+      ['read', 'search', 'edit', 'delete', 'chmod', 'move', 'upload', 'download', 'write']
     );
     const namedExecCommand = await executeCaptured({ command: executable, args: [
       '--config', config, 'exec', '--id', workspaceId, '--command', 'npm test'

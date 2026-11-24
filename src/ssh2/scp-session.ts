@@ -489,7 +489,7 @@ export class ScpSession implements SftpSession {
       if (lsMode) {
         const parsed = parseLsLongEntry(line);
         if (!parsed || parsed.name === '.' || parsed.name === '..') continue;
-        assertSafeRemoteEntryName(parsed.name);
+        assertSafeRemoteEntryName(parsed.name, process.platform !== 'win32');
         entries.push(parsed);
         continue;
       }
@@ -497,7 +497,7 @@ export class ScpSession implements SftpSession {
       if (parts.length < 5) continue;
       const mtime = Math.floor(parseFloat(parts[4]) * 1000);
       const name = parts[0];
-      assertSafeRemoteEntryName(name);
+      assertSafeRemoteEntryName(name, process.platform !== 'win32');
       entries.push({
         name,
         type: typeFromFindLetter(parts[1]),

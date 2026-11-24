@@ -249,7 +249,8 @@ async function main() {
   if (raw && request.name !== 'run_remote_command') throw new Error('--raw is only valid for exec');
   let result = await invoke(config, request);
   const code = exitCode(result);
-  if (code && (request.name !== 'run_remote_command' || result.code || result.status === 'error')) {
+  if (code && !(request.name === 'remote_search' && result.status === 'no_matches')
+    && (request.name !== 'run_remote_command' || result.code || result.status === 'error')) {
     const message = verbose ? JSON.stringify(result) : concise(result);
     if (!['remote_list', 'remote_read'].includes(request.name) || !Array.isArray(result.results)) {
       throw new Error(message);

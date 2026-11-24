@@ -26,7 +26,7 @@ safs find-name GLOB [PATH] --id ID
 safs output OUTPUT_ID stdout|stderr --id ID [--offset N] [--length N]
 ```
 
-Pass the list JSON inline with `--json` or read it from a local file with `--json-file`. Each item requires `path` and accepts its own `limit` and `cursor`. Omit `limit` for the default of 100 entries and omit `cursor` to start at the first page. Directories are listed concurrently. A failed directory is reported alongside successful results and sets a nonzero exit code. For multiple files, pass an array of 1 to 16 read requests to `read --json` or `read --json-file`. Each file has its own selection and byte limit. The reads run concurrently and results follow input order. `find-text --mode files` finds files whose contents match; `find-name` matches file basenames.
+Pass the list JSON inline with `--json` or read it from a local file with `--json-file`. Each item requires `path` and accepts its own `limit` and `cursor`. Omit `limit` for the default of 100 entries and omit `cursor` to start at the first page. Directories are listed concurrently. A failed directory is reported alongside successful results and sets a nonzero exit code. For multiple files, pass an array of 1 to 16 read requests to `read --json` or `read --json-file`. Each file has its own selection and byte limit. Explicit byte lengths must be between 4 and 65,536. The reads run concurrently and results follow input order. `find-text --mode files` finds files whose contents match; `find-name` matches file basenames. Use `--json` or `--json-file` with `find-text` to set `fixedStrings`, `ignoreCase`, `contextLines`, `include`, and `excludeDirs`. A newline in a text query separates search patterns. Search output is line-oriented, so a newline inside a filename also contributes to `returnedLineCount`. A search with no matches returns JSON with `status: "no_matches"` and exits with code 1.
 
 ## Structured changes
 
@@ -58,7 +58,7 @@ safs exec "git status --short" --id ID
 
 `exec` returns JSON and propagates the remote exit code. With `--raw`, the CLI writes the captured stdout and stderr to the corresponding local streams after execution. Use `--file SCRIPT` for multiline commands. If the result includes an output ID, use it and the byte offsets to continue with `safs output`. Terminal-only workspaces support only `exec`, and truncated output cannot be continued there.
 
-Named options such as `--path` and `--query` remain valid when positional arguments are inconvenient.
+Run `safs COMMAND --help` for the named options accepted by that command. Use `--config FILE` to select a local router connection file.
 
 
 Default selection reads `.awm/workspace.json` in cwd only. An expired ID is refreshed only after unique active-placeholder matching. Missing files, unavailable workspaces, and ambiguous matches require `--id ID`. Explicit IDs never update the marker or fall back. Always specify `--id` on each command for tasks spanning multiple workspaces. Retained output accepts positional OUTPUT_ID or `--output-id OUTPUT_ID`.

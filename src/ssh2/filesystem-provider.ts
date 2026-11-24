@@ -26,9 +26,12 @@ export interface RemoteFolder {
   workspaceRoot: string;
 }
 
+function normalizeWorkspacePath(value: string): string {
+  return path.posix.normalize(/^\/?[A-Za-z]:[\\/]/.test(value) ? value.replaceAll('\\', '/') : value);
+}
+
 function workspaceRelative(root: string, candidate: string): string {
-  const normalize = (value: string) => path.posix.normalize(value.replaceAll('\\', '/'))
-    .replace(/^\/(?=[A-Za-z]:\/)/, '');
+  const normalize = (value: string) => normalizeWorkspacePath(value).replace(/^\/(?=[A-Za-z]:\/)/, '');
   const normalizedRoot = normalize(root);
   const normalizedCandidate = normalize(candidate);
   // VS Code lowercases drive letters in URI paths, while fs paths retain
@@ -39,8 +42,8 @@ function workspaceRelative(root: string, candidate: string): string {
 }
 
 function isWorkspaceNamespacePath(root: string, candidate: string): boolean {
-  const normalizedRoot = path.posix.normalize(root.replaceAll('\\', '/'));
-  const normalizedCandidate = path.posix.normalize(candidate.replaceAll('\\', '/'));
+  const normalizedRoot = normalizeWorkspacePath(root);
+  const normalizedCandidate = normalizeWorkspacePath(candidate);
   const isAbsolute = (value: string): boolean =>
     value.startsWith('/') || /^[A-Za-z]:\//.test(value);
   if (!isAbsolute(normalizedRoot) || !isAbsolute(normalizedCandidate)) return false;
