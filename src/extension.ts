@@ -6510,19 +6510,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const tree = new RemoteFoldersProvider(context);
   const remoteWorkspaces = new RemoteWorkspacesViewProvider();
-  const remoteWorkspacesTree = vscode.window.createTreeView(remoteWorkspacesViewId, {
-    treeDataProvider: remoteWorkspaces
-  });
   context.subscriptions.push(
     remoteWorkspaces,
-    remoteWorkspacesTree,
-    remoteWorkspacesTree.onDidChangeSelection(event => {
-      remoteWorkspaces.setSelected(
-        event.selection[0] instanceof vscode.TreeItem
-          ? (event.selection[0] as vscode.TreeItem).id
-          : undefined
-      );
-    }),
+    vscode.window.registerTreeDataProvider(remoteWorkspacesViewId, remoteWorkspaces),
     vscode.commands.registerCommand('safs.focusRemoteWorkspace', async (instanceId: Parameters<RemoteWorkspacesViewProvider['focus']>[0]) => {
       try { await remoteWorkspaces.focus(instanceId); }
       catch (error) { void notificationWindow.showErrorMessage(error instanceof Error ? error.message : String(error)); }

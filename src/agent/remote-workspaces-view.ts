@@ -17,7 +17,6 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
   private expiryTimer: NodeJS.Timeout | undefined;
   private watchRetryTimer: NodeJS.Timeout | undefined;
   private changeCheck: Promise<void> = Promise.resolve();
-  private selectedInstanceId: string | undefined;
   private workspaces = discoverAgentWorkspaces();
   private workspaceSignature = workspaceListSignature(this.workspaces);
 
@@ -39,9 +38,7 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
     }
     return records.map((record, index) => ({
       label: labels[index],
-      item: new RemoteWorkspaceItem(
-        record, labels[index], record.instanceId === this.selectedInstanceId
-      )
+      item: new RemoteWorkspaceItem(record, labels[index])
     })).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base', numeric: true })
       || left.item.record.instanceId.localeCompare(right.item.record.instanceId))
       .map(entry => entry.item);
@@ -107,12 +104,6 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
     }, Math.max(1, nextExpiry - Date.now() + 25));
   }
 
-  setSelected(instanceId: string | undefined): void {
-    if (instanceId === this.selectedInstanceId) return;
-    this.selectedInstanceId = instanceId;
-    this.refresh();
-  }
-
   async focus(instanceId: string): Promise<void> {
     const records = discoverAgentWorkspaces();
     if (!records.some(record => record.instanceId === instanceId)) {
@@ -160,7 +151,7 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
 function workspaceListSignature(records: readonly DiscoveredAgentWorkspace[]): string {
   return JSON.stringify(records.map(record => [
     record.instanceId, record.mountName, record.workspaceUri, record.workspaceRoot,
-    record.host, record.hostName ?? '', record.user ?? ''
+    record.host, record.hostName ?? '', record.user ?? '', record.focused
   ]).sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
 }
 
@@ -191,12 +182,12 @@ function duplicateLabelIndexes(labels: readonly string[]): Set<number> {
 }
 
 class RemoteWorkspaceItem extends vscode.TreeItem {
-  constructor(readonly record: DiscoveredAgentWorkspace, label: string, selected: boolean) {
+  constructor(readonly record: DiscoveredAgentWorkspace, label: string) {
     super(label, vscode.TreeItemCollapsibleState.None);
     this.id = record.instanceId;
     this.tooltip = `${record.mountName}\n${record.workspaceRoot}\n${record.hostName ?? record.host}`;
     this.contextValue = 'safs.remoteWorkspace';
-    this.iconPath = new vscode.ThemeIcon(selected ? 'eye' : 'folder');
+    this.iconPath = new vscode.ThemeIcon(record.focused ? 'eye' : 'folder');
     this.command = { command: 'safs.focusRemoteWorkspace', title: '置顶远程工作区', arguments: [record.instanceId] };
   }
 }
