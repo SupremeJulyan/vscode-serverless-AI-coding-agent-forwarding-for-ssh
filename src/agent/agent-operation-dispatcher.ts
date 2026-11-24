@@ -16,7 +16,6 @@ export interface AgentOperationCallbacks<Source extends AgentActivitySource> {
   read(input: RemoteReadOptions & { mountName?: string }): Promise<unknown>;
   edit(input: {
     mountName?: string; path: string; edits: Array<{ oldText: string; newText: string }>;
-    expectedHash?: string;
   }): Promise<unknown>;
   write(input: { mountName?: string; path: string; content: string }): Promise<unknown>;
   create?(input: { mountName?: string; path: string; type: 'file' | 'directory'; content?: string }): Promise<unknown>;

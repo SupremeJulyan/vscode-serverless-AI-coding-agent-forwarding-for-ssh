@@ -48,7 +48,14 @@ test('SFTP in-place save retains inode, owner, group and executable mode and tru
 });
 
 test('editor saves overwrite the original file rather than renaming a temporary inode', async () => {
-  Object.assign(require('vscode'), { FileChangeType: { Changed: 1 }, Uri: { joinPath: () => ({}) }, FileSystemError: class extends Error { static NoPermissions(message: string) { return new this(message); } } });
+  const vscode = require('vscode');
+  const fileSystemError = class extends Error {
+    code: string;
+    constructor(message: string, code: string) { super(message); this.code = code; }
+    static NoPermissions(message: string) { return new this(message, 'NoPermissions'); }
+    static Unavailable(message: string) { return new this(message, 'Unavailable'); }
+  };
+  Object.assign(vscode, { FileChangeType: { Changed: 1 }, Uri: { joinPath: () => ({}) }, FileSystemError: fileSystemError });
   const { SftpFileSystemProvider } = require('../src/ssh2/filesystem-provider');
   const calls: unknown[] = [];
   const metadata = { type: 'file', permissions: 0o100750, size: 4 };
@@ -60,6 +67,7 @@ test('editor saves overwrite the original file rather than renaming a temporary 
   const provider = Object.create(SftpFileSystemProvider.prototype) as any;
   provider.resolve = async () => ({ session, remotePath: '/project/script' });
   provider.invalidate = () => {};
+  provider.readVersions = new Map();
   provider.changes = { fire: () => {} };
   await provider.writeFile({}, Buffer.from('data'), { create: true, overwrite: true });
   assert.equal(calls.length, 1);

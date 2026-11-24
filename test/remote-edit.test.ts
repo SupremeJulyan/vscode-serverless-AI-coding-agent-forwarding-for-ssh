@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyRemoteTextEdits, textSha256 } from '../src/remote/remote-edit';
+import { applyRemoteTextEdits } from '../src/remote/remote-edit';
 
 test('applies multiple exact remote edits transactionally and in order', () => {
   assert.deepEqual(applyRemoteTextEdits('one\ntwo\nthree\n', [
@@ -26,11 +26,4 @@ test('rejects missing, ambiguous, empty, or excessive remote edits', () => {
   assert.throws(() => applyRemoteTextEdits('text', Array.from(
     { length: 101 }, () => ({ oldText: 'x', newText: 'y' })
   )), /at most 100 edits/);
-});
-
-test('computes stable SHA-256 hashes for optimistic concurrency checks', () => {
-  assert.equal(
-    textSha256('hello'),
-    '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
-  );
 });

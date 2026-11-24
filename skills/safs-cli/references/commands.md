@@ -22,12 +22,12 @@ safs find GLOB [PATH] --id ID
 safs output OUTPUT_ID stdout|stderr --id ID [--offset N] [--length N]
 ```
 
-Use `read-many --input` for multiple bounded reads. `search --mode files` finds files whose contents match; `find` matches file basenames.
+Use `read-many --json` or `--json-file` for multiple bounded reads. `search --mode files` finds files whose contents match; `find` matches file basenames.
 
 ## Structured changes
 
 ```bash
-safs edit PATH --id ID --input '{"edits":[{"oldText":"old","newText":"new"}]}'
+safs edit PATH --id ID --json '{"edits":[{"oldText":"old","newText":"new"}]}'
 safs write PATH --id ID --content 'short text'
 printf '%s' 'multiline or sensitive content' | safs write PATH --id ID --file -
 safs create PATH file --id ID [--content 'initial text']
@@ -35,12 +35,12 @@ safs create PATH directory --id ID
 safs delete PATH --id ID
 safs delete PATH --id ID --recursive
 safs chmod PATH 755 --id ID
-safs move --id ID --input '{"sourcePath":"old","targetPath":"new","overwrite":false}'
-safs upload --id ID --input '{"localPaths":["/absolute/local/path"],"remoteDirectory":"."}'
-safs download --id ID --input '{"remotePath":"file","localPath":"/absolute/local/target"}'
+safs move --id ID --json '{"sourcePath":"old","targetPath":"new","overwrite":false}'
+safs upload --id ID --json '{"localPaths":["/absolute/local/path"],"remoteDirectory":"."}'
+safs download --id ID --json '{"remotePath":"file","localPath":"/absolute/local/target"}'
 ```
 
-Pass large, multiline, or sensitive JSON through `--input -` on stdin so it is not exposed in command arguments.
+Pass large or multiline JSON through `--json-file PATH`; `--json` accepts inline JSON. JSON stdin is not supported.
 
 `write` replaces the full file. Use `--allow-empty` for an intentional empty replacement. Read, write, and edit are limited to 5 MiB per file. Use download and upload for larger files. Write, edit, delete, and move save a snapshot before modifying remote files. Agent Activity can compare a snapshot with the current files and restore it. SAFS keeps the three most recent snapshots per path. The remote host needs Git, GNU tar, and Python 3 for snapshots.
 
@@ -49,7 +49,7 @@ Pass large, multiline, or sensitive JSON through `--input -` on stdin so it is n
 ```bash
 safs exec "npm test" --id ID
 safs exec "git status --short" --id ID
-safs batch --id ID --input '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
+safs batch --id ID --json '{"operations":[{"command":"read","arguments":{"path":"README.md"}}]}'
 ```
 
 `exec` returns JSON and propagates the remote exit code. Use `--raw` for remote stdout and stderr streams or `--file SCRIPT` for multiline commands. When output is truncated, use the output ID and byte offsets to continue with `safs output`.

@@ -162,15 +162,14 @@ function toolDefinitions(
     {
       name: 'remote_edit',
       title: 'Edit a remote text file',
-      description: 'Atomically applies exact text replacements to an existing UTF-8 file inside workspaceRoot. Each oldText must match exactly once; all edits are validated in order before anything is written. expectedHash accepts the hash returned by a previous remote_edit to reject later unrelated changes. The source and result are capped at 1 MiB. Returns path, replacements, bytes, beforeHash, and the new hash.',
+      description: 'Atomically applies exact text replacements to an existing UTF-8 file inside workspaceRoot. Each oldText must match exactly once; all edits are validated in order before anything is written. The source and result are capped at 1 MiB. Returns the path, replacement count, byte count, and snapshot ID when available.',
       inputSchema: {
         ...workspaceSelector,
         path: z.string().min(1),
         edits: z.array(z.object({
           oldText: z.string().min(1),
           newText: z.string()
-        })).min(1).max(100),
-        expectedHash: z.string().regex(/^[0-9a-fA-F]{64}$/).optional()
+        })).min(1).max(100)
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },

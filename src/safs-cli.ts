@@ -42,17 +42,23 @@ async function parse(args: string[]) {
   const verb = args.shift() ?? '';
   try {
     if (!tools[verb]) throw new Error('Unknown command; use --help');
-    const input = option(args, '--input');
+    const json = option(args, '--json');
+    const jsonFile = option(args, '--json-file');
     const file = option(args, '--file');
-    if (input === '-' && file === '-') throw new Error('--input - and --file - cannot read the same stdin');
+    if (json !== undefined && jsonFile !== undefined) throw new Error('Use either --json or --json-file, not both');
+    const input = jsonFile === undefined ? json : await readFile(jsonFile, 'utf8');
+    if (input === '-') throw new Error('--json accepts inline JSON; use --json-file PATH to read a file');
+    if (file === '-' && (json !== undefined || jsonFile !== undefined)) {
+      throw new Error('--file - cannot share stdin with JSON input');
+    }
     let stdin = '';
-    if (input === '-' || file === '-') {
+    if (file === '-') {
       process.stdin.setEncoding('utf8');
       for await (const chunk of process.stdin) stdin += chunk;
     }
-    const values = input === undefined ? {} : JSON.parse(input === '-' ? stdin : input);
-    if (!object(values)) throw new Error('--input must contain a JSON object');
-    if ('workspaceId' in values || 'mountName' in values) throw new Error('--input must not override workspaceId or mountName');
+    const values = input === undefined ? {} : JSON.parse(input);
+    if (!object(values)) throw new Error('--json must contain a JSON object');
+    if ('workspaceId' in values || 'mountName' in values) throw new Error('--json must not override workspaceId or mountName');
     let pos = 0;
     const assign = (key: string, value: unknown) => {
       if (key in values) throw new Error(`Duplicate input field: ${key}`);
@@ -98,7 +104,6 @@ async function parse(args: string[]) {
         if (!object(op) || !tools[op.command] || ['batch', 'find', 'workspaces'].includes(op.command)) throw new Error(`Unsupported batch command: ${op?.command}`);
         const arguments_ = op.arguments ?? {};
         if (!object(arguments_) || 'workspaceId' in arguments_ || 'mountName' in arguments_) throw new Error('Batch arguments must not override workspaceId or mountName');
-        if (op.command === 'edit' && 'expectedHash' in arguments_) throw new Error('Unsupported input field: expectedHash');
         return { name: tools[op.command], arguments: { ...arguments_, workspaceId: workspace } };
       });
       return { name: tools[verb], arguments: { operations } };
@@ -112,7 +117,6 @@ async function parse(args: string[]) {
       if (!['write', 'create', 'exec'].includes(verb)) throw new Error('--file is only valid for write, create, or exec');
       assign(verb === 'exec' ? 'command' : 'content', file === '-' ? stdin : await readFile(file, 'utf8'));
     }
-    if (verb === 'edit' && 'expectedHash' in values) throw new Error('Unsupported input field: expectedHash');
     if (verb === 'exec' && (typeof values.command !== 'string' || !values.command.trim())) throw new Error('Remote command is required');
     if (verb === 'write' && !('content' in values)) throw new Error('Write content is required. Retry with `--content TEXT` or pipe UTF-8 data to `--file -`');
     if (verb === 'create') {

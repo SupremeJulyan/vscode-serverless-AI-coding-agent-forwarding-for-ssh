@@ -182,28 +182,40 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     });
     assert.equal(currentFileReads, 1);
     const structuredCalls: string[][] = [
-      ['read-many', '--input', JSON.stringify({ requests: [{ path: 'a.txt' }] })],
+      ['read-many', '--json', JSON.stringify({ requests: [{ path: 'a.txt' }] })],
       ['search', '--query', 'TODO'],
       ['delete', '--path', 'a.txt'],
       ['chmod', '--path', 'a.txt', '--mode', '644'],
-      ['move', '--input', JSON.stringify({ sourcePath: 'a', targetPath: 'b' })],
-      ['upload', '--input', JSON.stringify({
+      ['move', '--json', JSON.stringify({ sourcePath: 'a', targetPath: 'b' })],
+      ['upload', '--json', JSON.stringify({
         localPaths: [join(temporary, 'upload.txt')], remoteDirectory: '.'
       })],
-      ['download', '--input', JSON.stringify({
+      ['download', '--json', JSON.stringify({
         remotePath: 'a.txt', localPath: join(temporary, 'download.txt')
       })]
     ];
     await writeFile(join(temporary, 'upload.txt'), 'upload');
+    const editJsonFile = join(temporary, 'edit.json');
+    await writeFile(editJsonFile, JSON.stringify({ edits: [{ oldText: 'a', newText: 'b' }] }));
     const edit = await executeCaptured({
       command: executable,
       args: [
         '--config', config, 'edit', '--id', workspaceId,
-        '--path', 'a.txt', '--input', '-'
-      ],
-      stdin: JSON.stringify({ edits: [{ oldText: 'a', newText: 'b' }] })
+        '--path', 'a.txt', '--json-file', editJsonFile
+      ]
     });
     assert.equal(edit.exitCode, 0, edit.stderr);
+    const inlineJson = await executeCaptured({ command: executable, args: [
+      '--config', config, 'read-many', '--id', workspaceId, '--json',
+      JSON.stringify({ requests: [{ path: 'a.txt' }] })
+    ] });
+    assert.equal(inlineJson.exitCode, 0, inlineJson.stderr);
+    const legacyInput = await executeCaptured({ command: executable, args: [
+      '--config', config, 'read-many', '--id', workspaceId, '--input',
+      JSON.stringify({ requests: [{ path: 'a.txt' }] })
+    ] });
+    assert.equal(legacyInput.exitCode, 1);
+    assert.match(legacyInput.stderr, /Invalid option/);
     for (const call of structuredCalls) {
       const result = await executeCaptured({ command: executable, args: [
         '--config', config, call[0], '--id', workspaceId, ...call.slice(1)
@@ -225,7 +237,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
     );
     const batchStarts = activity.filter((event) => event.phase === 'start').length;
     const batch = await executeCaptured({ command: executable, args: [
-      '--config', config, '--compact', 'batch', '--id', workspaceId, '--input',
+      '--config', config, '--compact', 'batch', '--id', workspaceId, '--json',
       JSON.stringify({ operations: [
         { command: 'read', arguments: { path: 'a.txt' } },
         { command: 'list', arguments: { path: 'src' } }

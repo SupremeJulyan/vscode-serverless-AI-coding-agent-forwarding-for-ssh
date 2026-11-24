@@ -120,6 +120,15 @@ interface WatchedResource {
   references: number;
 }
 
+class RemoteFileChangedError extends Error {
+  constructor() {
+    super('Remote file changed since it was read');
+    this.name = 'RemoteFileChangedError';
+  }
+}
+
+const editorConflictDecisions = new Map<string, Promise<'overwrite' | 'revert' | undefined>>();
+
 function fileType(type: SftpFileStat['type']): vscode.FileType {
   switch (type) {
     case 'file': return vscode.FileType.File;
@@ -202,6 +211,7 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
   private cacheGeneration = 0;
   private polling = false;
   private readonly watched = new Map<string, WatchedResource>();
+  private readonly readVersions = new Map<string, { size: number; mtime: number }>();
   private readonly watchTimer: NodeJS.Timeout;
   readonly onDidChangeFile = this.changes.event;
   constructor(
@@ -378,6 +388,12 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
     try {
       const { session, remotePath } = await this.resolve(uri);
       const value = await session.readFile(remotePath);
+      const info = await session.stat(remotePath);
+      if (info.size === value.byteLength) {
+        this.readVersions.set(uri.toString(), { size: info.size, mtime: info.mtime });
+      } else {
+        this.readVersions.delete(uri.toString());
+      }
       if (!saveConfirmation.attempts.get(uri.toString())?.busy) saveConfirmation.discard(uri.toString());
       return value;
     } catch (error) {
@@ -388,11 +404,47 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
   async writeFile(
     uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }, confirmedRetry = false
   ): Promise<void> {
-    await this.saveFile(uri, content, options, confirmedRetry);
+    try {
+      await this.saveFile(uri, content, options, confirmedRetry);
+    } catch (error) {
+      if (!(error instanceof RemoteFileChangedError)) throw error;
+      const key = uri.toString();
+      const pending = editorConflictDecisions.get(key) ?? Promise.resolve(vscode.window.showWarningMessage(
+        `远程文件“${path.posix.basename(uri.path)}”已发生变化。`,
+        { modal: true }, '覆盖远程', '撤销修改'
+      )).then(value => value === '覆盖远程' ? 'overwrite' as const
+        : value === '撤销修改' ? 'revert' as const : undefined)
+      const decision = pending.finally(() => {
+        if (editorConflictDecisions.get(key) === decision) editorConflictDecisions.delete(key);
+      });
+      editorConflictDecisions.set(key, decision);
+      const selected = await decision;
+      if (selected === 'overwrite') {
+        await this.saveFile(uri, content, options, false, undefined, undefined, 'overwrite');
+        return;
+      }
+      if (selected === 'revert') {
+        const remoteContent = await this.reloadRemoteFile(uri);
+        const document = await vscode.workspace.openTextDocument(uri);
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
+          new TextDecoder('utf-8', { fatal: true }).decode(remoteContent));
+        if (!await vscode.workspace.applyEdit(edit)) {
+          throw new Error('无法用远程最新内容替换本地修改');
+        }
+        const { session, remotePath } = await this.resolve(uri);
+        const info = await session.stat(remotePath);
+        this.readVersions.set(uri.toString(), { size: info.size, mtime: info.mtime });
+        return;
+      }
+      throw vscode.FileSystemError.Unavailable('保存已取消；本地修改仍保留。');
+    }
   }
 
   async saveFile(
-    uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }, confirmedRetry = false, requiredRoot?: string
+    uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }, confirmedRetry = false,
+    requiredRoot?: string, expectedVersion?: { size: number; mtime: number },
+    conflictPolicy: 'reject' | 'overwrite' = 'reject'
   ): Promise<{ remotePreferred: boolean; bytes: number; remoteContent?: Uint8Array; permissions?: number }> {
     try {
       if (!confirmedRetry && saveConfirmation.attempts.has(uri.toString())) {
@@ -421,6 +473,22 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
       if (existing && !options.overwrite) throw vscode.FileSystemError.FileExists(uri);
       if (!existing && !options.create) throw vscode.FileSystemError.FileNotFound(uri);
       if (existing && existing.type !== 'file') throw vscode.FileSystemError.NoPermissions('Only regular files can be saved');
+      const readVersion = expectedVersion ?? this.readVersions.get(uri.toString());
+      if (existing && readVersion
+        && (existing.size !== readVersion.size || existing.mtime !== readVersion.mtime)) {
+        if (conflictPolicy === 'overwrite') {
+          this.readVersions.set(uri.toString(), { size: existing.size, mtime: existing.mtime });
+        } else {
+          this.readVersions.delete(uri.toString());
+          this.invalidate(uri);
+          this.changes.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+          throw new RemoteFileChangedError();
+        }
+      }
+      if (expectedVersion && (!existing || existing.size !== expectedVersion.size
+        || existing.mtime !== expectedVersion.mtime)) {
+        throw new RemoteFileChangedError();
+      }
       // Preserve the existing inode, owner, group and ACLs by writing in place.
       // New files are created exclusively with private permissions.
       await saveConfirmation.run(uri.toString(), content,
@@ -436,6 +504,8 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
       }
       }, () => session.isAlive(), confirmedRetry);
       this.invalidate(uri);
+      const saved = await session.stat(remotePath);
+      this.readVersions.set(uri.toString(), { size: saved.size, mtime: saved.mtime });
       this.changes.fire([
         { type: vscode.FileChangeType.Changed, uri },
         { type: vscode.FileChangeType.Changed, uri: vscode.Uri.joinPath(uri, '..') }
@@ -444,6 +514,31 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
       return { remotePreferred: false, bytes: content.byteLength };
     } catch (error) {
       providerError(error, uri);
+    }
+  }
+
+  async reloadRemoteFile(uri: vscode.Uri): Promise<Uint8Array> {
+    const { session, remotePath } = await this.resolve(uri);
+    const content = await session.readFile(remotePath);
+    const info = await session.stat(remotePath);
+    if (content.byteLength !== info.size) throw new Error('Remote file changed while reloading');
+    this.readVersions.set(uri.toString(), { size: info.size, mtime: info.mtime });
+    this.invalidate(uri);
+    this.changes.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+    return content;
+  }
+
+  async verifySavedVersion(uri: vscode.Uri): Promise<void> {
+    const readVersion = this.readVersions.get(uri.toString());
+    if (!readVersion) return;
+    const { session, remotePath } = await this.resolve(uri);
+    const current = await session.stat(remotePath);
+    if (current.size !== readVersion.size || current.mtime !== readVersion.mtime) {
+      this.readVersions.delete(uri.toString());
+      this.invalidate(uri);
+      const error = new Error('Remote file changed since it was opened');
+      error.name = 'RemoteFileChangedError';
+      throw error;
     }
   }
 
@@ -587,6 +682,7 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
     this.cacheGeneration++;
     this.statRequests.clear();
     this.directoryRequests.clear();
+    this.readVersions.clear();
     clearInterval(this.watchTimer);
     this.changes.dispose();
     this.remoteAccepted.dispose();

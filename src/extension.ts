@@ -108,7 +108,7 @@ import {
 } from './transfer/local-transfer-path';
 import { redactSensitiveText } from './security/redact';
 import {
-  applyRemoteTextEdits, maxRemoteEditFileBytes, RemoteTextEdit, textSha256
+  applyRemoteTextEdits, maxRemoteEditFileBytes, RemoteTextEdit
 } from './remote/remote-edit';
 import { shellQuote } from './shared/shell-quote';
 import {
@@ -3670,7 +3670,7 @@ async function remoteCreate(input: {
 }
 
 async function remoteEdit(input: {
-  mountName: string; path: string; edits: RemoteTextEdit[]; expectedHash?: string;
+  mountName: string; path: string; edits: RemoteTextEdit[];
 }, context?: vscode.ExtensionContext): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const session = await pool.get(folder.hostName);
@@ -3683,16 +3683,13 @@ async function remoteEdit(input: {
     throw new Error(`remote_edit source exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
   }
   const data = await session.readFile(entry.remotePath);
+  const sourceStat = await session.stat(entry.remotePath);
+  if (sourceStat.size !== data.byteLength) {
+    throw new Error(`remote_edit source changed while it was being read: ${input.path}`);
+  }
   if (context) assertCliTextSize(data.length);
   if (!context && data.length > maxRemoteEditFileBytes) {
     throw new Error(`remote_edit source exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
-  }
-  const beforeHash = context ? undefined : textSha256(data);
-  if (!context && input.expectedHash && input.expectedHash.toLowerCase() !== beforeHash) {
-    throw new Error(
-      `remote_edit source changed; expectedHash=${input.expectedHash.toLowerCase()}, ` +
-      `actualHash=${beforeHash}`
-    );
   }
   let content: string;
   try {
@@ -3708,14 +3705,14 @@ async function remoteEdit(input: {
   }
   const uri = vscode.Uri.parse(folderUri(folder, entry.remotePath));
   const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_edit', [entry.remotePath]);
-  const saved = await provider.saveFile(uri, encoded, { create: false, overwrite: true }, !context && input.expectedHash !== undefined);
+  const saved = await provider.saveFile(uri, encoded, { create: false, overwrite: true }, false, undefined,
+    { size: sourceStat.size, mtime: sourceStat.mtime });
   if (saved.remotePreferred) return { path: entry.remotePath, replacements: 0, ...snapshot, ...adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions, !context) };
   return {
     path: entry.remotePath,
     replacements: edited.replacements,
     bytes: encoded.length,
-    ...snapshot,
-    ...(context ? {} : { beforeHash, hash: textSha256(encoded) })
+    ...snapshot
   };
 }
 

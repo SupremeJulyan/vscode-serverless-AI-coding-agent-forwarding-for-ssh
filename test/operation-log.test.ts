@@ -73,12 +73,11 @@ test('logs every tool with Agent identity without storing file content', async (
   const editLine = formatBackendToolLogLine({
     toolName: 'remote_edit', agentName: 'codex',
     input: {
-      path: 'notes.txt', expectedHash: 'a'.repeat(64),
+      path: 'notes.txt',
       edits: [{ oldText: 'private source', newText: 'replacement source' }]
     }
   }, now);
   assert.match(editLine, /"editCount":1/);
-  assert.match(editLine, /"expectedHash":"a{64}"/);
   assert.equal(editLine.includes('private source'), false);
   assert.equal(editLine.includes('replacement source'), false);
 

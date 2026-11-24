@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 export interface RemoteTextEdit {
   oldText: string;
   newText: string;
@@ -7,10 +5,6 @@ export interface RemoteTextEdit {
 
 export const maxRemoteEditFileBytes = 1024 * 1024;
 export const maxRemoteEdits = 100;
-
-export function textSha256(value: string | Uint8Array): string {
-  return createHash('sha256').update(value).digest('hex');
-}
 
 export function applyRemoteTextEdits(
   content: string, edits: RemoteTextEdit[]
