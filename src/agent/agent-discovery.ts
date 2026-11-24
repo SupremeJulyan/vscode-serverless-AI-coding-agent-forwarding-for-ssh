@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, lstatSync, unlinkSync } from 'node:fs';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 
-const maxRecordAgeMs = 35_000;
+export const agentWorkspaceRecordMaxAgeMs = 35_000;
 const cleanupGraceMs = 5 * 60_000;
 
 /** Clean only this runtime's directory; discovery may also read another OS's files. */
@@ -106,7 +106,7 @@ export function readAgentWorkspaceRecord(
       || (value.version === 4 && ((value.agentInterface === 'cli' && (!value.backendSocketPath || !value.backendToken))
         || (value.agentInterface === 'mcp' && !value.mcpUrl)))
       || !value.instanceId || !value.mountName || !value.workspaceRoot || !Number.isFinite(updatedAtMs)
-      || Math.abs(now - updatedAtMs) > maxRecordAgeMs) {
+      || Math.abs(now - updatedAtMs) > agentWorkspaceRecordMaxAgeMs) {
       return undefined;
     }
     if (value.processPlatform && value.processPlatform !== process.platform) return undefined;

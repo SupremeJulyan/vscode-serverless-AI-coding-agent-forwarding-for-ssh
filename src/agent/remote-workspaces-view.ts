@@ -1,26 +1,28 @@
 import { randomUUID } from 'node:crypto';
+import { watch, type FSWatcher } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { agentDiscoveryDirectory, discoverAgentWorkspaces, type DiscoveredAgentWorkspace } from './agent-discovery';
+import {
+  agentDiscoveryDirectory, agentWorkspaceRecordMaxAgeMs, discoverAgentWorkspaces,
+  type DiscoveredAgentWorkspace
+} from './agent-discovery';
 
 export const remoteWorkspacesViewId = 'safs.remoteWorkspaces';
 
 export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<RemoteWorkspaceItem>, vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<RemoteWorkspaceItem | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
-  private readonly timer: NodeJS.Timeout;
-  private readonly focusTimer: NodeJS.Timeout;
-  private focusCheck: Promise<void> = Promise.resolve();
+  private watcher: FSWatcher | undefined;
+  private expiryTimer: NodeJS.Timeout | undefined;
+  private watchRetryTimer: NodeJS.Timeout | undefined;
+  private changeCheck: Promise<void> = Promise.resolve();
   private selectedInstanceId: string | undefined;
   private workspaces = discoverAgentWorkspaces();
   private workspaceSignature = workspaceListSignature(this.workspaces);
 
   constructor() {
-    this.timer = setInterval(() => this.refreshIfWorkspacesChanged(), 5_000);
-    this.focusTimer = setInterval(() => {
-      this.focusCheck = this.focusCheck.then(() => this.handleFocusRequests()).catch(() => undefined);
-    }, 500);
+    void this.startWatching();
   }
 
   getTreeItem(item: RemoteWorkspaceItem): vscode.TreeItem { return item; }
@@ -54,6 +56,55 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
     this.workspaces = workspaces;
     this.workspaceSignature = signature;
     this.refresh();
+  }
+
+  private async startWatching(): Promise<void> {
+    if (this.watcher) return;
+    try {
+      const directory = agentDiscoveryDirectory();
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      this.watcher = watch(directory, () => {
+        this.changeCheck = this.changeCheck.then(async () => {
+          await this.handleFocusRequests();
+          this.refreshIfWorkspacesChanged();
+          this.scheduleExpiryCheck();
+        }).catch(() => undefined);
+      });
+      this.watcher.on('error', () => {
+        this.watcher?.close();
+        this.watcher = undefined;
+        this.scheduleWatchRetry();
+      });
+      await this.handleFocusRequests();
+      this.refreshIfWorkspacesChanged();
+      this.scheduleExpiryCheck();
+    } catch {
+      this.watcher?.close();
+      this.watcher = undefined;
+      this.scheduleWatchRetry();
+    }
+  }
+
+  private scheduleWatchRetry(): void {
+    if (this.watchRetryTimer) return;
+    this.watchRetryTimer = setTimeout(() => {
+      this.watchRetryTimer = undefined;
+      void this.startWatching();
+    }, 5_000);
+  }
+
+  private scheduleExpiryCheck(): void {
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = undefined;
+    const nextExpiry = Math.min(...this.workspaces.map(
+      record => record.updatedAtMs + agentWorkspaceRecordMaxAgeMs
+    ));
+    if (!Number.isFinite(nextExpiry)) return;
+    this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = undefined;
+      this.refreshIfWorkspacesChanged();
+      this.scheduleExpiryCheck();
+    }, Math.max(1, nextExpiry - Date.now() + 25));
   }
 
   setSelected(instanceId: string | undefined): void {
@@ -98,8 +149,10 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
   }
 
   dispose(): void {
-    clearInterval(this.timer);
-    clearInterval(this.focusTimer);
+    this.watcher?.close();
+    this.watcher = undefined;
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    if (this.watchRetryTimer) clearTimeout(this.watchRetryTimer);
     this.emitter.dispose();
   }
 }
