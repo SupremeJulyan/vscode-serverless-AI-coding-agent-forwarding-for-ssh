@@ -227,7 +227,9 @@ test('Agent integration installs the bundled CLI Skill without probing Agent ins
   const extensionSource = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
   const nodeCliSource = await readFile(new URL('../src/cli/node-cli-install.ts', import.meta.url), 'utf8');
   assert.ok(nodeCliSource.includes('globalNodeCliSkill'));
-  assert.ok(extensionSource.includes("['install', '--skills', '-g']"));
+  assert.ok(nodeCliSource.includes('installGlobalNodeCliSkill'));
+  assert.ok(extensionSource.includes('installGlobalNodeCliSkill(os.homedir(), target, source)'));
+  assert.equal(extensionSource.includes("['install', '--skills', '-g']"), false);
   assert.equal(extensionSource.includes('nativeCliUsagePrompt'), false);
   assert.equal(extensionSource.includes('cliInstructions('), false);
   assert.ok(extensionSource.includes('installGlobalCli(context'));
@@ -404,7 +406,8 @@ test('prepares the chosen forwarding interface before enabling and respects expl
   assert.ok(source.includes('!context.globalState.get<boolean>(cliAutoPrepareDisabledKey, false)'));
   assert.ok(source.includes('await context.globalState.update(cliAutoPrepareDisabledKey, true)'));
   assert.ok(source.includes('await uninstallGlobalCli(context)'));
-  assert.ok(source.includes("['install', '--skills', '-g']"));
+  assert.ok(source.includes('installGlobalCliSkill(context)'));
+  assert.equal(source.includes("['install', '--skills', '-g']"), false);
   assert.ok(source.includes('shouldCopyMcpUninstallPrompt(previous, next, vscode.window.state.focused)'));
   assert.ok(source.includes('streamableHttpMcpUninstallPrompt()'));
   assert.ok(source.includes('await copyMcpUninstallPromptAndNotify(context)'));
