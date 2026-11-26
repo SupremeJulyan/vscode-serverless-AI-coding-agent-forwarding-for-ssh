@@ -721,45 +721,6 @@
           "default": 120000,
           "description": "Unified timeout for Agent CLI forwarding, remote commands, searches, uploads, and downloads (milliseconds). 0 disables the timeout."
         },
-        "safs.agentInterface": {
-          "type": "string",
-          "enum": [
-            "cli"
-          ],
-          "default": "cli",
-          "description": "Agent 转发使用 SAFS CLI。",
-          "deprecationMessage": "MCP 模式已弃用并停用。旧的 mcp 配置会自动使用 CLI。"
-        },
-        "safs.agentMcpToolProfile": {
-          "type": "string",
-          "enum": [
-            "full",
-            "core"
-          ],
-          "default": "full",
-          "description": "MCP 工具集：full 包含完整远程文件操作，core 使用精简工具集。",
-          "deprecationMessage": "MCP 模式已弃用并停用，此设置当前不生效。"
-        },
-        "safs.agentMcpTimeoutMs": {
-          "type": "number",
-          "minimum": 0,
-          "default": 120000,
-          "description": "MCP 操作超时时间（毫秒），0 表示不限制。",
-          "deprecationMessage": "MCP 模式已弃用并停用，此设置当前不生效。"
-        },
-        "safs.agentMcpPort": {
-          "type": "number",
-          "minimum": 0,
-          "default": 0,
-          "description": "当前窗口 MCP HTTP 监听端口，0 表示自动分配。",
-          "deprecationMessage": "MCP 模式已弃用并停用，此设置当前不生效。"
-        },
-        "safs.agentHttpRouterPort": {
-          "type": "number",
-          "minimum": 0,
-          "default": 0,
-          "description": "共享 MCP HTTP 路由端口；0 表示使用 SAFS 默认端口。"
-        },
         "safs.git.operationTimeoutMs": {
           "type": "number",
           "minimum": 0,

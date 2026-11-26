@@ -45,14 +45,10 @@ test('extension declares the SFTP filesystem activation event', async () => {
     manifest.contributes?.configuration?.properties?.['safs.terminalAutoReconnect']?.default,
     true
   );
-  assert.equal(
-    manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.default,
-    'cli'
-  );
-  assert.deepEqual(
-    manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.enum,
-    ['cli']
-  );
+  const settings = manifest.contributes?.configuration?.properties ?? {};
+  for (const name of ['agentInterface', 'agentMcpToolProfile', 'agentMcpTimeoutMs', 'agentMcpPort', 'agentHttpRouterPort']) {
+    assert.equal(Object.hasOwn(settings, `safs.${name}`), false);
+  }
 });
 
 test('bundled Node CLI reports the extension release version', async () => {

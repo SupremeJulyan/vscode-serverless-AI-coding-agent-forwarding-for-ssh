@@ -2,7 +2,7 @@
 
 ## 2.2.4
 
-- MCP 模式已弃用并停用。旧的 MCP 配置会自动回退到 SAFS CLI。
+- MCP 模式已弃用并停用，相关选项已从 VS Code 设置移除。旧的 MCP 配置会自动回退到 SAFS CLI。
 - `safs write PATH TEXT` 使用位置参数传入内容。默认覆盖，可用 `--overwrite` 显式覆盖，或用 `--append` 追加。
 - `safs write`、`edit` 和 `delete` 修改前按原内容大小选择备份方式：不超过 5 MiB 保存远端快照，超过时自动下载本地备份并返回 `localBackupPath`。递归删除按普通文件的总大小计算。备份失败时停止操作，本地备份保留 7 天并在后台清理。
 - `safs edit` 的原文和编辑结果各限 64 MiB。CLI 的 `write` 和 `edit` 写回时不再因版本冲突拦截，VS Code 文件编辑器仍保留保存冲突检测。
