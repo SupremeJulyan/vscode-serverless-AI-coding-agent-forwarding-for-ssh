@@ -3705,30 +3705,35 @@ async function verifiedRemoteEntry(
 }
 
 async function verifiedRemoteDestination(
-  folder: RemoteFolder, session: SftpSession, value: string
-): Promise<string> {
+  folder: RemoteFolder, session: SftpSession, value: string, allowWorkspaceDirectory = false
+): Promise<{ path: string; exists: boolean; isDirectory: boolean }> {
   const workspaceRoot = currentWorkspacePath(folder);
   const remotePath = transferRemotePath(folder, value);
   if (remotePath === workspaceRoot) {
+    if (allowWorkspaceDirectory) {
+      const resolved = await session.statResolved(remotePath);
+      if (resolved.path !== workspaceRoot || resolved.stat.type !== 'directory') {
+        throw agentWorkspaceBoundaryError(`Invalid destination workspace root: ${value}`);
+      }
+      return { path: remotePath, exists: true, isDirectory: true };
+    }
     throw new Error(`The workspace root itself cannot be replaced: ${value}`);
   }
   const realParent = await session.realpath(path.posix.dirname(remotePath));
   if (!isRemotePathInsideRoot(workspaceRoot, realParent)) {
     throw agentWorkspaceBoundaryError(`Target parent escapes workspaceRoot through a symbolic link: ${value}`);
   }
-  try {
-    const stat = await session.stat(remotePath);
-    if (stat.type !== 'symbolic-link') {
-      const realPath = await session.realpath(remotePath);
-      if (!isRemotePathInsideRoot(workspaceRoot, realPath)) {
-        throw agentWorkspaceBoundaryError(`Existing target escapes workspaceRoot through a symbolic link: ${value}`);
-      }
+  const stat = await session.stat(remotePath).catch((error: unknown) => {
+    if (!isMissingRemoteError(error)) throw error;
+    return undefined;
+  });
+  if (stat && stat.type !== 'symbolic-link') {
+    const realPath = await session.realpath(remotePath);
+    if (!isRemotePathInsideRoot(workspaceRoot, realPath)) {
+      throw agentWorkspaceBoundaryError(`Existing target escapes workspaceRoot through a symbolic link: ${value}`);
     }
-  } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    if (code !== 2 && code !== 'ENOENT') throw error;
   }
-  return remotePath;
+  return { path: remotePath, exists: stat !== undefined, isDirectory: stat?.type === 'directory' };
 }
 
 async function remoteDelete(input: {
@@ -3758,21 +3763,29 @@ async function remoteChmod(input: {
 }
 
 async function remoteMove(input: {
-  mountName: string; sourcePath: string; targetPath: string; overwrite?: boolean;
-}, context?: vscode.ExtensionContext): Promise<unknown> {
+  mountName: string; sourcePath: string; targetPath: string;
+}): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const session = await pool.get(folder.hostName);
   const source = await verifiedRemoteEntry(folder, session, input.sourcePath, {
     allowSymbolicLink: true
   });
-  const targetPath = await verifiedRemoteDestination(folder, session, input.targetPath);
-  const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_move', [source.remotePath, targetPath]);
+  const destination = await verifiedRemoteDestination(folder, session, input.targetPath, true);
+  if (source.remotePath === destination.path) throw new Error('Source and target must be different paths.');
+  const target = destination.isDirectory
+    ? await verifiedRemoteDestination(
+      folder, session, path.posix.join(destination.path, path.posix.basename(source.remotePath))
+    )
+    : destination;
+  const targetPath = target.path;
+  if (source.remotePath === targetPath) throw new Error('Source and target must be different paths.');
+  if (target.exists) throw new Error(`Destination already exists: ${targetPath}`);
   await provider.rename(
     vscode.Uri.parse(folderUri(folder, source.remotePath)),
     vscode.Uri.parse(folderUri(folder, targetPath)),
-    { overwrite: input.overwrite === true }
+    { overwrite: false }
   );
-  return { ...snapshot, sourcePath: source.remotePath, targetPath, overwrite: input.overwrite === true };
+  return { sourcePath: source.remotePath, targetPath };
 }
 
 async function executeRemoteCommand(
@@ -5466,7 +5479,7 @@ async function ensureAgentBackendServer(context: vscode.ExtensionContext): Promi
         }),
         move: async (input) => remoteMove({
           ...input, mountName: forwardedWindowMountName(context, boundMountName, input.mountName)
-        }, context),
+        }),
         upload: async (input) => {
           const mountName = forwardedWindowMountName(
             context, boundMountName, input.mountName

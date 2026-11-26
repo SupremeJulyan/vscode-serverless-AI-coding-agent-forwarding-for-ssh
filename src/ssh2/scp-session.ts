@@ -718,8 +718,13 @@ export class ScpSession implements SftpSession {
         }
       }
     }
+    const source = shellQuote(sourcePath);
+    const target = shellQuote(targetPath);
+    // GNU mv -n may report success when it skips a conflicting destination.
+    // Check that the source actually moved, including dangling symlinks.
     const result = await this.exec(
-      `mv -- ${shellQuote(sourcePath)} ${shellQuote(targetPath)}`, undefined, signal
+      `mv -nT -- ${source} ${target} && if test -e ${source} || test -L ${source}; then echo "Destination already exists" >&2; exit 1; fi`,
+      undefined, signal
     );
     if (result.code !== 0) {
       throw new Error(`mv 失败: ${missingPathDetail(result.stderr.toString())}`);

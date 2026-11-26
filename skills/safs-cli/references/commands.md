@@ -38,7 +38,7 @@ safs create PATH directory --id ID
 safs delete PATH --id ID
 safs delete PATH --id ID --recursive
 safs chmod PATH 755 --id ID
-safs move old new --id ID [--overwrite]
+safs move old new --id ID
 safs upload [LOCAL_PATH] REMOTE_DIRECTORY --id ID
 safs download file --id ID [LOCAL_DIRECTORY]
 ```
@@ -47,7 +47,7 @@ Use `upload` to transfer one local file or directory. The local source can be ab
 
 For `list`, `read`, `find-text`, and `edit`, pass large or multiline JSON through `--json-file PATH`; `--json` accepts inline JSON. File options take local file paths.
 
-`write` replaces the full file. For content too long to pass as a command argument, create a local file with the same basename as the remote target and upload it to the target directory. For example, to replace `reports/a.txt`, save the new content as a local `./staging/a.txt` and run `safs upload ./staging/a.txt reports --id ID`. Use `--allow-empty` for an intentional empty replacement. Read, write, and edit are limited to 5 MiB per file. Use download and upload for larger files. Write, edit, delete, and move save a snapshot before modifying remote files. Agent Activity can compare a snapshot with the current files and restore it. SAFS keeps the three most recent snapshots per path. The remote host needs Git, GNU tar, and Python 3 for snapshots.
+`write` replaces the full file. For content too long to pass as a command argument, create a local file with the same basename as the remote target and upload it to the target directory. For example, to replace `reports/a.txt`, save the new content as a local `./staging/a.txt` and run `safs upload ./staging/a.txt reports --id ID`. Use `--allow-empty` for an intentional empty replacement. Read, write, and edit are limited to 5 MiB per file. Use download and upload for larger files. Write, edit, and delete save a snapshot before modifying remote files. When the move target is an existing directory, SAFS moves the source into it under its original name. The final destination must not exist. Move does not save a snapshot. Agent Activity can compare a snapshot with the current files and restore it. SAFS keeps the three most recent snapshots per path. The remote host needs Git, GNU tar, and Python 3 for snapshots.
 
 ## Task commands
 

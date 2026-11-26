@@ -33,7 +33,7 @@ const namedFields: Record<string, string> = {
   'source-path': 'sourcePath', 'target-path': 'targetPath'
 };
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
-const booleanOptions = new Set(['--compact', '--verbose', '--raw', '--allow-empty', '--recursive', '--overwrite']);
+const booleanOptions = new Set(['--compact', '--verbose', '--raw', '--allow-empty', '--recursive']);
 function option(args: string[], flag: string): string | undefined {
   for (let i = 0; i < args.length && args[i] !== '--'; i++) {
     const arg = args[i];
@@ -107,9 +107,6 @@ async function parse(args: string[]) {
       const flag = args.shift()!;
       if ((verb === 'write' && flag === '--allow-empty') || (verb === 'delete' && ['-r', '--recursive'].includes(flag))) {
         assign(verb === 'write' ? 'allowEmpty' : 'recursive', true); continue;
-      }
-      if (verb === 'move' && flag === '--overwrite') {
-        assign('overwrite', true); continue;
       }
       if (flag === '--') {
         if (verb !== 'exec' || args.length !== 1) throw new Error('Pass one remote command after --');

@@ -21,7 +21,7 @@ export interface AgentOperationCallbacks<Source extends AgentActivitySource> {
   create?(input: { mountName?: string; path: string; type: 'file' | 'directory'; content?: string }): Promise<unknown>;
   delete(input: { mountName?: string; path: string; recursive?: boolean }): Promise<unknown>;
   chmod(input: { mountName?: string; path: string; mode: string }): Promise<unknown>;
-  move(input: { mountName?: string; sourcePath: string; targetPath: string; overwrite?: boolean }): Promise<unknown>;
+  move(input: { mountName?: string; sourcePath: string; targetPath: string }): Promise<unknown>;
   upload(input: { mountName?: string; localPaths: string[]; remoteDirectory: string }): Promise<unknown>;
   download(input: { mountName?: string; remotePath: string; localPath: string }): Promise<unknown>;
   search(input: RemoteSearchOptions & { mountName?: string; agentName?: string }): Promise<unknown>;

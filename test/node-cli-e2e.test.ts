@@ -187,7 +187,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       ['find-name', '*.ts', 'src'],
       ['delete', '--path', 'a.txt'],
       ['chmod', '--path', 'a.txt', '--mode', '644'],
-      ['move', 'a', 'b', '--overwrite'],
+      ['move', 'a', 'b'],
       ['upload', 'upload.txt', '.'],
       ['download', 'a.txt', 'downloads']
     ];

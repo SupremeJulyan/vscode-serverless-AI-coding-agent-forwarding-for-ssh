@@ -218,12 +218,11 @@ function toolDefinitions(
     {
       name: 'remote_move',
       title: 'Move or rename a remote path',
-      description: 'Moves or renames a remote file or directory directly over SFTP. Both paths and their real parents must stay inside the current remote workspace. overwrite defaults to false. The workspace root itself cannot be moved.',
+      description: 'Moves or renames a remote file or directory directly over SFTP. Both paths and their real parents must stay inside the current remote workspace. An existing target directory receives the source under its original name. The final destination must not exist. The workspace root itself cannot be moved.',
       inputSchema: {
         ...workspaceSelector,
         sourcePath: z.string().min(1),
-        targetPath: z.string().min(1),
-        overwrite: z.boolean().optional()
+        targetPath: z.string().min(1)
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
