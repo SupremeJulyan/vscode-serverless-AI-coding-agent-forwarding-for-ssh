@@ -445,6 +445,35 @@ export class SftpFileSystemProvider implements vscode.FileSystemProvider, vscode
     }
   }
 
+  async appendFile(
+    uri: vscode.Uri, content: Uint8Array, requiredRoot: string,
+    targetExists: boolean
+  ): Promise<void> {
+    try {
+      const { session, remotePath } = await this.resolve(uri, true);
+      if (!isRemotePathInsideRoot(requiredRoot, remotePath) ||
+        !isRemotePathInsideRoot(requiredRoot, await session.realpath(path.posix.dirname(remotePath)))) {
+        throw vscode.FileSystemError.NoPermissions('Append path escapes workspaceRoot through a symbolic link');
+      }
+      if (targetExists) {
+        const current = await session.stat(remotePath);
+        if (current.type !== 'file') {
+          throw vscode.FileSystemError.NoPermissions('Only regular files can be appended to');
+        }
+        await session.writeFile(remotePath, content, { create: false, overwrite: true, append: true });
+      } else {
+        await session.writeFile(remotePath, content, { create: true, overwrite: false, mode: 0o600 });
+      }
+      this.readVersions.delete(uri.toString());
+      saveConfirmation.discard(uri.toString());
+      this.invalidate(uri);
+      this.changes.fire([{ type: targetExists ? vscode.FileChangeType.Changed : vscode.FileChangeType.Created, uri }]);
+      this.onMutation?.(uri, 'write');
+    } catch (error) {
+      providerError(error, uri);
+    }
+  }
+
   async saveFile(
     uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }, confirmedRetry = false,
     requiredRoot?: string, expectedVersion?: { size: number; mtime: number },

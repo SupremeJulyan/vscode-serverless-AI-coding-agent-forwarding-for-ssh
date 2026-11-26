@@ -32,7 +32,7 @@ Pass the list JSON inline with `--json` or read it from a local file with `--jso
 
 ```bash
 safs edit PATH --id ID --json '{"edits":[{"oldText":"old","newText":"new"}]}'
-safs write PATH --id ID --content 'short text'
+safs write PATH 'short text' --id ID [--append | --overwrite]
 safs create PATH file --id ID [--content 'initial text']
 safs create PATH directory --id ID
 safs delete PATH --id ID
@@ -47,7 +47,7 @@ Use `upload` to transfer one local file or directory. The local source can be ab
 
 For `list`, `read`, `find-text`, and `edit`, pass large or multiline JSON through `--json-file PATH`; `--json` accepts inline JSON. File options take local file paths.
 
-`write` replaces the full file. For content too long to pass as a command argument, create a local file with the same basename as the remote target and upload it to the target directory. For example, to replace `reports/a.txt`, save the new content as a local `./staging/a.txt` and run `safs upload ./staging/a.txt reports --id ID`. Use `--allow-empty` for an intentional empty replacement. Read, write, and edit are limited to 5 MiB per file. Use download and upload for larger files. Write, edit, and delete save a snapshot before modifying remote files. When the move target is an existing directory, SAFS moves the source into it under its original name. The final destination must not exist. Move does not save a snapshot. Agent Activity can compare a snapshot with the current files and restore it. SAFS keeps the three most recent snapshots per path. The remote host needs Git, GNU tar, and Python 3 for snapshots.
+`write` replaces the full file by default or with `--overwrite`. The two mode flags cannot be combined. Use `--append` to add content at the end without inserting a newline. Append creates a new file if the target does not exist. Put text that looks like an option after `--`, for example `safs write PATH --id ID -- --help`. For content too long to pass as a command argument, create a local file with the same basename as the remote target and upload it to the target directory. For example, to replace `reports/a.txt`, save the new content as a local `./staging/a.txt` and run `safs upload ./staging/a.txt reports --id ID`. Use `--allow-empty` for an intentional empty replacement. Read is limited to 5 MiB. CLI edit source and result are limited to 64 MiB. For write, edit, and delete, SAFS saves a remote snapshot when the original file content totals at most 5 MiB. For larger originals, SAFS automatically downloads a local backup before proceeding and reports its absolute path as `localBackupPath`. Edit reads the remote file and writes the result directly to the original path. The local backup is only for recovery. Local backups expire after 7 days and are pruned in the background on extension startup or when creating another local backup. When the move target is an existing directory, SAFS moves the source into it under its original name. The final destination must not exist. Move does not save a snapshot. Agent Activity can compare a snapshot with the current files and restore it. SAFS keeps the three most recent snapshots per path. The remote host needs Git, GNU tar, and Python 3 for snapshots.
 
 ## Task commands
 

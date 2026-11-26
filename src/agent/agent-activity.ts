@@ -42,7 +42,6 @@ export interface ActivityMemento {
   update(key: string, value: unknown): PromiseLike<void>;
 }
 
-export const agentActivityLimit = 200;
 export const agentActivityStorageKey = 'safs.agentActivity.v1';
 
 const writeTools = new Set([
@@ -157,9 +156,18 @@ function validEvent(value: unknown): value is AgentActivityEvent {
     && !!event.summary && typeof event.summary === 'object' && !Array.isArray(event.summary);
 }
 
+const activityRetentionMs = 7 * 24 * 60 * 60 * 1000;
+
+function activityIsRetained(event: AgentActivityEvent, cutoff: number): boolean {
+  if (event.status === 'running') return true;
+  const completed = Date.parse(event.completedAt ?? '');
+  return (Number.isFinite(completed) ? completed : Date.parse(event.startedAt)) > cutoff;
+}
+
 export class AgentActivityStore {
   private events: AgentActivityEvent[] = [];
   private listeners = new Set<(events: readonly AgentActivityEvent[]) => void>();
+  private cleanupTimer: NodeJS.Timeout | undefined;
   private persistTimer: NodeJS.Timeout | undefined;
   private persistPromise: Promise<void> = Promise.resolve();
 
@@ -180,7 +188,10 @@ export class AgentActivityStore {
       }
       return event;
     });
-    this.events = migrated.filter(validEvent).slice(-agentActivityLimit).map((event) => {
+    const cutoff = now.getTime() - activityRetentionMs;
+    this.events = migrated.filter(validEvent).filter(event =>
+      event.status === 'running' ? Date.parse(event.startedAt) > cutoff : activityIsRetained(event, cutoff)
+    ).map((event) => {
       const cloned = { ...event, summary: { ...event.summary } };
       if (cloned.status !== 'running') return cloned;
       changed = true;
@@ -191,11 +202,17 @@ export class AgentActivityStore {
       return cloned;
     });
     if (changed || this.events.length !== stored.length) await this.persistNow();
+    this.cleanupTimer ??= setInterval(() => {
+      if (this.pruneExpired()) this.changed();
+    }, 60 * 60 * 1000);
+    this.cleanupTimer.unref?.();
     this.emit();
   }
 
   snapshot(): readonly AgentActivityEvent[] {
-    return this.events.map((event) => ({ ...event, summary: { ...event.summary } }));
+    const cutoff = this.now().getTime() - activityRetentionMs;
+    return this.events.filter(event => activityIsRetained(event, cutoff))
+      .map(event => ({ ...event, summary: { ...event.summary } }));
   }
 
   onDidChange(listener: (events: readonly AgentActivityEvent[]) => void): { dispose(): void } {
@@ -204,6 +221,7 @@ export class AgentActivityStore {
   }
 
   start(input: AgentActivityStart): string {
+    this.pruneExpired();
     const event: AgentActivityEvent = {
       version: 1,
       id: randomUUID(),
@@ -218,9 +236,6 @@ export class AgentActivityStore {
       summary: summarizeAgentActivityInput(input.toolName, input.input)
     };
     this.events.push(event);
-    if (this.events.length > agentActivityLimit) {
-      this.events.splice(0, this.events.length - agentActivityLimit);
-    }
     this.changed();
     return event.id;
   }
@@ -279,14 +294,6 @@ export class AgentActivityStore {
     this.changed();
   }
 
-  async clear(): Promise<void> {
-    this.events = [];
-    if (this.persistTimer) clearTimeout(this.persistTimer);
-    this.persistTimer = undefined;
-    this.emit();
-    await this.persistNow();
-  }
-
   async flush(): Promise<void> {
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = undefined;
@@ -294,9 +301,19 @@ export class AgentActivityStore {
   }
 
   dispose(): void {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.cleanupTimer = undefined;
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = undefined;
     this.listeners.clear();
+  }
+
+  private pruneExpired(): boolean {
+    const cutoff = this.now().getTime() - activityRetentionMs;
+    const retained = this.events.filter(event => activityIsRetained(event, cutoff));
+    if (retained.length === this.events.length) return false;
+    this.events = retained;
+    return true;
   }
 
   private changed(): void {

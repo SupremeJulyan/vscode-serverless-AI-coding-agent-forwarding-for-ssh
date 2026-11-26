@@ -20,6 +20,7 @@ export interface SftpDirectoryEntry extends SftpFileStat {
 export interface SftpWriteOptions {
   create: boolean;
   overwrite: boolean;
+  append?: boolean;
   /** 显式权限（八进制，如 0o644）：SCP 回退下写入时直接使用，跳过 exists/权限探测。 */
   mode?: number;
 }

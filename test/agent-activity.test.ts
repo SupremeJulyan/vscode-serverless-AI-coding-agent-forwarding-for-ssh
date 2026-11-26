@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import {
-  AgentActivityStore, agentActivityLimit, summarizeAgentActivityInput
+  AgentActivityStore, summarizeAgentActivityInput
 } from '../src/agent/agent-activity';
 import { activityViewHtml, AgentActivityViewProvider } from '../src/agent/agent-activity-view';
 
@@ -67,7 +67,7 @@ test('activity summaries retain metadata without file contents or command output
   assert.equal(command.command, 'curl --token <hidden> https://example.test');
 });
 
-test('activity lifecycle persists bounded events and redacts failures', async () => {
+test('activity lifecycle persists recent events and redacts failures', async () => {
   const state = new MemoryState();
   let now = Date.parse('2026-09-11T01:00:00.000Z');
   const store = new AgentActivityStore(state, 'activity', () => new Date(now));
@@ -84,7 +84,7 @@ test('activity lifecycle persists bounded events and redacts failures', async ()
   assert.equal(failed.durationMs, 250);
   assert.equal(failed.error, 'request token=<hidden> failed');
 
-  for (let index = 0; index < agentActivityLimit + 5; index += 1) {
+  for (let index = 0; index < 205; index += 1) {
     const id = store.start({
       source: 'backend', agentName: 'Claude', toolName: 'remote_read',
       input: { path: `src/${index}.ts` }, mountName: 'dev', workspaceRoot: '/srv/project'
@@ -93,7 +93,7 @@ test('activity lifecycle persists bounded events and redacts failures', async ()
   }
   await store.flush();
   const stored = state.get<any[]>('activity', []);
-  assert.equal(stored.length, agentActivityLimit);
+  assert.equal(stored.length, 206);
   assert.equal(JSON.stringify(stored).includes('must not persist'), false);
   store.dispose();
 });
@@ -130,7 +130,7 @@ test('activity Webview uses a strict CSP and exposes timeline controls', () => {
   assert.match(html, /class="orb-wave"/);
   assert.equal(html.includes("orb.textContent = kind"), false);
   assert.match(html, /全部类型/);
-  assert.match(html, /type: 'clear'/);
+  assert.doesNotMatch(html, /id="clear"|清空当前窗口记录/);
   assert.match(html, />工作区模式<\/span>/);
   assert.equal(html.includes('terminalModeLabel'), false);
   assert.match(html, /id="workspaceModeSelect"[^>]*hidden/);

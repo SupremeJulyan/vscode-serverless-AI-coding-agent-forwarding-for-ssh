@@ -287,7 +287,7 @@ test('Node.js CLI lists and executes through the existing SAFS router', async ()
       command: executable,
       args: [
         '--config', config, 'write', '--id', workspaceId,
-        'write.txt', '--content', 'replacement'
+        'write.txt', 'replacement'
       ]
     });
     for (const [verb, flag] of [
@@ -441,9 +441,30 @@ test('Node.js CLI global options preserve content values over IPC', async () => 
     const help = await executeCaptured({ command: developmentNodeCli(), args: ['--config', config, 'edit', '--help'] });
     assert.equal(help.exitCode, 0, help.stderr);
     assert.match(help.stdout, /^Usage: safs edit /);
+    const write = (...args: string[]) => executeCaptured({
+      command: developmentNodeCli(),
+      args: ['--config', config, 'write', 'note.txt', '--id', 'chosen', ...args]
+    });
+    for (const [flags, append] of [
+      [[], undefined], [['--append'], true], [['--overwrite'], false]
+    ] as const) {
+      const result = await write('new text', ...flags);
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).content, 'new text');
+      assert.equal(JSON.parse(result.stdout).append, append);
+    }
+    for (const flags of [['--append', '--overwrite'], ['--overwrite', '--append']]) {
+      const result = await write('new text', ...flags);
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /Specify at most one write mode/);
+      assert.equal(result.stdout, '');
+    }
+    const legacy = await write('--content', 'new text');
+    assert.equal(legacy.exitCode, 1);
+    assert.match(legacy.stderr, /Invalid option for write: --content/);
     for (const content of ['--compact', '--verbose', '--help', '-h']) {
       const result = await executeCaptured({ command: developmentNodeCli(), args: [
-        '--config', config, '--compact', 'write', 'note.txt', '--id', 'chosen', '--content', content
+        '--config', config, '--compact', 'write', 'note.txt', '--id', 'chosen', '--', content
       ] });
       assert.equal(result.exitCode, 0, result.stderr);
       assert.equal(JSON.parse(result.stdout).content, content);

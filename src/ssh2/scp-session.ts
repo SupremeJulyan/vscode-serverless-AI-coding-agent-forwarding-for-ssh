@@ -571,6 +571,14 @@ export class ScpSession implements SftpSession {
     options: SftpWriteOptions,
     signal?: AbortSignal
   ): Promise<void> {
+    if (options.append) {
+      const target = shellQuote(remotePath);
+      const result = await this.exec(
+        `test -f ${target} && test ! -L ${target} && cat >> ${target}`, Buffer.from(content), signal
+      );
+      if (result.code !== 0) throw new Error(`追加写入失败: ${missingPathDetail(result.stderr.toString())}`);
+      return;
+    }
     if (options.create && !options.overwrite) {
       if (await this.pathExists(remotePath, signal)) {
         throw errno(4, `文件已存在: ${remotePath}`);

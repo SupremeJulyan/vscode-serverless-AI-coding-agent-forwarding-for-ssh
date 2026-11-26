@@ -34,6 +34,7 @@ export async function downloadRemoteDirectoryTree(options: {
   concurrency: number;
   signal?: AbortSignal;
   secureLocalRoot?: string;
+  requireRegularEntries?: boolean;
   onProgress?: (progress: RemoteDirectoryDownloadProgress) => void;
   /** 追加诊断日志；失败不影响传输。 */
   log?: (message: string) => void;
@@ -129,6 +130,9 @@ export async function downloadRemoteDirectoryTree(options: {
     for (const entry of entries) {
       if (controller.signal.aborted) throw new Error('目录下载已取消');
       assertSafeRemoteEntryName(entry.name);
+      if (options.requireRegularEntries && entry.type !== 'file' && entry.type !== 'directory') {
+        throw new Error(`无法完整备份目录，包含不支持的条目：${entry.name}`);
+      }
       if (entry.type === 'symbolic-link') continue;
       const relative = relativeDirectory
         ? path.posix.join(relativeDirectory, entry.name)

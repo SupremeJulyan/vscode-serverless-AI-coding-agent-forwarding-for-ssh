@@ -17,7 +17,7 @@ export interface AgentOperationCallbacks<Source extends AgentActivitySource> {
   edit(input: {
     mountName?: string; path: string; edits: Array<{ oldText: string; newText: string }>;
   }): Promise<unknown>;
-  write(input: { mountName?: string; path: string; content: string }): Promise<unknown>;
+  write(input: { mountName?: string; path: string; content: string; append?: boolean }): Promise<unknown>;
   create?(input: { mountName?: string; path: string; type: 'file' | 'directory'; content?: string }): Promise<unknown>;
   delete(input: { mountName?: string; path: string; recursive?: boolean }): Promise<unknown>;
   chmod(input: { mountName?: string; path: string; mode: string }): Promise<unknown>;

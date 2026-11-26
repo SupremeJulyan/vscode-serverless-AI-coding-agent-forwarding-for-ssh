@@ -65,13 +65,6 @@ export class AgentActivityViewProvider implements vscode.WebviewViewProvider, vs
         if (!event?.snapshotId || event.snapshotExpired) return;
         try { await this.actions?.snapshotAction?.(event, type === 'snapshotDiff' ? 'diff' : 'restore'); }
         catch (error) { void notificationWindow.showErrorMessage(error instanceof Error ? error.message : String(error)); }
-      } else if (type === 'clear') {
-        const selected = await notificationWindow.showWarningMessage(
-          '确定清空当前窗口的 Agent 活动记录吗？',
-          { modal: true },
-          '清空'
-        );
-        if (selected === '清空') await this.store.clear();
       } else if (type === 'setWorkspaceMode') {
         const mode = (message as { mode?: unknown }).mode;
         if (mode !== 'workspace' && mode !== 'terminalDirect') return;
@@ -191,7 +184,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
     .status-detail { color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     @keyframes pulse { from { transform: scale(.8); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
     @keyframes wave { to { stroke-dashoffset: -6; } }
-    .controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 5px; margin-bottom: 8px; }
+    .controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 5px; margin-bottom: 8px; }
     .agent-mode {
       display: grid; gap: 6px;
       margin-bottom: 8px; padding: 7px 8px; border: 1px solid var(--vscode-widget-border);
@@ -274,7 +267,9 @@ export function activityViewHtml(webview: vscode.Webview): string {
       <option value="all">全部状态</option><option value="running">执行中</option>
       <option value="success">成功</option><option value="error">失败/中断</option>
     </select>
-    <button id="clear" type="button" title="清空当前窗口记录">清空</button>
+    <select id="eventDate" aria-label="按日期筛选">
+      <option value="all">全部日期</option>
+    </select>
   </div>
   <main id="timeline" class="timeline"></main>
   <script nonce="${nonce}">
@@ -286,6 +281,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
     const orb = document.getElementById('orb');
     const categoryFilter = document.getElementById('category');
     const statusFilter = document.getElementById('eventStatus');
+    const dateFilter = document.getElementById('eventDate');
     const workspaceModeLabel = document.getElementById('workspaceModeLabel');
     const workspaceModeSelect = document.getElementById('workspaceModeSelect');
     const switchWorkspace = document.getElementById('switchWorkspace');
@@ -393,11 +389,33 @@ export function activityViewHtml(webview: vscode.Webview): string {
       if (Object.keys(event.summary || {}).length || event.error) card.appendChild(detailList(event));
       return card;
     }
+    function localEventDate(event) {
+      const date = new Date(event.startedAt);
+      if (!Number.isFinite(date.getTime())) return '';
+      return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
+        .map(function(part) { return String(part).padStart(2, '0'); }).join('-');
+    }
+    function refreshDateFilter() {
+      const selected = dateFilter.value;
+      const dates = Array.from(new Set(events.map(localEventDate).filter(Boolean))).sort().reverse();
+      dateFilter.replaceChildren();
+      ['all'].concat(dates).forEach(function(value) {
+        const parts = value.split('-');
+        const label = value === 'all' ? '全部日期'
+          : parts[0] + '年' + Number(parts[1]) + '月' + Number(parts[2]) + '日';
+        const option = textElement('option', '', label);
+        option.value = value;
+        dateFilter.appendChild(option);
+      });
+      dateFilter.value = dates.includes(selected) ? selected : 'all';
+    }
     function filtered() {
       const category = categoryFilter.value;
       const state = statusFilter.value;
+      const date = dateFilter.value || 'all';
       return events.filter(function(event) {
         if (category !== 'all' && event.category !== category) return false;
+        if (date !== 'all' && localEventDate(event) !== date) return false;
         if (state === 'error') return event.status === 'error' || event.status === 'interrupted';
         return state === 'all' || event.status === state;
       });
@@ -430,6 +448,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
           reset.addEventListener('click', function() {
             categoryFilter.value = 'all';
             statusFilter.value = 'all';
+            dateFilter.value = 'all';
             render();
           });
           timeline.appendChild(reset);
@@ -479,6 +498,7 @@ export function activityViewHtml(webview: vscode.Webview): string {
       seenStatus.clear();
       incoming.forEach(function(event) { seenStatus.set(event.id, event.status); });
       events = incoming;
+      refreshDateFilter();
       const running = events.slice().reverse().find(function(event) { return event.status === 'running'; });
       if (running) {
         setStatus('running', (displayedAgentName(running) ? displayedAgentName(running) + ' ' : '') + '正在' + label(running), target(running));
@@ -533,10 +553,10 @@ export function activityViewHtml(webview: vscode.Webview): string {
     });
     categoryFilter.addEventListener('change', render);
     statusFilter.addEventListener('change', render);
+    dateFilter.addEventListener('change', render);
     workspaceModeSelect.addEventListener('change', function() {
       vscode.postMessage({ type: 'setWorkspaceMode', mode: workspaceModeSelect.value });
     });
-    document.getElementById('clear').addEventListener('click', function() { vscode.postMessage({ type: 'clear' }); });
     switchWorkspace.addEventListener('click', function() {
       vscode.postMessage({ type: 'switchWorkspace' });
     });

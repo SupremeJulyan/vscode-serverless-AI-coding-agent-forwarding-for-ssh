@@ -17,12 +17,12 @@ const allowed: Record<string, string[]> = {
   workspaces: [], 'current-file': [], list: ['path', 'limit', 'cursor'],
   read: ['offset', 'length', 'head', 'tail', 'start-line', 'line-count'],
   'find-text': ['path', 'query', 'mode'], 'find-name': ['path', 'name'], edit: ['path'],
-  write: ['path', 'content'], create: ['path', 'type', 'content'], delete: ['path'],
+  write: ['path'], create: ['path', 'type', 'content'], delete: ['path'],
   chmod: ['path', 'mode'], move: ['source-path', 'target-path'], upload: [], download: [],
   output: ['output-id', 'stream', 'offset', 'length'], exec: []
 };
 const positional: Record<string, string[]> = {
-  list: ['path'], read: ['path'], edit: ['path'], write: ['path'], delete: ['path'],
+  list: ['path'], read: ['path'], edit: ['path'], write: ['path', 'content'], delete: ['path'],
   create: ['path', 'type'], 'find-text': ['query', 'path'], 'find-name': ['name', 'path'],
   chmod: ['path', 'mode'], move: ['sourcePath', 'targetPath'],
   download: ['remotePath', 'localPath'], output: ['outputId', 'stream'], exec: ['command']
@@ -33,7 +33,7 @@ const namedFields: Record<string, string> = {
   'source-path': 'sourcePath', 'target-path': 'targetPath'
 };
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
-const booleanOptions = new Set(['--compact', '--verbose', '--raw', '--allow-empty', '--recursive']);
+const booleanOptions = new Set(['--compact', '--verbose', '--raw', '--allow-empty', '--append', '--overwrite', '--recursive']);
 function option(args: string[], flag: string): string | undefined {
   for (let i = 0; i < args.length && args[i] !== '--'; i++) {
     const arg = args[i];
@@ -105,16 +105,28 @@ async function parse(args: string[]) {
     const uploadPaths: string[] = [];
     while (args.length) {
       const flag = args.shift()!;
+      if (verb === 'write' && (flag === '--append' || flag === '--overwrite')) {
+        if ('append' in values) throw new Error('Specify at most one write mode: --append or --overwrite');
+        assign('append', flag === '--append');
+        continue;
+      }
       if ((verb === 'write' && flag === '--allow-empty') || (verb === 'delete' && ['-r', '--recursive'].includes(flag))) {
         assign(verb === 'write' ? 'allowEmpty' : 'recursive', true); continue;
       }
       if (flag === '--') {
+        if (verb === 'write') {
+          if (!('path' in values) || args.length !== 1) throw new Error('Pass one text argument after --');
+          assign('content', args.shift());
+          break;
+        }
         if (verb !== 'exec' || args.length !== 1) throw new Error('Pass one remote command after --');
         assign('command', args.shift()); break;
       }
       if (!flag.startsWith('--')) {
         if (verb === 'upload') { uploadPaths.push(flag); continue; }
-        const key = positional[verb]?.[pos++];
+        const key = verb === 'write'
+          ? positional.write.find(field => !(field in values))
+          : positional[verb]?.[pos++];
         if (!key) throw new Error(`Too many arguments for ${verb}`);
         assign(key, flag); continue;
       }
@@ -164,7 +176,7 @@ async function parse(args: string[]) {
       if (!['stdout', 'stderr'].includes(values.stream)) throw new Error('--stream stdout|stderr is required');
     }
     if (verb === 'exec' && (typeof values.command !== 'string' || !values.command.trim())) throw new Error('Remote command is required');
-    if (verb === 'write' && !('content' in values)) throw new Error('Write content is required. Use --content TEXT, or upload a local file for large replacements.');
+    if (verb === 'write' && !('content' in values)) throw new Error('Write content is required. Pass TEXT after PATH, or upload a local file for large replacements.');
     if (verb === 'create') {
       if (!['file', 'directory'].includes(values.type)) throw new Error('Create type must be file or directory');
       if (values.type === 'directory' && 'content' in values) throw new Error('Directory creation does not accept content');

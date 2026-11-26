@@ -240,14 +240,14 @@ export class Ssh2SftpSession implements SftpSession {
   ): Promise<void> {
     signal?.throwIfAborted();
     // Numeric SFTP flags allow WRITE|TRUNC without CREATE for existing files.
-    const flags = 0x02 | 0x10 | (options.create ? 0x08 : 0) | (!options.overwrite ? 0x20 : 0);
+    const flags = 0x02 | (options.append ? 0x04 : 0x10) | (options.create ? 0x08 : 0) | (!options.overwrite ? 0x20 : 0);
     const handle = await callback<Buffer>(done => this.sftp.open(
       remotePath, flags, { mode: options.mode ?? 0o600 }, done
     ), undefined, sftpControlTimeoutMs);
     try {
       signal?.throwIfAborted();
       const chunkBytes = 256 * 1024;
-      const concurrency = 4;
+      const concurrency = options.append ? 1 : 4;
       const buffer = Buffer.from(content.buffer, content.byteOffset, content.byteLength);
       for (let start = 0; start < buffer.length; start += chunkBytes * concurrency) {
         signal?.throwIfAborted();

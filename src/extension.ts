@@ -1,3 +1,5 @@
+import { localMutationBackupRoot, pruneLocalMutationBackups } from './remote/local-mutation-backup';
+import { exceedsDeleteSnapshotLimit } from './remote/delete-snapshot-size';
 import { notificationWindow } from './ui/notification-window';
 import { refreshWorkspaceUri } from './remote/refresh-workspace-uri';
 import { collectMountAliases, resolveMountAlias } from './config/mount-aliases';
@@ -58,7 +60,7 @@ import { pageDirectory, searchResult } from './remote/remote-results';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, utimes } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import * as vscode from 'vscode';
 import {
@@ -1909,7 +1911,7 @@ async function downloadRemoteFile(
 async function transferRemoteFileToLocal(
   session: SftpSession, remotePath: string,
   remote: { size: number; mtimeMs: number; permissions?: number },
-  target: string, transferTimeoutMs: number | undefined
+  target: string, transferTimeoutMs: number | undefined, quiet = false
 ): Promise<boolean> {
   const totalBytes = remote.size;
   const baseName = path.posix.basename(remotePath);
@@ -1956,7 +1958,7 @@ async function transferRemoteFileToLocal(
         message: `完成：${formatDownloadBytes(totalBytes)}`,
         increment: totalBytes > 0 ? 100 - cumulative / totalBytes * 100 : undefined
       });
-      showTransferCompleted(`下载完成：${baseName} · 1 个文件，${formatDownloadBytes(cumulative)} → ${target}`);
+      if (!quiet) showTransferCompleted(`下载完成：${baseName} · 1 个文件，${formatDownloadBytes(cumulative)} → ${target}`);
       return true;
     } catch (error) {
       await rm(partPath, { force: true }).catch(() => undefined);
@@ -1976,7 +1978,7 @@ async function transferRemoteFileToLocal(
 
 async function downloadRemoteDirectory(
   session: SftpSession, remotePath: string, forcedLocalPath?: string,
-  transferTimeoutMs?: number, secureLocalRoot?: string
+  transferTimeoutMs?: number, secureLocalRoot?: string, requireRegularEntries = false, quiet = false
 ): Promise<boolean> {
   const baseName = path.posix.basename(remotePath);
   let targetRoot = forcedLocalPath;
@@ -2014,6 +2016,7 @@ async function downloadRemoteDirectory(
         concurrency: 4,
         signal: controller.signal,
         secureLocalRoot,
+        requireRegularEntries,
         onProgress: (state) => {
           const now = Date.now();
           if (lastReportAt > 0 && now - lastReportAt < 100) return;
@@ -2033,7 +2036,7 @@ async function downloadRemoteDirectory(
           formatDownloadBytes(result.transferredBytes)
         }）`
       });
-      showTransferCompleted(`目录下载完成：${baseName} · ${result.files} 个文件，${formatDownloadBytes(result.transferredBytes)} → ${selectedTargetRoot}`);
+      if (!quiet) showTransferCompleted(`目录下载完成：${baseName} · ${result.files} 个文件，${formatDownloadBytes(result.transferredBytes)} → ${selectedTargetRoot}`);
       return true;
     } catch (error) {
       if (controller.signal.aborted) {
@@ -3561,8 +3564,41 @@ async function remoteRead(input: RemoteReadOptions & { mountName: string }, cli 
 
 }
 
+async function downloadMutationBackup(
+  context: vscode.ExtensionContext, session: SftpSession, remotePath: string,
+  remote: Awaited<ReturnType<SftpSession['stat']>>, timeoutMs?: number
+): Promise<{ localBackupPath: string }> {
+  const storage = context.globalStorageUri.fsPath;
+  void pruneLocalMutationBackups(storage).catch(error => logAsyncFailure('清理过期本地备份失败', error));
+  const parent = localMutationBackupRoot(storage);
+  await mkdir(parent, { recursive: true, mode: 0o700 });
+  const root = await mkdtemp(path.join(parent, 'backup-'));
+  const localBackupPath = path.join(root, 'original');
+  try {
+    const completed = remote.type === 'directory'
+      ? await downloadRemoteDirectory(session, remotePath, localBackupPath, timeoutMs, root, true, true)
+      : await transferRemoteFileToLocal(session, remotePath, {
+        size: remote.size, mtimeMs: remote.mtime, permissions: 0o600
+      }, localBackupPath, timeoutMs, true);
+    if (!completed) throw new Error('Local backup was cancelled. The remote operation did not start.');
+    const current = await session.stat(remotePath);
+    if (current.type !== remote.type || current.size !== remote.size || current.mtime !== remote.mtime) {
+      throw new Error('Remote path changed during backup. The remote operation did not start.');
+    }
+    if (remote.type === 'file' && (await stat(localBackupPath)).size !== remote.size) {
+      throw new Error('Local backup is incomplete. The remote operation did not start.');
+    }
+    const completedAt = new Date();
+    await utimes(root, completedAt, completedAt);
+    return { localBackupPath };
+  } catch (error) {
+    await rm(root, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function remoteWrite(input: {
-  mountName: string; path: string; content: string; allowEmpty?: boolean;
+  mountName: string; path: string; content: string; allowEmpty?: boolean; append?: boolean;
 }, context?: vscode.ExtensionContext): Promise<unknown> {
   const { folder } = await mountAndFolder(input.mountName);
   const workspaceRoot = currentWorkspacePath(folder);
@@ -3574,22 +3610,31 @@ async function remoteWrite(input: {
   }
   const uri = vscode.Uri.parse(folderUri(folder, remotePath));
   const content = new TextEncoder().encode(input.content);
+  let localBackup: { localBackupPath: string } | undefined;
+  let targetExists = false;
   if (context) {
-    assertCliTextSize(content.length);
     if (input.allowEmpty !== undefined && typeof input.allowEmpty !== 'boolean') throw new Error('allowEmpty must be a boolean');
     if (input.allowEmpty !== true && !input.content.trim()) throw new Error('Empty replacement requires --allow-empty');
     const session = await pool.get(folder.hostName);
     await verifiedRemoteDestination(folder, session, input.path);
-    try {
-      const existing = await session.stat(remotePath);
-      if (existing.type !== 'file') throw new Error('SAFS write requires a regular file');
-      assertCliTextSize(existing.size);
-    } catch (error) {
+    const existing = await session.stat(remotePath).catch((error: unknown) => {
       if (!isMissingRemoteError(error)) throw error;
+      return undefined;
+    });
+    if (existing && existing.type !== 'file') throw new Error('SAFS write requires a regular file');
+    targetExists = existing !== undefined;
+    if (existing && existing.size > maxCliTextBytes) {
+      localBackup = await downloadMutationBackup(context, session, remotePath, existing,
+        settings().get<number>('agentBackendTimeoutMs', 120_000));
     }
   }
-  const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_write', [remotePath]);
-  const saved = await provider.saveFile(uri, content, { create: true, overwrite: true }, false, workspaceRoot);
+  const snapshot = localBackup ?? await captureCliSnapshot(context, input.mountName, folder, 'remote_write', [remotePath]);
+  if (context && input.append === true) {
+    await provider.appendFile(uri, content, workspaceRoot, targetExists);
+    return { path: remotePath, ...snapshot, written: true, bytes: content.length, append: true };
+  }
+  const saved = await provider.saveFile(uri, content, { create: true, overwrite: true }, false,
+    workspaceRoot, undefined, context ? 'overwrite' : 'reject');
   return { path: remotePath, ...snapshot, ...(saved.remotePreferred
     ? adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions, !context)
     : { written: true, bytes: saved.bytes }) };
@@ -3639,18 +3684,19 @@ async function remoteEdit(input: {
   if (entry.stat.type !== 'file') {
     throw new Error(`remote_edit requires a regular file: ${input.path}`);
   }
-  if (context) assertCliTextSize(entry.stat.size);
-  if (!context && entry.stat.size > maxRemoteEditFileBytes) {
-    throw new Error(`remote_edit source exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
+  // Text edits hold both the source and result in memory.
+  const editLimit = context ? 64 * 1024 * 1024 : maxRemoteEditFileBytes;
+  if (entry.stat.size > editLimit) {
+    throw new Error(`remote_edit source exceeds ${editLimit} bytes: ${input.path}`);
   }
   const data = await session.readFile(entry.remotePath);
-  const sourceStat = await session.stat(entry.remotePath);
-  if (sourceStat.size !== data.byteLength) {
+  const expectedVersion = context ? undefined : await session.stat(entry.remotePath);
+  if (expectedVersion && (expectedVersion.type !== 'file' || expectedVersion.size !== data.byteLength
+    || expectedVersion.size !== entry.stat.size || expectedVersion.mtime !== entry.stat.mtime)) {
     throw new Error(`remote_edit source changed while it was being read: ${input.path}`);
   }
-  if (context) assertCliTextSize(data.length);
-  if (!context && data.length > maxRemoteEditFileBytes) {
-    throw new Error(`remote_edit source exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
+  if (data.length > editLimit) {
+    throw new Error(`remote_edit source exceeds ${editLimit} bytes: ${input.path}`);
   }
   let content: string;
   try {
@@ -3660,14 +3706,16 @@ async function remoteEdit(input: {
   }
   const edited = applyRemoteTextEdits(content, input.edits);
   const encoded = new TextEncoder().encode(edited.content);
-  if (context) assertCliTextSize(encoded.length);
-  if (!context && encoded.length > maxRemoteEditFileBytes) {
-    throw new Error(`remote_edit result exceeds ${maxRemoteEditFileBytes} bytes: ${input.path}`);
+  if (encoded.length > editLimit) {
+    throw new Error(`remote_edit result exceeds ${editLimit} bytes: ${input.path}`);
   }
   const uri = vscode.Uri.parse(folderUri(folder, entry.remotePath));
-  const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_edit', [entry.remotePath]);
-  const saved = await provider.saveFile(uri, encoded, { create: false, overwrite: true }, false, undefined,
-    { size: sourceStat.size, mtime: sourceStat.mtime });
+  const snapshot = context && entry.stat.size > maxCliTextBytes
+    ? await downloadMutationBackup(context, session, entry.remotePath, entry.stat,
+      settings().get<number>('agentBackendTimeoutMs', 120_000))
+    : await captureCliSnapshot(context, input.mountName, folder, 'remote_edit', [entry.remotePath]);
+  const saved = await provider.saveFile(uri, encoded, { create: false, overwrite: true }, false,
+    currentWorkspacePath(folder), expectedVersion, context ? 'overwrite' : 'reject');
   if (saved.remotePreferred) return { path: entry.remotePath, replacements: 0, ...snapshot, ...adoptedRemoteSaveResult(saved.remoteContent!, saved.permissions, !context) };
   return {
     path: entry.remotePath,
@@ -3739,16 +3787,33 @@ async function verifiedRemoteDestination(
 async function remoteDelete(input: {
   mountName: string; path: string; recursive?: boolean;
 }, context?: vscode.ExtensionContext): Promise<unknown> {
+  const timeoutMs = settings().get<number>('agentBackendTimeoutMs', 120_000);
+  const deadline = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+  const startedAt = Date.now();
   const { folder } = await mountAndFolder(input.mountName);
   const session = await pool.get(folder.hostName);
   const entry = await verifiedRemoteEntry(folder, session, input.path, {
     allowSymbolicLink: true
   });
-  const snapshot = await captureCliSnapshot(context, input.mountName, folder, 'remote_delete', [entry.remotePath]);
-  await provider.delete(vscode.Uri.parse(folderUri(folder, entry.remotePath)), {
-    recursive: input.recursive === true
-  });
-  return { ...snapshot, path: entry.remotePath, type: entry.stat.type, recursive: input.recursive === true };
+  const recursive = input.recursive === true;
+  const uri = vscode.Uri.parse(folderUri(folder, entry.remotePath));
+  let backup: { snapshotId?: string; localBackupPath?: string } = {};
+  if (context) {
+    if (entry.stat.type === 'directory' && !recursive
+      && (await session.readDirectory(entry.remotePath, deadline)).length > 0) {
+      throw new Error('Directory is not empty. Use safs delete --recursive to delete it.');
+    }
+    if (await exceedsDeleteSnapshotLimit(session, entry.remotePath, entry.stat, recursive, deadline)) {
+      deadline?.throwIfAborted();
+      const remaining = deadline ? Math.max(1, timeoutMs - (Date.now() - startedAt)) : undefined;
+      backup = await downloadMutationBackup(context, session, entry.remotePath, entry.stat, remaining);
+    } else {
+      backup = await captureCliSnapshot(context, input.mountName, folder, 'remote_delete', [entry.remotePath]);
+    }
+    deadline?.throwIfAborted();
+  }
+  await provider.delete(uri, { recursive });
+  return { ...backup, path: entry.remotePath, type: entry.stat.type, recursive };
 }
 
 async function remoteChmod(input: {
@@ -6170,6 +6235,9 @@ async function guard(action: () => Promise<unknown>): Promise<void> {
 
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  void pruneLocalMutationBackups(context.globalStorageUri.fsPath).catch(
+    error => logAsyncFailure('清理过期本地备份失败', error)
+  );
   vscodeContext = context;
   const passwordMigration = new SshPasswordMigration({
     storage: context.secrets,
