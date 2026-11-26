@@ -92,7 +92,7 @@ import { AgentIpcRouter, workspaceIdFor } from './agent/agent-ipc-router';
 import { ipcPath } from './agent/agent-ipc';
 import { AgentMcpServer } from './mcp/agent-mcp';
 import { AgentHttpRouter, agentTaggedMcpUrl } from './mcp/agent-http-router';
-import { addRecordedMcpAgentName, normalizeAgentInterface, recordedMcpAgentNames, shouldCopyMcpUninstallPrompt } from './mcp/agent-interface';
+import { addRecordedMcpAgentName, agentMcpModeEnabled, normalizeAgentInterface, recordedMcpAgentNames, shouldCopyMcpUninstallPrompt } from './mcp/agent-interface';
 import { AgentActivityStore } from './agent/agent-activity';
 import { AgentActivityViewProvider, AgentTerminalTargetState, agentActivityViewId } from './agent/agent-activity-view';
 import { AgentWorkspacePublisher, discoverAgentWorkspaces } from './agent/agent-discovery';
@@ -530,6 +530,7 @@ function windowOperationProfile(): 'full' | 'terminal' {
 function backendMcpToolProfile(): 'full' | 'terminal' { return windowOperationProfile(); }
 
 async function ensureAgentMcpRouter(context: vscode.ExtensionContext): Promise<AgentHttpRouter> {
+  if (!agentMcpModeEnabled) throw new Error('SAFS MCP 模式已弃用并停用，请使用 CLI。');
   if (!mcpRouter) {
     const token = await agentMcpToken(context);
     mcpRouter = new AgentHttpRouter(
@@ -5347,6 +5348,7 @@ function routerMcpToolProfile(): 'full' | 'core' {
 }
 
 async function ensureAgentMcpServer(context: vscode.ExtensionContext): Promise<AgentMcpServer> {
+  if (!agentMcpModeEnabled) throw new Error('SAFS MCP 模式已弃用并停用，请使用 CLI。');
   const location = hasRemoteWorkspaceContext() ? currentRemoteLocation() : undefined;
   const terminal = activeAgentCommandTerminal();
   const terminalInfo = terminal ? managedRemoteTerminals.get(terminal) : undefined;

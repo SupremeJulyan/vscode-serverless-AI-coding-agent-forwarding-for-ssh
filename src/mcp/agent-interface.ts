@@ -1,5 +1,10 @@
 export type AgentInterface = 'mcp' | 'cli';
-export function normalizeAgentInterface(value: unknown): AgentInterface { return value === 'mcp' ? 'mcp' : 'cli'; }
+// Keep the MCP transport available in source while the mode is disabled.
+export const agentMcpModeEnabled = false;
+
+export function normalizeAgentInterface(value: unknown): AgentInterface {
+  return agentMcpModeEnabled && value === 'mcp' ? 'mcp' : 'cli';
+}
 export function shouldCopyMcpUninstallPrompt(previous: AgentInterface, current: AgentInterface, focused: boolean): boolean {
   return focused && previous === 'mcp' && current === 'cli';
 }

@@ -724,11 +724,11 @@
         "safs.agentInterface": {
           "type": "string",
           "enum": [
-            "mcp",
             "cli"
           ],
           "default": "cli",
-          "description": "Agent 接口。MCP 使用 HTTP Streamable transport，CLI 使用独立 IPC。"
+          "description": "Agent 转发使用 SAFS CLI。",
+          "deprecationMessage": "MCP 模式已弃用并停用。旧的 mcp 配置会自动使用 CLI。"
         },
         "safs.agentMcpToolProfile": {
           "type": "string",
@@ -737,19 +737,22 @@
             "core"
           ],
           "default": "full",
-          "description": "MCP 工具集：full 包含完整远程文件操作，core 使用精简工具集。"
+          "description": "MCP 工具集：full 包含完整远程文件操作，core 使用精简工具集。",
+          "deprecationMessage": "MCP 模式已弃用并停用，此设置当前不生效。"
         },
         "safs.agentMcpTimeoutMs": {
           "type": "number",
           "minimum": 0,
           "default": 120000,
-          "description": "MCP 操作超时时间（毫秒），0 表示不限制。"
+          "description": "MCP 操作超时时间（毫秒），0 表示不限制。",
+          "deprecationMessage": "MCP 模式已弃用并停用，此设置当前不生效。"
         },
         "safs.agentMcpPort": {
           "type": "number",
           "minimum": 0,
           "default": 0,
-          "description": "当前窗口 MCP HTTP 监听端口，0 表示自动分配。"
+          "description": "当前窗口 MCP HTTP 监听端口，0 表示自动分配。",
+          "deprecationMessage": "MCP 模式已弃用并停用，此设置当前不生效。"
         },
         "safs.agentHttpRouterPort": {
           "type": "number",

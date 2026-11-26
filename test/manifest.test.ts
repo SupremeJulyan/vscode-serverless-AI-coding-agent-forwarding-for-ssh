@@ -51,7 +51,7 @@ test('extension declares the SFTP filesystem activation event', async () => {
   );
   assert.deepEqual(
     manifest.contributes?.configuration?.properties?.['safs.agentInterface']?.enum,
-    ['mcp', 'cli']
+    ['cli']
   );
 });
 
