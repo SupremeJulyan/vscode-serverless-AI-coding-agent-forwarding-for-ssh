@@ -49,7 +49,7 @@ import { RemoteGitView } from './git/git-view';
 import { updateCliInstructions, writeCliConnectionFile, writePlaceholderGuidance } from './cli/cli-integration';
 import {
   ensureUnixCliPath, globalNodeCli, globalNodeCliSkill, installGlobalNodeCliSkill, installNodeCli, removeNodeCli,
-  NodeRuntimeUnavailableError, requireNodeRuntime, updateInstalledNodeCliSkills, NodeCliSkillTarget,
+  NodeRuntimeUnavailableError, resolveNodeRuntime, updateInstalledNodeCliSkills, NodeCliSkillTarget,
   nodeCliConnectionPath, nodeCliMatchesBundle,
   parseNodeCliVersion,
   windowsUserPathRemovePlan, windowsUserPathUpdatePlan
@@ -200,7 +200,7 @@ let ipcRouter: AgentIpcRouter | undefined;
 let ipcRouterCreation: Promise<AgentIpcRouter> | undefined;
 let ipcRouterStart: Promise<AgentIpcRouter> | undefined;
 /** 每个目标 CLI 在本次 Extension Host 生命周期只做一次真实版本检查。 */
-const cliVersionChecks = new Map<string, Promise<void>>();
+const cliVersionChecks = new Map<string, Promise<string | undefined>>();
 let cliSetupError: string | undefined;
 const cliPreparation = new Preparation<{ cliExecutable?: string }>();
 const cliAutoPrepareDisabledKey = 'safs.cliAutoPrepareDisabled';
@@ -5787,10 +5787,12 @@ function startAgentWorkspacePublishing(context: vscode.ExtensionContext): void {
   );
 }
 
-async function probeInstalledCliVersion(executable: string): Promise<string | undefined> {
+async function probeInstalledCliVersion(executable: string, nodeBin?: string): Promise<string | undefined> {
   try {
     const result = await executeCaptured(
-      { command: executable, args: ['--version'] }, AbortSignal.timeout(5_000), 4096
+      { command: executable, args: ['--version'],
+        env: nodeBin ? { PATH: [nodeBin, process.env.PATH].filter(Boolean).join(path.delimiter) } : undefined
+      }, AbortSignal.timeout(5_000), 4096
     );
     if (result.exitCode !== 0) return undefined;
     return parseNodeCliVersion(`${result.stdout}\n${result.stderr}`);
@@ -5802,19 +5804,19 @@ async function probeInstalledCliVersion(executable: string): Promise<string | un
 async function ensureGlobalCliVersion(
   context: vscode.ExtensionContext, executable: string,
   cliPlatform: NodeJS.Platform, agentHome: string
-): Promise<void> {
+): Promise<string | undefined> {
   const extensionVersion = String(context.extension.packageJSON?.version ?? '');
   if (!extensionVersion) throw new Error('无法读取当前 SAFS 插件版本');
   const checkKey = `node\0${cliPlatform}\0${executable}\0${extensionVersion}`;
   const existing = cliVersionChecks.get(checkKey);
   if (existing) return existing;
   const check = (async () => {
-    await requireNodeRuntime(() => executeCaptured(
-      { command: 'node', args: ['--version'] }, AbortSignal.timeout(5000), 4096
-    ));
+    const nodeBin = await resolveNodeRuntime(agentHome, cliPlatform, process.env.NVM_DIR, command =>
+      executeCaptured({ command, args: ['--version'] }, AbortSignal.timeout(5_000), 4096)
+    );
     const fileExists = await access(executable).then(() => true, () => false);
     const installedVersion = fileExists
-      ? await probeInstalledCliVersion(executable)
+      ? await probeInstalledCliVersion(executable, nodeBin)
       : undefined;
     const bundledSource = path.join(context.extensionPath, 'dist', 'safs-cli.js');
     const matchesBundle = await nodeCliMatchesBundle(executable, cliPlatform, bundledSource);
@@ -5824,7 +5826,7 @@ async function ensureGlobalCliVersion(
         `extension=${extensionVersion}；platform=${cliPlatform}`
       );
       await installNodeCli(agentHome, cliPlatform, extensionVersion, bundledSource);
-      const refreshedVersion = await probeInstalledCliVersion(executable);
+      const refreshedVersion = await probeInstalledCliVersion(executable, nodeBin);
       if (refreshedVersion !== extensionVersion) {
         throw new Error(
           `SAFS CLI 更新后版本仍不一致：期望 ${extensionVersion}，实际 ${
@@ -5841,6 +5843,7 @@ async function ensureGlobalCliVersion(
       home: agentHome
     });
     cliSetupError = undefined;
+    return nodeBin;
   })().catch((error) => {
     cliSetupError = redactSensitiveText(error instanceof Error ? error.message : String(error));
     throw error;
@@ -5858,15 +5861,16 @@ async function installGlobalCli(
   const cliPlatform = process.platform;
   const executable = globalNodeCli(agentHome, cliPlatform);
   // 核对版本与打包内容，将旧版原生二进制迁移为 Node.js CLI。
-  await ensureGlobalCliVersion(
+  const nodeBin = await ensureGlobalCliVersion(
     context, executable, cliPlatform, agentHome
   );
-  await configureGlobalCliConnection(context, executable, routerSocketPath, routerToken);
+  await configureGlobalCliConnection(context, executable, routerSocketPath, routerToken, nodeBin);
   return executable;
 }
 
 async function configureGlobalCliConnection(
-  context: vscode.ExtensionContext, executable: string, routerSocketPath: string, routerToken: string
+  context: vscode.ExtensionContext, executable: string, routerSocketPath: string, routerToken: string,
+  nodeBin?: string
 ): Promise<void> {
   const agentHome = os.homedir();
   const cliPlatform = process.platform;
@@ -5886,7 +5890,7 @@ async function configureGlobalCliConnection(
   if (!current.includes(binDirectory)) {
     process.env.PATH = `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`;
   }
-  context.environmentVariableCollection.prepend('PATH', `${binDirectory}${path.delimiter}`);
+  context.environmentVariableCollection.prepend('PATH', [binDirectory, nodeBin, ''].filter(value => value !== undefined).join(path.delimiter));
 }
 
 async function uninstallGlobalCli(context: vscode.ExtensionContext): Promise<string> {
@@ -6593,9 +6597,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const tree = new RemoteFoldersProvider(context);
   const remoteWorkspaces = new RemoteWorkspacesViewProvider();
+  const remoteWorkspacesTree = vscode.window.createTreeView(remoteWorkspacesViewId, {
+    treeDataProvider: remoteWorkspaces
+  });
+  remoteWorkspaces.attachView(remoteWorkspacesTree);
   context.subscriptions.push(
     remoteWorkspaces,
-    vscode.window.registerTreeDataProvider(remoteWorkspacesViewId, remoteWorkspaces),
+    remoteWorkspacesTree,
     vscode.commands.registerCommand('safs.focusRemoteWorkspace', async (instanceId: Parameters<RemoteWorkspacesViewProvider['focus']>[0]) => {
       try { await remoteWorkspaces.focus(instanceId); }
       catch (error) { void notificationWindow.showErrorMessage(error instanceof Error ? error.message : String(error)); }

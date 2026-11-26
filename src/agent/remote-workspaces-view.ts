@@ -13,6 +13,9 @@ export const remoteWorkspacesViewId = 'safs.remoteWorkspaces';
 export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<RemoteWorkspaceItem>, vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<RemoteWorkspaceItem | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private treeView: vscode.TreeView<RemoteWorkspaceItem> | undefined;
+  private visibilityListener: vscode.Disposable | undefined;
+  private selectionSync: Promise<void> = Promise.resolve();
   private watcher: FSWatcher | undefined;
   private expiryTimer: NodeJS.Timeout | undefined;
   private watchRetryTimer: NodeJS.Timeout | undefined;
@@ -22,6 +25,29 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
 
   constructor() {
     void this.startWatching();
+  }
+
+  attachView(view: vscode.TreeView<RemoteWorkspaceItem>): void {
+    this.visibilityListener?.dispose();
+    this.treeView = view;
+    this.visibilityListener = view.onDidChangeVisibility(({ visible }) => {
+      if (visible) this.syncFocusedSelection();
+    });
+    this.syncFocusedSelection();
+  }
+
+  // TreeView.reveal requires getParent, even for a flat tree.
+  getParent(): undefined { return undefined; }
+
+  private syncFocusedSelection(): void {
+    this.selectionSync = this.selectionSync.catch(() => undefined).then(async () => {
+      const view = this.treeView;
+      if (!view?.visible) return;
+      const focusedId = this.workspaces.find(record => record.focused)?.instanceId;
+      if (!focusedId || view.selection[0]?.id === focusedId) return;
+      const item = this.getChildren().find(candidate => candidate.id === focusedId);
+      if (item) await view.reveal(item, { select: true, focus: false });
+    }).catch(() => undefined);
   }
 
   getTreeItem(item: RemoteWorkspaceItem): vscode.TreeItem { return item; }
@@ -44,7 +70,10 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
       .map(entry => entry.item);
   }
 
-  refresh(): void { this.emitter.fire(undefined); }
+  refresh(): void {
+    this.emitter.fire(undefined);
+    this.syncFocusedSelection();
+  }
 
   private refreshIfWorkspacesChanged(): void {
     const workspaces = discoverAgentWorkspaces();
@@ -140,6 +169,8 @@ export class RemoteWorkspacesViewProvider implements vscode.TreeDataProvider<Rem
   }
 
   dispose(): void {
+    this.treeView = undefined;
+    this.visibilityListener?.dispose();
     this.watcher?.close();
     this.watcher = undefined;
     if (this.expiryTimer) clearTimeout(this.expiryTimer);

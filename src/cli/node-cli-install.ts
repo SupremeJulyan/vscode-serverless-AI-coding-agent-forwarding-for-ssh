@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { chmod, cp, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import type { CommandPlan } from '../platform/platform';
 
@@ -17,6 +17,42 @@ export async function requireNodeRuntime(
   if (!result || result.exitCode !== 0 || Number(/^v(\d+)\.\d+\.\d+\s*$/.exec(result.stdout.trim())?.[1] ?? 0) < 18) {
     throw new NodeRuntimeUnavailableError();
   }
+}
+
+export async function resolveNodeRuntime(
+  home: string, platform: NodeJS.Platform, nvmDirectory: string | undefined,
+  probe: (executable: string) => Promise<{ exitCode: number; stdout: string }>
+): Promise<string | undefined> {
+  try {
+    await requireNodeRuntime(() => probe('node'));
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof NodeRuntimeUnavailableError)) throw error;
+  }
+  if (platform !== 'win32') {
+    const roots = [...new Set([nvmDirectory, path.join(home, '.nvm')].filter(
+      (root): root is string => !!root && path.isAbsolute(root)
+    ))];
+    for (const root of roots) {
+      const versions = path.join(root, 'versions', 'node');
+      const entries = await readdir(versions).catch(() => [] as string[]);
+      const candidates = entries.flatMap(name => {
+        const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(name);
+        if (!match || Number(match[1]) < 18) return [];
+        return [{ name, major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) }];
+      }).sort((a, b) => b.major - a.major || b.minor - a.minor || b.patch - a.patch);
+      for (const candidate of candidates) {
+        const bin = path.join(versions, candidate.name, 'bin');
+        try {
+          await requireNodeRuntime(() => probe(path.join(bin, 'node')));
+          return bin;
+        } catch (error) {
+          if (!(error instanceof NodeRuntimeUnavailableError)) throw error;
+        }
+      }
+    }
+  }
+  throw new NodeRuntimeUnavailableError();
 }
 
 export type NodeCliPlatform = NodeJS.Platform;
